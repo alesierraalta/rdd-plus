@@ -83,6 +83,35 @@ original Node hook when `node` and `~/.claude/hooks/testing-gate.mjs` are presen
   mutation before a finding is accepted), plan validation, and `status --next-transition` are the
   next binaries.
 
+## Benchmark
+
+`rdd-plus bench` measures whether the testing skill finds defects it was never told about. Each
+case under `bench/cases/<id>/` is a fixture project whose own suite is green plus a sealed
+`KEY.json` listing the planted defects (file, line, class, keywords, trigger). The key is never
+copied into a workspace.
+
+```
+rdd-plus bench run --cases 'bench/cases/*' --model sonnet --runs 1 --max-cost-usd 20
+rdd-plus bench score --case bench/cases/<id> --workspace <ws>     # re-score after grader changes
+rdd-plus bench history                                            # every run, never rewritten
+```
+
+`bench run` scaffolds `<out>/<case>/<run>/ws` (default `bench/results/<timestamp>/`), commits the
+fixture, checks its suite is green (otherwise the case is invalid and skipped), spawns
+`claude -p "haz el testing"` in it, then scores `docs/testing/test-plan.md`:
+
+- a planted defect is **found** when a Findings row cites its file (suffix match, so
+  `render.js:9` and `fixture/src/render.js` both name `src/render.js`) and either a cited line
+  within ±5 of the planted line (`file:line` or `file:l1-l2`) or one of its keywords;
+- a Findings row that matches no planted defect is a **false positive** (rows, not defects);
+- rows with a real evidence id and Evidence-ledger rows are counted; a missing plan scores 0.
+
+Per run: `result.json`. Per bench: `aggregate.json`, `summary.md` (case | recall | found/total |
+false positives | cost | turns | minutes | invalid?), one line appended to `bench/history.jsonl`
+and one row to `bench/history.md` with the installed `test-strategy` version, so skill versions
+compare on identical fixtures. `--dry-run` scaffolds and checks fixtures without spawning or
+recording; `--max-cost-usd` stops the run early with exit code 2 and keeps partial results.
+
 ## License
 
 Apache-2.0. See `LICENSE` and `NOTICE` for the attribution of the skills derived from the

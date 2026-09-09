@@ -1,0 +1,11 @@
+{"id":"n06-retry-policy","language":"node","suite":"node --test","surface":"http",
+ "defects":[
+  {"id":"D1","file":"src/retry.js","line":11,"class":"unbounded-retry","keywords":["429","unbounded","cap","attempts","infinite"],
+   "description":"A 429 response retries without counting against maxAttempts, so a server that keeps answering 429 without Retry-After is retried forever.",
+   "trigger":{"input":"fetchFn always {status:429, headers:{}}, counting calls and throwing after 50; fetchWithRetry(fetchFn, '/x', {maxAttempts:3, sleep: async () => {}})","expected":"{ok:false, error} after at most 3 requests","actual":"ERROR: runaway after 51 calls"},
+   "why_missed":"The 429 test provides a Retry-After and then succeeds, so the loop exits on the second request; nothing in the suite keeps answering 429."},
+  {"id":"D2","file":"src/retry.js","line":18,"class":"fail-open","keywords":["fail-open","ok","null","exhausted","error"],
+   "description":"When the attempt budget is exhausted on a 5xx the function returns {ok:true, data:null}, so the caller treats an outage as a successful empty response.",
+   "trigger":{"input":"fetchFn always {status:503, headers:{}}; fetchWithRetry(fetchFn, '/x', {maxAttempts:3, sleep: async () => {}})","expected":"{\"ok\":false,\"error\":...}","actual":"{\"ok\":true,\"data\":null}"},
+   "why_missed":"The 503 test succeeds on the second request, so the exhaustion path is never reached; its return value is only wrong in the failure case the suite never creates."}
+ ]}

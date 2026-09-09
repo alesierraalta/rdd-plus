@@ -4,3 +4,5 @@ bin/
 results/
 __pycache__/
 .codegraph/
+bench/results/
+bench/**/ws/

@@ -1,0 +1,11 @@
+{"id":"n03-subscription-window","language":"node","suite":"node --test","surface":"library",
+ "defects":[
+  {"id":"D1","file":"src/subscription.js","line":7,"class":"timezone","keywords":["timezone","utc","local","boundary","inclusive"],
+   "description":"start and end are parsed as UTC midnight while a Date built from calendar components is local midnight, so the first or last inclusive day is reported inactive in any non-UTC zone.",
+   "trigger":{"input":"TZ=America/Caracas node: isActive({start:'2026-03-01',end:'2026-03-31'}, new Date(2026,2,31))","expected":"true","actual":"last day local: false"},
+   "why_missed":"The suite builds every probe date with the same constructor as the bounds and stays away from the first and last day, so the comparison is consistent by accident in every zone."},
+  {"id":"D2","file":"src/subscription.js","line":14,"class":"calendar","keywords":["leap","february","29","overflow","last day"],
+   "description":"setFullYear on 29 February overflows to 1 March instead of clamping to the last day of February.",
+   "trigger":{"input":"nextRenewal('2024-02-29')","expected":"2025-02-28","actual":"2025-03-01"},
+   "why_missed":"The renewal test uses a day that exists in every year, so the overflow branch of Date arithmetic is never reached."}
+ ]}

@@ -31,6 +31,8 @@ Rows are never removed by budget; budget changes order and status only.
 | 5. CLI contract: usage and exit codes, flag parsing per subcommand | every invocation | new | visible error | E6 (manual: no args and unknown → exit 2) | process | L1 | `exploit-testing` | Pin | pending (no automated test in `cmd/`; add a table-driven test over exit codes and usage text) |
 | 6. Port `run_evals.py`, `selftest.py`, `seed-mutants.py`, `fingerprint.sh` to Go subcommands (`evals`, `calibrate`, `fingerprint`) | eval and calibration numbers, plan baselines | — | silently wrong answer | Python versions validated earlier (see the home plan E9, E10, E1) | unit | L2 | `exploit-testing` | Probe | pending |
 | 7. Install journey from a clean machine: `go install …@latest` → `sync` → `doctor` | every new user | — | visible error | none (needs the GitHub remote) | real-run | real-run | `real-run-validation` | Probe | pending (blocked on publishing) |
+| 9. Benchmark dataset: 15 cases / 27 planted defects, every suite green with the defect present, every trigger reproduces the wrong output | the number every future comparison rests on | new | silently wrong answer (a defect that does not reproduce inflates recall for free) | E8 (my re-execution of 6 triggers + all 15 suites), E9 (dry-run through the runner) | process | L2 | `exploit-testing` | Probe | done |
+| 10. Bench runner and scorer (`bench run|score|history`): scaffold never copies the key, suite must be green, scorer matches by file and line or keyword, history is append-only | every benchmark number | new | silently wrong answer (a lenient scorer rewards prose) | unit 20 tests incl. wrong-file and placeholder negatives; E9 | unit + process | L2 | `exploit-testing` | Probe | done (baseline run pending row) |
 | 8. `evidence verify` subcommand: re-execute a ledger row's command, compare the observed digest, re-apply the declared mutation and require red | the falsifiability of every finding | — | silently wrong answer | design only | unit + process | L3 | `exploit-testing` | Probe | pending |
 
 ## Real-run recipes
@@ -73,6 +75,8 @@ Rows are never removed by budget; budget changes order and status only.
 | 2026-09-09 | 3. doctor | L2 | none | `internal/doctor/doctor_test.go` (6) | E1, E4 | |
 | 2026-09-09 | 4. assets | L1 | none | `internal/assets/assets_test.go` (2) | E1 | |
 | 2026-09-09 | 5. CLI contract | L1 (manual) | none | none yet | E6 | automated test pending |
+| 2026-09-09 | 9. benchmark dataset | L2 | none | fixture suites (72 tests across 15 cases) | E8 | six triggers re-executed by me reproduce the keyed wrong output verbatim |
+| 2026-09-09 | 10. bench runner | L2 | UX: a bare `--cases "*"` matched nothing (pattern resolved against cwd); fixed to resolve bare names under `bench/cases` with a unit test | `internal/bench/*_test.go` (20) + `glob_test.go` (4) | E9 | |
 
 ## Findings
 
@@ -95,6 +99,8 @@ One row per `observado` conclusion (`references/evidence.md`). `razonado` items 
 | E3 | the moved gate still agrees with the Node oracle | `go test ./internal/gate -count=1 -run Differential -v` (as part of E1) | 18 repository scenarios | differential subtests ran (not skipped) and passed | — | `go test ./internal/gate -run Differential -v` | observado |
 | E4 | doctor is healthy on a synced config | `bin/rdd-plus doctor --config-dir <tmp>` after E2 | synced temp config | `Stop gate wired: "…/bin/rdd-plus" gate`; 8 capabilities present; `verdict: healthy`; exit 0; 12 skills installed | unit tests: missing git → exit 1; missing skill/hook reported | recipe above | observado |
 | E5 | every decision predicate of the gate is covered by a test that goes red when it is broken | `go run ./tools/mutants` | 23 literal mutants over `internal/gate` | `23 mutants applied, 23 killed, 0 survived` | each mutant is its own negative control | `go run ./tools/mutants` | observado |
+| E8 | planted defects reproduce and the happy suites stay green | `node -e` / a throwaway `_test.go` per trigger; `node --test` and `go test ./...` per fixture | n01 D2, n04 D1, n09 D1, n12 D1, n06 D2, g02 D1+D2; all 15 suites | `["a","\"b","c\"","d"]`; `["-a","a"]`; ids both `9007199254740992`, dedupe → 1; `/etc/passwd`; `{"ok":true,"data":null}`; `Debug=true Retries=5` despite an override of false/0; suites: 12 node cases pass 5–6 each, 3 Go cases `ok` | the green suites are the negative control: the defect is real yet invisible to them | commands in the transcript; KEY.json `trigger` fields | observado |
+| E9 | the runner scaffolds every case without leaking the key and validates the suites | `bin/rdd-plus bench run --dry-run --cases '*' --out /tmp/rp-bench-dry` | 15 cases | summary: `cases: 15 · defects: 27`, no `INVALID`, `find … -name KEY.json | wc -l` → 0 | unit tests: KEY present in fixture → scaffold refuses; red suite → invalid case | recipe in bench/README.md | observado |
 | E6 | CLI exits 2 with usage on no or unknown command | `bin/rdd-plus`; `bin/rdd-plus bogus` | — | `no args exit=2`, `unknown exit=2`, usage line `usage: rdd-plus <command> [flags]` on stderr | — | run the two commands | observado |
 | E7 | the gate fires through the built binary and honors the loop guard | `bin/rdd-plus gate --config-dir <tmp>` with a scratch repo and a timestamped transcript | fresh `src/a.ts` edit (mtime +2 min), `session_id: rp-smoke`; second call with `stop_hook_active:true` | `fires: Stop | src/a.ts`; log `{"session":"rp-smoke","changed_source":1,"skills_loaded":[],"fired":true}`; loop guard: empty stdout, exit 0 | the loop-guard call is the negative control | recipe above | observado |
 
@@ -117,7 +123,8 @@ One row per `observado` conclusion (`references/evidence.md`). `razonado` items 
 
 ## Remaining, in order
 
-1. Target 5: table-driven CLI test (exit codes, usage, flag errors per subcommand)
+1. Baseline benchmark run with the current skill (row to append: recall, false positives, cost)
+2. Target 5: table-driven CLI test (exit codes, usage, flag errors per subcommand)
 2. Target 6: Go port of the eval harness, self-test, calibration seeding, and fingerprint
 3. Target 8: `evidence verify`
 4. Target 7: install journey after publishing

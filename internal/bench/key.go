@@ -1,0 +1,99 @@
+// Package bench runs the testing skill against fixture projects with sealed answer keys and
+// scores what its persisted plan reports against those keys.
+package bench
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+)
+
+// Trigger is the minimal reproduction recorded for a planted defect.
+type Trigger struct {
+	Input    string `json:"input"`
+	Expected string `json:"expected"`
+	Actual   string `json:"actual"`
+}
+
+// Defect is one planted defect of a case; file paths are relative to the fixture root.
+type Defect struct {
+	ID          string   `json:"id"`
+	File        string   `json:"file"`
+	Line        int      `json:"line"`
+	Class       string   `json:"class"`
+	Keywords    []string `json:"keywords"`
+	Description string   `json:"description"`
+	Trigger     Trigger  `json:"trigger"`
+	WhyMissed   string   `json:"why_missed"`
+}
+
+// Key is the sealed answer key of a case: KEY.json next to the fixture directory.
+type Key struct {
+	ID       string   `json:"id"`
+	Language string   `json:"language"`
+	Suite    string   `json:"suite"`
+	Surface  string   `json:"surface"`
+	Defects  []Defect `json:"defects"`
+}
+
+// KeyFile is the answer-key file name; it must never be copied into a workspace.
+const KeyFile = "KEY.json"
+
+// LoadKey reads and validates a case's KEY.json.
+func LoadKey(caseDir string) (Key, error) {
+	raw, err := os.ReadFile(filepath.Join(caseDir, KeyFile))
+	if err != nil {
+		return Key{}, fmt.Errorf("read key: %w", err)
+	}
+	var k Key
+	if err := json.Unmarshal(raw, &k); err != nil {
+		return Key{}, fmt.Errorf("parse key: %w", err)
+	}
+	if err := k.Validate(); err != nil {
+		return Key{}, fmt.Errorf("invalid key: %w", err)
+	}
+	return k, nil
+}
+
+// Validate rejects keys the scorer could not apply unambiguously.
+func (k Key) Validate() error {
+	var problems []string
+	if strings.TrimSpace(k.ID) == "" {
+		problems = append(problems, "id is empty")
+	}
+	if k.Language != "node" && k.Language != "go" {
+		problems = append(problems, fmt.Sprintf("language %q is not node or go", k.Language))
+	}
+	if strings.TrimSpace(k.Suite) == "" {
+		problems = append(problems, "suite is empty")
+	}
+	if len(k.Defects) == 0 {
+		problems = append(problems, "no defects")
+	}
+	seen := map[string]bool{}
+	for i, d := range k.Defects {
+		switch {
+		case strings.TrimSpace(d.ID) == "":
+			problems = append(problems, fmt.Sprintf("defect %d has no id", i))
+		case seen[d.ID]:
+			problems = append(problems, fmt.Sprintf("defect id %q repeated", d.ID))
+		}
+		seen[d.ID] = true
+		if strings.TrimSpace(d.File) == "" {
+			problems = append(problems, fmt.Sprintf("defect %q has no file", d.ID))
+		}
+		if d.Line <= 0 {
+			problems = append(problems, fmt.Sprintf("defect %q has no positive line", d.ID))
+		}
+		if len(d.Keywords) == 0 {
+			problems = append(problems, fmt.Sprintf("defect %q has no keywords", d.ID))
+		}
+	}
+	if len(problems) > 0 {
+		return errors.New(strings.Join(problems, "; "))
+	}
+	return nil
+}

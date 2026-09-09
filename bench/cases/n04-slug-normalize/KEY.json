@@ -1,0 +1,11 @@
+{"id":"n04-slug-normalize","language":"node","suite":"node --test","surface":"library",
+ "defects":[
+  {"id":"D1","file":"src/slug.js","line":4,"class":"idempotence","keywords":["idempotent","leading","dash","twice","strip"],
+   "description":"Only one leading dash is removed per call, so a title starting with two dashes yields a slug with a leading dash and slugify(slugify(x)) differs from slugify(x).",
+   "trigger":{"input":"[slugify('--a'), slugify(slugify('--a'))]","expected":"[\"a\",\"a\"]","actual":"\"-a\" \"a\""},
+   "why_missed":"Every suite input has a single call and no leading punctuation, and no test compares applying the function twice."},
+  {"id":"D2","file":"src/slug.js","line":7,"class":"unicode-normalization","keywords":["normalize","nfc","unicode","composed","accent"],
+   "description":"Input is not normalized to NFC, so a composed and a decomposed spelling of the same title produce different slugs and dedupeTitles keeps both.",
+   "trigger":{"input":"[slugify('caf\\u00e9'), slugify('cafe\\u0301'), dedupeTitles(['Caf\\u00e9','Cafe\\u0301']).length]","expected":"[\"cafe\",\"cafe\",1] (or any equal pair and 1)","actual":"\"caf\" \"cafe\" 2"},
+   "why_missed":"The suite is ASCII only; Unicode equivalence is a property of the input domain, not a branch of the code, so coverage never points at it."}
+ ]}

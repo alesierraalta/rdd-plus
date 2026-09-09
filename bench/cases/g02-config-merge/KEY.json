@@ -1,0 +1,11 @@
+{"id":"g02-config-merge","language":"go","suite":"go test ./...","surface":"library",
+ "defects":[
+  {"id":"D1","file":"config.go","line":17,"class":"config-merge","keywords":["zero value","false","disable","override","unset"],
+   "description":"A false Debug in the override is treated as unset, so a layer can enable debug but no higher layer can ever disable it.",
+   "trigger":{"input":"Load(Config{Debug: true, Retries: 5}, Config{Debug: false, Retries: 0}).Debug","expected":"false","actual":"Debug=true"},
+   "why_missed":"Every suite override sets non-zero values, so the guard that mistakes a zero value for absence is never distinguished from a genuinely unset field."},
+  {"id":"D2","file":"config.go","line":26,"class":"config-merge","keywords":["zero value","retries","0","disable","override"],
+   "description":"Retries set to 0 by the override is treated as unset, so retries cannot be turned off from a higher layer.",
+   "trigger":{"input":"Load(Config{Debug: true, Retries: 5}, Config{Debug: false, Retries: 0}).Retries","expected":"0","actual":"Retries=5"},
+   "why_missed":"The suite overrides retries to 5; zero is the one value the merge cannot express, and no test asks for it."}
+ ]}

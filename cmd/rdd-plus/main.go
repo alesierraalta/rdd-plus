@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/alesierraalta/rdd-plus/internal/bench"
 	"github.com/alesierraalta/rdd-plus/internal/doctor"
 	"github.com/alesierraalta/rdd-plus/internal/gate"
 	"github.com/alesierraalta/rdd-plus/internal/sync"
@@ -25,10 +26,16 @@ commands:
   gate     Stop hook: read the hook payload on stdin, decide, log, emit feedback
   sync     install the embedded skills and wire the gate into settings.json
   doctor   report installed skills, the hook wiring, and optional capabilities
+  bench    run the testing skill against sealed-key fixtures and score it (run | score | history)
   version  print the version
 
 flags shared by gate, sync, doctor:
   --config-dir <dir>   Claude config directory (default: ~/.claude)
+
+bench run [--cases <glob>] [--model <m>] [--runs N] [--max-turns N] [--timeout 30m]
+          [--max-cost-usd N] [--out <dir>] [--bench-dir <dir>] [--dry-run] [--keep]
+bench score --case <dir> --workspace <ws>
+bench history [--bench-dir <dir>]
 `
 
 func defaultConfigDir() string {
@@ -51,6 +58,8 @@ func main() {
 		os.Exit(runSync(os.Args[2:]))
 	case "doctor":
 		os.Exit(runDoctor(os.Args[2:]))
+	case "bench":
+		os.Exit(runBench(os.Args[2:]))
 	case "version":
 		fmt.Println(Version)
 		os.Exit(0)
@@ -108,4 +117,85 @@ func runDoctor(args []string) int {
 		return 0
 	}
 	return 1
+}
+
+func runBench(args []string) int {
+	if len(args) == 0 {
+		fmt.Fprint(os.Stderr, usage)
+		return 2
+	}
+	switch args[0] {
+	case "run":
+		return runBenchRun(args[1:])
+	case "score":
+		return runBenchScore(args[1:])
+	case "history":
+		return runBenchHistory(args[1:])
+	default:
+		fmt.Fprint(os.Stderr, usage)
+		return 2
+	}
+}
+
+func runBenchRun(args []string) int {
+	fs := flag.NewFlagSet("bench run", flag.ContinueOnError)
+	cases := fs.String("cases", "bench/cases/*", "glob of case directories (each with fixture/ and KEY.json)")
+	model := fs.String("model", "sonnet", "model for the agent runs")
+	runs := fs.Int("runs", 1, "runs per case")
+	maxTurns := fs.Int("max-turns", 70, "agent turn cap per run")
+	timeout := fs.Duration("timeout", 30*time.Minute, "agent wall-clock cap per run")
+	suiteTimeout := fs.Duration("suite-timeout", 10*time.Minute, "fixture suite cap")
+	maxCost := fs.Float64("max-cost-usd", 0, "stop when the cumulative cost reaches this (0 = no ceiling)")
+	out := fs.String("out", "", "results directory (default: <bench-dir>/results/<timestamp>)")
+	benchDir := fs.String("bench-dir", "bench", "benchmark directory holding history.jsonl and history.md")
+	dryRun := fs.Bool("dry-run", false, "scaffold and check fixtures, spawn no agent, write no history")
+	keep := fs.Bool("keep", false, "keep workspaces after scoring")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *out == "" {
+		*out = filepath.Join(*benchDir, "results", bench.Stamp(time.Now()))
+	}
+	_, code := bench.Run(bench.Options{
+		CasesGlob: *cases, Model: *model, Runs: *runs, MaxTurns: *maxTurns, Timeout: *timeout,
+		SuiteTimeout: *suiteTimeout, MaxCostUSD: *maxCost, Out: *out, BenchDir: *benchDir,
+		SkillFile: filepath.Join(defaultConfigDir(), "skills", "test-strategy", "SKILL.md"),
+		DryRun:    *dryRun, Keep: *keep, Log: os.Stdout,
+	})
+	fmt.Printf("results: %s\n", filepath.Join(*out, "summary.md"))
+	return code
+}
+
+func runBenchScore(args []string) int {
+	fs := flag.NewFlagSet("bench score", flag.ContinueOnError)
+	caseDir := fs.String("case", "", "case directory holding KEY.json")
+	ws := fs.String("workspace", "", "workspace to score")
+	if err := fs.Parse(args); err != nil || *caseDir == "" || *ws == "" {
+		fmt.Fprintln(os.Stderr, "bench score needs --case and --workspace")
+		return 2
+	}
+	key, err := bench.LoadKey(*caseDir)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "score:", err)
+		return 1
+	}
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	_ = enc.Encode(bench.ScoreWorkspace(*ws, key))
+	return 0
+}
+
+func runBenchHistory(args []string) int {
+	fs := flag.NewFlagSet("bench history", flag.ContinueOnError)
+	benchDir := fs.String("bench-dir", "bench", "benchmark directory")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	data, err := os.ReadFile(filepath.Join(*benchDir, "history.md"))
+	if err != nil {
+		fmt.Println("no benchmark history yet")
+		return 0
+	}
+	fmt.Print(string(data))
+	return 0
 }

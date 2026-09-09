@@ -1,0 +1,11 @@
+{"id":"n10-order-state","language":"node","suite":"node --test","surface":"state-machine",
+ "defects":[
+  {"id":"D1","file":"src/order.js","line":24,"class":"unreachable-state","keywords":["refunded","typo","unreachable","refundd","transition"],
+   "description":"The outcome of the refund event is misspelled, so a returned order can never reach refunded; every refund throws an unknown-state error.",
+   "trigger":{"input":"transition('returned', 'refund')","expected":"\"refunded\"","actual":"RangeError: unknown state refundd"},
+   "why_missed":"The suite follows the shipping path and one return but never refunds; the refunded state exists in the table, so nothing looks missing until the event is exercised."},
+  {"id":"D2","file":"src/order.js","line":30,"class":"state-machine","keywords":["cancel","after shipping","returned","cancellation","shipped"],
+   "description":"canCancel only excludes shipped and delivered, so an order that shipped and was returned can still be cancelled, contradicting the rule that shipping ends cancellation.",
+   "trigger":{"input":"transition('returned', 'cancel')","expected":"throws InvalidTransition","actual":"cancelled"},
+   "why_missed":"The suite cancels from created and paid and never combines a return with a cancellation; the rule is stated in terms of history (once shipped) while the code checks only the current state."}
+ ]}

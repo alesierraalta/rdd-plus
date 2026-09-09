@@ -1,0 +1,11 @@
+{"id":"n01-csv-rfc4180","language":"node","suite":"node --test","surface":"library",
+ "defects":[
+  {"id":"D1","file":"src/csv.js","line":7,"class":"escaping","keywords":["quote","double","escape","rfc","embedded"],
+   "description":"renderLine quotes a field that contains a comma but never doubles an embedded double quote, so the rendered line is not RFC 4180 and cannot round-trip.",
+   "trigger":{"input":"renderLine(['say \"hi\", ok'])","expected":"\"say \"\"hi\"\", ok\"","actual":"\"say \"hi\", ok\""},
+   "why_missed":"Happy-path fields contain letters or a comma but never a quote, so the quote branch is never exercised and branch coverage of renderLine is already complete without it."},
+  {"id":"D2","file":"src/csv.js","line":16,"class":"parsing","keywords":["quoted","comma","split","round-trip","separator"],
+   "description":"parseLine splits on every comma before considering quotes, so a quoted field that contains a comma is split into two broken fields.",
+   "trigger":{"input":"parseLine('a,\"b,c\",d')","expected":"[\"a\",\"b,c\",\"d\"]","actual":"[\"a\",\"\\\"b\",\"c\\\"\",\"d\"]"},
+   "why_missed":"The suite only quotes fields without commas, and the correct handling has no branch to reach: the defect is the absence of a quote-aware scanner, invisible to coverage."}
+ ]}

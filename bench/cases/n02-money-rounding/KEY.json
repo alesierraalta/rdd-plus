@@ -1,0 +1,11 @@
+{"id":"n02-money-rounding","language":"node","suite":"node --test","surface":"library",
+ "defects":[
+  {"id":"D1","file":"src/ledger.js","line":11,"class":"float-precision","keywords":["float","precision","cents","integer","accumulate"],
+   "description":"The balance accumulates parsed floats, so three postings of 0.10 do not sum to 0.30 and two ledgers can disagree at the cent.",
+   "trigger":{"input":"const l = createLedger(); l.post('a','0.10'); l.post('b','0.10'); l.post('c','0.10'); [l.balance(), l.balance() === 0.3]","expected":"0.3, true","actual":"0.30000000000000004 false"},
+   "why_missed":"The suite adds amounts that are exact in binary (10, 25, 12.50, 7.25), so every assertion holds; the failure needs a value like 0.10 that binary floats cannot represent."},
+  {"id":"D2","file":"src/ledger.js","line":27,"class":"rounding","keywords":["half","round","math.round","binary","decimal"],
+   "description":"formatCents rounds through Math.round on a binary float, so amounts ending in 5 at the third decimal round down instead of half up.",
+   "trigger":{"input":"formatCents('1.005')","expected":"\"1.01\"","actual":"1.00"},
+   "why_missed":"The one half-up case in the suite (10.125) happens to be exactly representable in binary; only inputs such as 1.005 expose that the rounding happens on an approximation."}
+ ]}
