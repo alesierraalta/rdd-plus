@@ -1,0 +1,6 @@
+bin/
+*.bak
+.runs/
+results/
+__pycache__/
+.codegraph/

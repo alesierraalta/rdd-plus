@@ -1,0 +1,21 @@
+rdd-plus
+Copyright 2026 Alejandro Sierra Alta
+
+This product includes skill definitions derived from the Gentleman-Programming skills
+(https://github.com/Gentleman-Programming), licensed under the Apache License, Version 2.0:
+
+  assets/skills/test-strategy
+  assets/skills/no-excess-tests
+  assets/skills/appsec-adversarial-auditor
+  assets/skills/runtime-reliability-testing
+  assets/skills/database-persistence-testing
+  assets/skills/clean-architecture-audit
+
+Those skills were substantially rewritten in this repository (organic state inference, persisted
+non-shrinking plans, evidence contract, contract-class enumeration, survivor-first mutation,
+required properties, plan contribution sections, two-tier safety gates). The remaining skills
+(exploit-testing, real-run-validation, silent-degradation, implementation-theater,
+dependency-legitimacy, docker-test-containers) and all Go code are original to this repository.
+
+rdd-plus complements gentle-ai (https://github.com/gentleman-programming/gentle-ai); it does not
+include, modify, or replace any part of it.
