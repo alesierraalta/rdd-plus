@@ -148,3 +148,15 @@ func scorerRevision() string {
 	}
 	return rev
 }
+
+// ScorerIsProvisional reports whether a scorer revision fails to identify the code that produced
+// the numbers: a build from an uncommitted tree, or one with no version control information.
+func ScorerIsProvisional(rev string) bool {
+	return rev == "" || rev == "unknown" || strings.HasSuffix(rev, "+dirty")
+}
+
+// ProvisionalScorerWarning is what a run says before spending anything.
+func ProvisionalScorerWarning(rev string) string {
+	return "scorer " + rev + ": this build is not reproducible from a commit, so the numbers it " +
+		"records cannot be re-derived later. Commit before measuring anything you intend to cite."
+}

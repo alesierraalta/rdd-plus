@@ -35,3 +35,4 @@ One row per `rdd-plus bench run`; never rewritten.
 | 2026-09-10T10:26:59Z | rescore of bench/results/20260910-102659 | bench/results/20260910-102659/rescored | sonnet | 15 | 27 | 25 | 0.93 | 22 | 0.81 | 0 | 0 | 0 | 0 | 0.000 | 3.2 | bb1df9e+dirty |
 | 2026-09-10T11:08:54Z | rescore of bench/results/20260910-110854 | bench/results/20260910-110854/rescored | sonnet | 15 | 27 | 17 | 0.63 | 24 | 0.89 | 3 | 0 | 0 | 0 | 0.000 | 3.3 | bb1df9e+dirty |
 | 2026-09-10T12:10:44Z | run | bench/results/20260910-121044 | sonnet | 15 | 0 | 0 | 0.00 | 0 | 0.00 | 0 | 15 | 0 | 0 | 0.000 | 3.4 | 492d23d+dirty |
+| 2026-09-10T12:47:10Z | run | bench/results/20260910-124710 | sonnet | 15 | 27 | 25 | 0.93 | 23 | 0.85 | 0 | 0 | 0 | 0 | 13.956 | 3.4 | 5bb7a4b+dirty |

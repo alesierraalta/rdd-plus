@@ -141,3 +141,21 @@ func TestScorerRevisionIsNeverEmpty(t *testing.T) {
 		t.Fatal("a row must always be attributable to something, even outside a repository")
 	}
 }
+
+// A build made from an uncommitted tree cannot be recovered from its commit, so numbers recorded
+// under it are not reproducible. The row already says so; the run has to say it out loud, before
+// the money is spent rather than after.
+func TestDirtyScorerIsAnnounced(t *testing.T) {
+	cases := map[string]bool{"abc1234": false, "abc1234+dirty": true, "unknown": true}
+	for rev, want := range cases {
+		if got := ScorerIsProvisional(rev); got != want {
+			t.Errorf("ScorerIsProvisional(%q) = %v, want %v", rev, got, want)
+		}
+	}
+	msg := ProvisionalScorerWarning("abc1234+dirty")
+	for _, want := range []string{"abc1234+dirty", "not reproducible", "commit"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("warning missing %q: %s", want, msg)
+		}
+	}
+}

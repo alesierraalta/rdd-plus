@@ -97,6 +97,9 @@ func Run(opts Options) (Aggregate, int) {
 		fmt.Fprintf(opts.Log, "no cases match %q\n", opts.CasesGlob)
 		return agg, 1
 	}
+	if rev := scorerRevision(); ScorerIsProvisional(rev) {
+		fmt.Fprintln(opts.Log, ProvisionalScorerWarning(rev))
+	}
 	if err := os.MkdirAll(opts.Out, 0o755); err != nil {
 		fmt.Fprintln(opts.Log, "out:", err)
 		return agg, 1
