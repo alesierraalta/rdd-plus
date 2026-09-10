@@ -75,6 +75,11 @@ A finding row must cite at least one id that exists in the Evidence ledger; a ro
 defect without linked evidence is recorded as `unlinked` and does not count, whatever it says. An
 empty ledger makes every citation dangling.
 
+One finding row is one claim: a row is credited to the defect it names by keyword (to several
+only if it names several), and a row that matches by line alone goes to the nearest defect. Four
+cases plant two defects within the line tolerance of each other, so without this a run that
+noticed one of them would read as having noticed both.
+
 A **false positive** is a finding whose location is not in the key. Recall is found over key
 defects; precision is found over findings.
 

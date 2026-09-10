@@ -111,32 +111,69 @@ func Score(plan string, key Key) Result {
 		}
 	}
 
+	// Attribution is per row, not per defect: one finding row is one claim. A row that names a
+	// defect by keyword is credited to that defect (to several only if it names several); a row
+	// that matches by line alone goes to the nearest defect, so two defects a few lines apart
+	// cannot both be credited to a run that noticed one of them.
+	linkedText := make([]string, len(rows))
+	credited := make([]map[string]bool, len(rows))
 	matchedRow := make([]bool, len(rows))
-	for _, d := range key.Defects {
-		dr := DefectResult{ID: d.ID, File: d.File, Line: d.Line}
-		for i, row := range rows {
-			text := strings.Join(row, " | ")
-			// The evidence rows a finding cites are part of its claim: the file is often named
-			// there while the finding itself names the symbol.
-			linked := linkedLedgerText(row, ledgerByID)
-			by := matches(text, strings.Join(linked, " | "), d)
-			if by == "" {
+	byID := map[string]*DefectResult{}
+	for i := range key.Defects {
+		d := key.Defects[i]
+		byID[d.ID] = &DefectResult{ID: d.ID, File: d.File, Line: d.Line}
+	}
+	for i, row := range rows {
+		text := strings.Join(row, " | ")
+		// The evidence rows a finding cites are part of its claim: the file is often named
+		// there while the finding itself names the symbol.
+		linked := linkedLedgerText(row, ledgerByID)
+		linkedText[i] = strings.Join(linked, " | ")
+		credited[i] = map[string]bool{}
+		var specific []Defect
+		var nearest *Defect
+		nearestDist := 0
+		for j := range key.Defects {
+			d := key.Defects[j]
+			m := matchDefect(text, linkedText[i], d)
+			if m.kind == "" {
 				continue
 			}
 			matchedRow[i] = true
+			if m.keyword {
+				specific = append(specific, d)
+			} else if nearest == nil || m.dist < nearestDist {
+				nearest, nearestDist = &key.Defects[j], m.dist
+			}
+		}
+		if len(specific) == 0 && nearest != nil {
+			specific = append(specific, *nearest)
+		}
+		for _, d := range specific {
+			credited[i][d.ID] = true
+		}
+	}
+	for i, row := range rows {
+		text := strings.Join(row, " | ")
+		for id := range credited[i] {
+			dr := byID[id]
+			m := matchDefect(text, linkedText[i], defectByID(key, id))
 			// A row that names the defect but cites no ledger row is prose, not a catch; it is
 			// recorded as "unlinked" and does not count.
-			if len(linked) == 0 {
+			if linkedText[i] == "" {
 				if !dr.Found && dr.MatchedBy == "" {
-					dr.MatchedBy, dr.Row = "unlinked:"+by, text
+					dr.MatchedBy, dr.Row = "unlinked:"+m.kind, text
 				}
 				continue
 			}
 			if !dr.Found {
-				dr.Found, dr.MatchedBy, dr.Row = true, by, text
+				dr.Found, dr.MatchedBy, dr.Row = true, m.kind, text
 				dr.ClaimedPinned = cellFilled(row, pinCol)
 			}
 		}
+	}
+	for i := range key.Defects {
+		dr := *byID[key.Defects[i].ID]
 		if dr.Found {
 			r.Found++
 			if dr.ClaimedPinned {
@@ -159,30 +196,65 @@ func Score(plan string, key Key) Result {
 	return r
 }
 
-// matches reports how a finding row matches a defect: "line", "keyword", or "" for no match.
-// evidenceText may cite the file and line; only rowText may supply a keyword.
-func matches(rowText, evidenceText string, d Defect) string {
+// defectMatch is how one finding row matches one defect.
+type defectMatch struct {
+	kind    string // "line", "keyword", or "" for no match
+	dist    int    // lines between the cited location and the planted one
+	keyword bool   // the row names the defect, not just its neighbourhood
+}
+
+// matchDefect reports how a finding row matches a defect. The evidence rows it cites may supply
+// the file and line; only the row itself may supply a keyword, so a shared ledger row cannot
+// hand one defect's name to another.
+func matchDefect(rowText, evidenceText string, d Defect) defectMatch {
 	cites := append(citations(rowText), citations(evidenceText)...)
-	fileCited := false
+	fileCited, lineHit, best := false, false, 0
 	for _, c := range cites {
 		if !samePath(c.path, d.File) {
 			continue
 		}
 		fileCited = true
-		if c.first > 0 && d.Line >= c.first-LineTolerance && d.Line <= c.last+LineTolerance {
-			return "line"
+		if c.first <= 0 || d.Line < c.first-LineTolerance || d.Line > c.last+LineTolerance {
+			continue
+		}
+		dist := 0
+		if d.Line < c.first {
+			dist = c.first - d.Line
+		} else if d.Line > c.last {
+			dist = d.Line - c.last
+		}
+		if !lineHit || dist < best {
+			lineHit, best = true, dist
 		}
 	}
 	if !fileCited {
-		return ""
+		return defectMatch{}
 	}
 	lower := strings.ToLower(rowText)
+	named := false
 	for _, kw := range d.Keywords {
 		if kw != "" && strings.Contains(lower, strings.ToLower(kw)) {
-			return "keyword"
+			named = true
+			break
 		}
 	}
-	return ""
+	switch {
+	case lineHit:
+		return defectMatch{kind: "line", dist: best, keyword: named}
+	case named:
+		return defectMatch{kind: "keyword", keyword: true}
+	}
+	return defectMatch{}
+}
+
+// defectByID returns the key's defect with that id.
+func defectByID(key Key, id string) Defect {
+	for _, d := range key.Defects {
+		if d.ID == id {
+			return d
+		}
+	}
+	return Defect{}
 }
 
 // samePath matches by suffix: "render.js" or "fixture/src/render.js" both name "src/render.js".
