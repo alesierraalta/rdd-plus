@@ -12,3 +12,9 @@ One row per `rdd-plus bench run`; never rewritten.
 | 2026-09-10T02:32:51Z | bench/results/20260910-023251 | sonnet | 15 | 27 | 15 | 0.56 | 11 | 0.41 | 1 | 0 | 0 | 6 | 8.368 | 3.0 |
 | 2026-09-10T09:56:13Z | bench/results/20260910-023251/rescored | sonnet | 15 | 27 | 15 | 0.56 | 20 | 0.74 | 1 | 0 | 0 | 6 | 8.368 | rescore of bench/results/20260910-023251 |
 | 2026-09-10T09:56:29Z | bench/results/20260910-095629 | sonnet | 15 | 27 | 24 | 0.89 | 19 | 0.70 | 0 | 0 | 0 | 0 | 8.042 | 3.1 |
+
+| ts | kind | out | model | cases | defects | reported | recall | caught | recall caught | false positives | failed | invalid | no plan | cost USD | skill version |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 2026-09-10T10:26:59Z | run | bench/results/20260910-102659 | sonnet | 15 | 27 | 26 | 0.96 | 21 | 0.78 | 0 | 0 | 0 | 0 | 9.820 | 3.2 |
+| 2026-09-10T10:26:59Z | rescore of bench/results/20260910-102659 | bench/results/20260910-102659/rescored | sonnet | 15 | 27 | 26 | 0.96 | 21 | 0.78 | 0 | 0 | 0 | 0 | 0.000 | 3.2 |
+| 2026-09-10T10:26:59Z | rescore of bench/results/20260910-102659 | bench/results/20260910-102659/rescored | sonnet | 15 | 27 | 26 | 0.96 | 22 | 0.81 | 0 | 0 | 0 | 0 | 0.000 | 3.2 |

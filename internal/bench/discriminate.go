@@ -18,13 +18,15 @@ const FixDir = "fix"
 // caught when the agent's test files are green on the fully fixed code and red on the code where
 // only that defect remains; reporting the defect in the plan is a separate measure.
 type CatchResult struct {
-	Checked     bool                `json:"checked"`              // fix/all exists for the case
-	TestFiles   []string            `json:"test_files,omitempty"` // agent test files carried into the check
-	AllGreen    bool                `json:"all_green"`            // every test passes on the fully fixed code
-	BrokenTests int                 `json:"broken_tests"`         // tests red on the fully fixed code; they prove nothing
-	Caught      map[string]bool     `json:"caught"`               // defect id -> caught
-	CaughtBy    map[string][]string `json:"caught_by,omitempty"`  // defect id -> tests green on fix/all and red on keep-<id>
-	Notes       []string            `json:"notes,omitempty"`
+	Checked       bool                `json:"checked"`               // fix/all exists for the case
+	TestFiles     []string            `json:"test_files,omitempty"`  // agent test files carried into the check
+	AllGreen      bool                `json:"all_green"`             // every test passes on the fully fixed code
+	BrokenTests   int                 `json:"broken_tests"`          // tests red on the fully fixed code; they prove nothing
+	InvertedTests int                 `json:"inverted_tests"`        // of those, tests green while the defect is present: they pin the bug
+	InvertedBy    map[string][]string `json:"inverted_by,omitempty"` // defect id -> tests that assert its defective behaviour
+	Caught        map[string]bool     `json:"caught"`                // defect id -> caught
+	CaughtBy      map[string][]string `json:"caught_by,omitempty"`   // defect id -> tests green on fix/all and red on keep-<id>
+	Notes         []string            `json:"notes,omitempty"`
 }
 
 // Count returns how many defects were caught.
@@ -75,22 +77,21 @@ func Discriminate(caseDir, ws string, key Key, timeout time.Duration) CatchResul
 		return res
 	}
 	res.AllGreen = code == 0
-	var trusted []string // tests green on the correct code; only these can catch anything
+	var trusted, red []string // only tests green on the correct code can catch anything
 	for name, passed := range onAll {
 		if passed {
 			trusted = append(trusted, name)
 		} else {
+			red = append(red, name)
 			res.BrokenTests++
 		}
 	}
 	sort.Strings(trusted)
+	sort.Strings(red)
 	if len(trusted) == 0 {
 		// A test red on correct code is broken or written to a different API: it can prove nothing.
 		res.Notes = append(res.Notes, "no agent test is green on the fully fixed code: "+tail(out, 400))
 		return res
-	}
-	if res.BrokenTests > 0 {
-		res.Notes = append(res.Notes, fmt.Sprintf("%d test(s) red on the fully fixed code were ignored", res.BrokenTests))
 	}
 	for _, d := range key.Defects {
 		overlay := filepath.Join(caseDir, FixDir, "keep-"+d.ID)
@@ -114,8 +115,36 @@ func Discriminate(caseDir, ws string, key Key, timeout time.Duration) CatchResul
 			}
 		}
 		res.Caught[d.ID] = len(res.CaughtBy[d.ID]) > 0
+		// A test red on the fix and green while the defect stands asserts the defective
+		// behaviour: it resists the fix instead of demanding it.
+		for _, name := range red {
+			if passed, ran := onKeep[name]; ran && passed {
+				if res.InvertedBy == nil {
+					res.InvertedBy = map[string][]string{}
+				}
+				res.InvertedBy[d.ID] = append(res.InvertedBy[d.ID], name)
+			}
+		}
+	}
+	res.InvertedTests = countDistinct(res.InvertedBy)
+	if res.InvertedTests > 0 {
+		res.Notes = append(res.Notes, fmt.Sprintf("%d test(s) pin the defective behaviour: green with the defect, red once it is fixed", res.InvertedTests))
+	}
+	if other := res.BrokenTests - res.InvertedTests; other > 0 {
+		res.Notes = append(res.Notes, fmt.Sprintf("%d test(s) red on the fully fixed code were ignored", other))
 	}
 	return res
+}
+
+// countDistinct counts the distinct test names across every defect's list.
+func countDistinct(byDefect map[string][]string) int {
+	seen := map[string]bool{}
+	for _, names := range byDefect {
+		for _, n := range names {
+			seen[n] = true
+		}
+	}
+	return len(seen)
 }
 
 // agentTestFiles lists test files the agent added or changed, relative to the workspace.

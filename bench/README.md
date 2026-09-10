@@ -85,6 +85,10 @@ are carried onto `fixture/` + `fix/all/` (they must be green there) and onto `fi
 in the summary, the aggregate, and the history. A run that reports a defect without a test that
 catches it, or catches it without reporting it, shows up as a gap between the two columns.
 
+A test red on `fix/all` but green on `fix/keep-D` asserts the defective behaviour: it locks the
+bug in and goes red the moment someone fixes it. Those are counted as **inverted** and named in
+the run's notes, apart from tests that are simply red everywhere.
+
 **Pinned** is the third column: it counts defects whose finding names a test in the plan's
 `Pinning test` cell. It measures the claim, caught measures the outcome, and a run that pins more
 than it catches is naming tests that distinguish nothing.

@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -69,22 +70,7 @@ func TestDiscriminatePerTestSurvivesABrokenTest(t *testing.T) {
 	if _, err := exec.LookPath("node"); err != nil {
 		t.Skip("node not installed")
 	}
-	caseDir := t.TempDir()
-	files := map[string]string{
-		"fixture/src.js":              "module.exports = { d1: () => 'bug', d2: () => 'bug' };\n",
-		"fixture/tests/happy.test.js": "const test = require('node:test'); const assert = require('node:assert'); const s = require('../src.js');\ntest('exports', () => { assert.equal(typeof s.d1, 'function'); });\n",
-		"fix/all/src.js":              "module.exports = { d1: () => 'ok', d2: () => 'ok' };\n",
-		"fix/keep-D1/src.js":          "module.exports = { d1: () => 'bug', d2: () => 'ok' };\n",
-		"fix/keep-D2/src.js":          "module.exports = { d1: () => 'ok', d2: () => 'bug' };\n",
-	}
-	for p, c := range files {
-		full := filepath.Join(caseDir, p)
-		_ = os.MkdirAll(filepath.Dir(full), 0o755)
-		if err := os.WriteFile(full, []byte(c), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	key := Key{ID: "node", Suite: "node --test", Defects: []Defect{{ID: "D1"}, {ID: "D2"}}}
+	caseDir, key := nodeCase(t)
 	ws := agentWorkspace(t, caseDir, map[string]string{
 		"tests/agent.test.js": "const test = require('node:test'); const assert = require('node:assert'); const s = require('../src.js');\n" +
 			"test('d1 is fixed', () => { assert.equal(s.d1(), 'ok'); });\n" +
@@ -103,4 +89,65 @@ func TestDiscriminatePerTestSurvivesABrokenTest(t *testing.T) {
 	if by := got.CaughtBy["D1"]; len(by) != 1 || by[0] != "d1 is fixed" {
 		t.Fatalf("caught by = %v", got.CaughtBy)
 	}
+}
+
+// A test that pins the defective behaviour is not a catch: it is green while the defect is there
+// and red once it is fixed, so it resists the fix instead of demanding it.
+func TestDiscriminateReportsInvertedTests(t *testing.T) {
+	if testing.Short() {
+		t.Skip("runs node")
+	}
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node not installed")
+	}
+	caseDir, key := nodeCase(t)
+	ws := agentWorkspace(t, caseDir, map[string]string{
+		"tests/agent.test.js": "const test = require('node:test'); const assert = require('node:assert'); const s = require('../src.js');\n" +
+			"test('pins the bug', () => { assert.equal(s.d1(), 'bug'); });\n" +
+			"test('catches d2', () => { assert.equal(s.d2(), 'ok'); });\n" +
+			"test('red everywhere', () => { assert.equal(s.d1(), 'neither'); });\n",
+	})
+	got := Discriminate(caseDir, ws, key, 2*time.Minute)
+	if got.Caught["D1"] {
+		t.Fatal("a test asserting the defective value must not count as catching it")
+	}
+	if !got.Caught["D2"] {
+		t.Fatalf("the sound test must still count: %v", got.Notes)
+	}
+	if got.InvertedTests != 1 {
+		t.Fatalf("inverted = %d, want 1 (%v)", got.InvertedTests, got.Notes)
+	}
+	if got.BrokenTests != 2 {
+		t.Fatalf("broken = %d, want 2 (the inverted one and the one red everywhere)", got.BrokenTests)
+	}
+	if by := got.InvertedBy["D1"]; len(by) != 1 || by[0] != "pins the bug" {
+		t.Fatalf("inverted by = %v", got.InvertedBy)
+	}
+	if by := got.InvertedBy["D2"]; len(by) != 0 {
+		t.Fatalf("a test red everywhere is broken, not inverted: %v", got.InvertedBy)
+	}
+	if !strings.Contains(strings.Join(got.Notes, " "), "pin the defective behaviour") {
+		t.Fatalf("notes must name the failure: %v", got.Notes)
+	}
+}
+
+// nodeCase is a two-defect fixture whose suite reports one result per test.
+func nodeCase(t *testing.T) (string, Key) {
+	t.Helper()
+	caseDir := t.TempDir()
+	files := map[string]string{
+		"fixture/src.js":              "module.exports = { d1: () => 'bug', d2: () => 'bug' };\n",
+		"fixture/tests/happy.test.js": "const test = require('node:test'); const assert = require('node:assert'); const s = require('../src.js');\ntest('exports', () => { assert.equal(typeof s.d1, 'function'); });\n",
+		"fix/all/src.js":              "module.exports = { d1: () => 'ok', d2: () => 'ok' };\n",
+		"fix/keep-D1/src.js":          "module.exports = { d1: () => 'bug', d2: () => 'ok' };\n",
+		"fix/keep-D2/src.js":          "module.exports = { d1: () => 'ok', d2: () => 'bug' };\n",
+	}
+	for p, c := range files {
+		full := filepath.Join(caseDir, p)
+		_ = os.MkdirAll(filepath.Dir(full), 0o755)
+		if err := os.WriteFile(full, []byte(c), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return caseDir, Key{ID: "node", Suite: "node --test", Defects: []Defect{{ID: "D1"}, {ID: "D2"}}}
 }
