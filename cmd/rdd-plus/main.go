@@ -3,12 +3,15 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/alesierraalta/rdd-plus/internal/bench"
@@ -117,7 +120,7 @@ func runDoctor(args []string) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	report := doctor.Run(*configDir, exec.LookPath)
+	report := doctor.RunWith(*configDir, exec.LookPath, probeHook)
 	if *asJSON {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
@@ -192,6 +195,50 @@ func runPlan(args []string) int {
 		fmt.Fprint(os.Stderr, usage)
 		return 2
 	}
+}
+
+// probeHook runs the wired Stop command the way Claude Code does, with an empty payload on
+// stdin, and requires it to exit zero. Matching the command string proves nothing: a binary that
+// needs a subcommand looks identical to one that does not.
+func probeHook(command string) error {
+	fields, err := shellFields(command)
+	if err != nil || len(fields) == 0 {
+		return fmt.Errorf("cannot read the wired command")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, fields[0], fields[1:]...)
+	cmd.Stdin = strings.NewReader("{}")
+	cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
+	return cmd.Run()
+}
+
+// shellFields splits a hook command on spaces, honouring the double quotes a path with spaces
+// needs. It is not a shell: a command that needs one is beyond what this probe can check.
+func shellFields(command string) ([]string, error) {
+	var fields []string
+	var cur strings.Builder
+	inQuote := false
+	for _, r := range command {
+		switch {
+		case r == '"':
+			inQuote = !inQuote
+		case r == ' ' && !inQuote:
+			if cur.Len() > 0 {
+				fields = append(fields, cur.String())
+				cur.Reset()
+			}
+		default:
+			cur.WriteRune(r)
+		}
+	}
+	if inQuote {
+		return nil, fmt.Errorf("unbalanced quote")
+	}
+	if cur.Len() > 0 {
+		fields = append(fields, cur.String())
+	}
+	return fields, nil
 }
 
 func runBench(args []string) int {

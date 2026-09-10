@@ -98,3 +98,32 @@ func TestUsageListsEveryBenchSubcommand(t *testing.T) {
 		}
 	}
 }
+
+func TestShellFields(t *testing.T) {
+	cases := []struct {
+		in   string
+		want []string
+	}{
+		{`/h/bin/testing-gate gate`, []string{"/h/bin/testing-gate", "gate"}},
+		{`"/h/my bin/testing-gate" gate`, []string{"/h/my bin/testing-gate", "gate"}},
+		{`  spaced   out  `, []string{"spaced", "out"}},
+		{`"/h/gate"`, []string{"/h/gate"}},
+	}
+	for _, tc := range cases {
+		got, err := shellFields(tc.in)
+		if err != nil {
+			t.Fatalf("%q: %v", tc.in, err)
+		}
+		if len(got) != len(tc.want) {
+			t.Fatalf("%q -> %q", tc.in, got)
+		}
+		for i := range got {
+			if got[i] != tc.want[i] {
+				t.Fatalf("%q -> %q, want %q", tc.in, got, tc.want)
+			}
+		}
+	}
+	if _, err := shellFields(`"unbalanced`); err == nil {
+		t.Fatal("an unbalanced quote must be an error, not a silent split")
+	}
+}

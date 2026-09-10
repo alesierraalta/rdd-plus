@@ -36,7 +36,8 @@ type Report struct {
 	ConfigDir    string        `json:"config_dir"`
 	Skills       []SkillStatus `json:"skills"`
 	HookWired    bool          `json:"hook_wired"`
-	HookKind     string        `json:"hook_kind"` // HookRddPlus, HookStandalone or HookNone
+	HookKind     string        `json:"hook_kind"`   // HookRddPlus, HookStandalone or HookNone
+	HookProbed   bool          `json:"hook_probed"` // the wired command answered a hook payload
 	HookCommand  string        `json:"hook_command,omitempty"`
 	Capabilities []Capability  `json:"capabilities"`
 	Problems     []string      `json:"problems"`
@@ -55,7 +56,14 @@ var capabilities = []Capability{
 }
 
 // Run inspects cfgDir and PATH (through lookPath, injectable for tests).
+// Run reports on a configuration without executing anything from it.
 func Run(cfgDir string, lookPath func(string) (string, error)) Report {
+	return RunWith(cfgDir, lookPath, nil)
+}
+
+// RunWith adds a probe: matching the shape of a hook command says nothing about whether running
+// it works, and a doctor that reports a broken wiring as healthy is worse than no doctor.
+func RunWith(cfgDir string, lookPath func(string) (string, error), probe func(command string) error) Report {
 	r := Report{ConfigDir: cfgDir, Problems: []string{}}
 	skills := assets.Skills()
 	for _, name := range assets.SkillNames() {
@@ -74,6 +82,12 @@ func Run(cfgDir string, lookPath func(string) (string, error)) Report {
 	r.HookWired = r.HookKind != HookNone
 	if !r.HookWired {
 		r.Problems = append(r.Problems, "gate hook not wired in settings.json (run: rdd-plus sync)")
+	} else if probe != nil {
+		if err := probe(r.HookCommand); err != nil {
+			r.Problems = append(r.Problems, "the wired command does not answer a hook payload: "+err.Error())
+		} else {
+			r.HookProbed = true
+		}
 	}
 	for _, c := range capabilities {
 		if p, err := lookPath(c.Name); err == nil {
@@ -109,6 +123,9 @@ func (r Report) String() string {
 		fmt.Fprintf(&b, "  Stop gate wired to a standalone gate binary: %s\n", r.HookCommand)
 	default:
 		fmt.Fprintf(&b, "  Stop gate NOT wired\n")
+	}
+	if r.HookProbed {
+		fmt.Fprintf(&b, "  the wired command answers a payload\n")
 	}
 	fmt.Fprintf(&b, "\ncapabilities\n")
 	for _, c := range r.Capabilities {
