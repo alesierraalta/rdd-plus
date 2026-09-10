@@ -38,8 +38,12 @@ Known limits of the overlays, verified by running every trigger against every va
   fix appends `#<id>` to the cursor only when another row shares that `created_at`.
 - `n09-json-ids`: JavaScript numbers cannot hold the keyed id, so the fix parses integer ids as
   `BigInt`; `trigger.expected` lists the values, not their runtime type.
-- `n04-slug-normalize`: the fix folds accents (`café` and `café` both become `cafe`), which is
-  the first form the key accepts.
+- `n04-slug-normalize`: the fix NFC-normalizes the title and keeps non-ASCII letters as
+  separators (`café` and `café` both become `caf`), the second form the key accepts; folding
+  accents would add behaviour the contract does not promise.
+- `n03-subscription-window`: the fix reads the calendar day from the UTC clock, so a
+  `new Date("YYYY-MM-DD")` stays on that day in every zone; a local-midnight `Date` in a zone east
+  of UTC still lands on the previous day, a limit of representing a day as an instant.
 - `n08-sliding-limiter`: the D2 trigger as written (limit 1, one prior hit) is also red while D1
   is present, so a test copied from it is attributed to both defects. A probe that isolates D2
   makes two prior hits on `token:ABC` before calling `token:abc`.

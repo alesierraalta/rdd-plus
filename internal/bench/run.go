@@ -59,6 +59,7 @@ type Aggregate struct {
 	Failed         int      `json:"failed"`  // agent did not run to completion; excluded from recall
 	NoPlan         int      `json:"no_plan"` // valid runs that never wrote docs/testing/test-plan.md; scored zero
 	CostCeilingHit bool     `json:"cost_ceiling_hit"`
+	RescoredFrom   string   `json:"rescored_from,omitempty"` // set when this aggregate re-reads another run with newer rules
 }
 
 // ExitCostCeiling is returned when the run stopped early because the cost ceiling was reached.

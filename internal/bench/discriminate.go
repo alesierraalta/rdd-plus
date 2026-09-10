@@ -18,11 +18,13 @@ const FixDir = "fix"
 // caught when the agent's test files are green on the fully fixed code and red on the code where
 // only that defect remains; reporting the defect in the plan is a separate measure.
 type CatchResult struct {
-	Checked   bool            `json:"checked"`              // fix/all exists for the case
-	TestFiles []string        `json:"test_files,omitempty"` // agent test files carried into the check
-	AllGreen  bool            `json:"all_green"`            // agent tests pass on the fully fixed code
-	Caught    map[string]bool `json:"caught"`               // defect id -> caught
-	Notes     []string        `json:"notes,omitempty"`
+	Checked     bool                `json:"checked"`              // fix/all exists for the case
+	TestFiles   []string            `json:"test_files,omitempty"` // agent test files carried into the check
+	AllGreen    bool                `json:"all_green"`            // every test passes on the fully fixed code
+	BrokenTests int                 `json:"broken_tests"`         // tests red on the fully fixed code; they prove nothing
+	Caught      map[string]bool     `json:"caught"`               // defect id -> caught
+	CaughtBy    map[string][]string `json:"caught_by,omitempty"`  // defect id -> tests green on fix/all and red on keep-<id>
+	Notes       []string            `json:"notes,omitempty"`
 }
 
 // Count returns how many defects were caught.
@@ -67,16 +69,28 @@ func Discriminate(caseDir, ws string, key Key, timeout time.Duration) CatchResul
 		res.Notes = append(res.Notes, "the agent added or changed no test file")
 		return res
 	}
-	green, out, err := suiteOn(fixture, all, ws, tests, key.Suite, timeout)
+	onAll, code, out, err := testsOn(fixture, all, ws, tests, key.Suite, timeout)
 	if err != nil {
 		res.Notes = append(res.Notes, "fix/all: "+err.Error())
 		return res
 	}
-	res.AllGreen = green
-	if !green {
+	res.AllGreen = code == 0
+	var trusted []string // tests green on the correct code; only these can catch anything
+	for name, passed := range onAll {
+		if passed {
+			trusted = append(trusted, name)
+		} else {
+			res.BrokenTests++
+		}
+	}
+	sort.Strings(trusted)
+	if len(trusted) == 0 {
 		// A test red on correct code is broken or written to a different API: it can prove nothing.
-		res.Notes = append(res.Notes, "agent tests are red on the fully fixed code: "+tail(out, 400))
+		res.Notes = append(res.Notes, "no agent test is green on the fully fixed code: "+tail(out, 400))
 		return res
+	}
+	if res.BrokenTests > 0 {
+		res.Notes = append(res.Notes, fmt.Sprintf("%d test(s) red on the fully fixed code were ignored", res.BrokenTests))
 	}
 	for _, d := range key.Defects {
 		overlay := filepath.Join(caseDir, FixDir, "keep-"+d.ID)
@@ -86,12 +100,20 @@ func Discriminate(caseDir, ws string, key Key, timeout time.Duration) CatchResul
 			res.Notes = append(res.Notes, fmt.Sprintf("%s: no fix/keep-%s directory; not checkable", d.ID, d.ID))
 			continue
 		}
-		green, _, err := suiteOn(fixture, overlay, ws, tests, key.Suite, timeout)
+		onKeep, _, _, err := testsOn(fixture, overlay, ws, tests, key.Suite, timeout)
 		if err != nil {
 			res.Notes = append(res.Notes, d.ID+": "+err.Error())
 			continue
 		}
-		res.Caught[d.ID] = !green
+		for _, name := range trusted {
+			if passed, ran := onKeep[name]; ran && !passed {
+				if res.CaughtBy == nil {
+					res.CaughtBy = map[string][]string{}
+				}
+				res.CaughtBy[d.ID] = append(res.CaughtBy[d.ID], name)
+			}
+		}
+		res.Caught[d.ID] = len(res.CaughtBy[d.ID]) > 0
 	}
 	return res
 }
@@ -129,32 +151,53 @@ func agentTestFiles(fixture, ws string) ([]string, error) {
 
 // suiteOn runs the suite on fixture + overlay + the agent's test files, in a fresh directory.
 func suiteOn(fixture, overlay, ws string, tests []string, suite string, timeout time.Duration) (green bool, output string, err error) {
-	dir, err := os.MkdirTemp("", "rdd-plus-catch-")
+	dir, err := stage(fixture, overlay, ws, tests)
 	if err != nil {
 		return false, "", err
 	}
 	defer os.RemoveAll(dir)
+	r := RunSuite(dir, suite, timeout)
+	return r.ExitCode == 0, r.Output, nil
+}
+
+// testsOn is suiteOn with one outcome per test.
+func testsOn(fixture, overlay, ws string, tests []string, suite string, timeout time.Duration) (map[string]bool, int, string, error) {
+	dir, err := stage(fixture, overlay, ws, tests)
+	if err != nil {
+		return nil, -1, "", err
+	}
+	defer os.RemoveAll(dir)
+	outcomes, code, out := perTest(dir, suite, timeout)
+	return outcomes, code, out, nil
+}
+
+// stage builds fixture + overlay + the agent's test files in a fresh directory.
+func stage(fixture, overlay, ws string, tests []string) (string, error) {
+	dir, err := os.MkdirTemp("", "rdd-plus-catch-")
+	if err != nil {
+		return "", err
+	}
+	fail := func(err error) (string, error) { os.RemoveAll(dir); return "", err }
 	if err := copyTree(fixture, dir); err != nil {
-		return false, "", err
+		return fail(err)
 	}
 	if overlay != "" {
 		if err := copyTree(overlay, dir); err != nil {
-			return false, "", err
+			return fail(err)
 		}
 	}
 	for _, rel := range tests {
 		dst := filepath.Join(dir, filepath.FromSlash(rel))
 		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-			return false, "", err
+			return fail(err)
 		}
 		data, err := os.ReadFile(filepath.Join(ws, filepath.FromSlash(rel)))
 		if err != nil {
-			return false, "", err
+			return fail(err)
 		}
 		if err := os.WriteFile(dst, data, 0o644); err != nil {
-			return false, "", err
+			return fail(err)
 		}
 	}
-	r := RunSuite(dir, suite, timeout)
-	return r.ExitCode == 0, r.Output, nil
+	return dir, nil
 }

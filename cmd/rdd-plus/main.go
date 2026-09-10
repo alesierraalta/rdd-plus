@@ -38,6 +38,7 @@ bench run [--cases <glob>] [--model <m>] [--runs N] [--max-turns N] [--timeout 3
 bench score --case <dir> --workspace <ws>
 bench history [--bench-dir <dir>]
 bench compare <before-results> <after-results>
+bench rescore <results> [--bench-dir <dir>]
 `
 
 func defaultConfigDir() string {
@@ -135,6 +136,8 @@ func runBench(args []string) int {
 		return runBenchHistory(args[1:])
 	case "compare":
 		return runBenchCompare(args[1:])
+	case "rescore":
+		return runBenchRescore(args[1:])
 	default:
 		fmt.Fprint(os.Stderr, usage)
 		return 2
@@ -196,6 +199,37 @@ func runBenchScore(args []string) int {
 	res.Catch = bench.Discriminate(*caseDir, *ws, key, 10*time.Minute)
 	res.Caught = res.Catch.Count()
 	_ = enc.Encode(res)
+	return 0
+}
+
+func runBenchRescore(args []string) int {
+	fs := flag.NewFlagSet("bench rescore", flag.ContinueOnError)
+	benchDir := fs.String("bench-dir", "bench", "benchmark directory holding cases/ and the history")
+	suiteTimeout := fs.Duration("suite-timeout", 10*time.Minute, "cap per suite run")
+	if err := fs.Parse(args); err != nil || fs.NArg() != 1 {
+		fmt.Fprintln(os.Stderr, "bench rescore needs one results directory")
+		return 2
+	}
+	results := fs.Arg(0)
+	lookup := func(name string) (string, error) {
+		dir := filepath.Join(*benchDir, "cases", name)
+		if st, err := os.Stat(dir); err != nil || !st.IsDir() {
+			return "", fmt.Errorf("no case directory %s", dir)
+		}
+		return dir, nil
+	}
+	agg, err := bench.Rescore(results, lookup, *suiteTimeout)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "rescore:", err)
+		return 1
+	}
+	_ = bench.AppendHistory(*benchDir, bench.HistoryEntry{
+		TS: agg.TS, Out: agg.Out, Model: agg.Model, Cases: len(agg.Cases), Defects: agg.Defects,
+		Found: agg.Found, Recall: agg.Recall, Caught: agg.Caught, RecallCaught: agg.RecallCaught,
+		FalsePositives: agg.FalsePositives, CostUSD: agg.CostUSD, Failed: agg.Failed, Invalid: agg.Invalid, NoPlan: agg.NoPlan,
+		SkillVersion: "rescore of " + results,
+	})
+	fmt.Print(bench.Summary(agg))
 	return 0
 }
 

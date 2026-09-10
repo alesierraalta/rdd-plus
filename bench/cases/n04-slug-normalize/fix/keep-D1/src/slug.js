@@ -1,10 +1,9 @@
-// Lowercase ASCII letters and digits separated by single dashes, no dash at either end; accents are folded so equivalent titles share a slug.
+// Lowercase ASCII letters and digits separated by single dashes, no dash at either end; the title is NFC-normalized so composed and decomposed forms agree.
 export function slugify(title) {
   if (typeof title !== "string") throw new TypeError("title must be a string");
   const body = title.startsWith("-") ? title.slice(1) : title;
   return body
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
+    .normalize("NFC")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/-$/, "");

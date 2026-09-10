@@ -1,12 +1,11 @@
 const ISO_DAY = /^(\d{4})-(\d{2})-(\d{2})$/;
 
-// Calendar day as YYYY-MM-DD; a Date is read in local time so the caller's midnight stays on its own day.
+// Calendar day as YYYY-MM-DD, read from the UTC clock so the machine's zone never shifts the boundary.
 function dayKey(value) {
   if (typeof value === "string" && ISO_DAY.test(value)) return value;
   const d = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(d.getTime())) throw new TypeError("onDate must be a valid date");
-  const pad = (n) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  return d.toISOString().slice(0, 10);
 }
 
 // Active when the day falls inside [start, end], both inclusive.
