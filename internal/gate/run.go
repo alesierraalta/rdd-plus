@@ -130,7 +130,7 @@ func Run(stdin io.Reader, stdout io.Writer, logPath string, now time.Time) (code
 func auditLine(res Result) string {
 	n := strings.Count(res.Reason, "assigned and never invoked:")
 	if n == 0 {
-		return "rdd-plus: the testing plan still owes work. Want feedback on this run?"
+		return "rdd-plus: the testing plan owes nothing. Want feedback on this run?"
 	}
 	return fmt.Sprintf("rdd-plus: %d layer(s) assigned and never invoked. Want feedback on this run?", n)
 }

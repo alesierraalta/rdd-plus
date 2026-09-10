@@ -334,10 +334,14 @@ func Decide(in Input, d Deps) Result {
 	if len(files) > 0 && !entry.OptedOut && isAdversarial(entry.SkillsLoaded) {
 		planPath := filepath.Join(root, plan.DefaultPath)
 		if body, err := readPlan(d, planPath); err == nil {
-			if gaps, err := plan.GapsIn(body); err == nil && gaps.Any() {
+			if gaps, err := plan.GapsIn(body); err == nil {
 				res.Audit = true
-				res.Reason = BuildAuditReason(plan.DefaultPath, gaps.Report())
 				entry.Audited = true
+				if gaps.Any() {
+					res.Reason = BuildAuditReason(plan.DefaultPath, gaps.Report())
+				} else {
+					res.Reason = BuildCompleteReason(plan.DefaultPath)
+				}
 			}
 		}
 	}

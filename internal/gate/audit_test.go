@@ -58,10 +58,13 @@ func TestDecideAsksTheSecondQuestionWhenTheDisciplineRanAndStoppedHalfway(t *tes
 		planErr    bool
 		wantFire   bool
 		wantAudit  bool
+		wantOwner  bool
 	}{
 		{name: "never invoked", plan: planned, wantFire: true},
-		{name: "invoked and halfway", transcript: invoked, plan: planned, wantAudit: true},
-		{name: "invoked and finished", transcript: invoked, plan: swept},
+		{name: "invoked and halfway", transcript: invoked, plan: planned, wantAudit: true, wantOwner: true},
+		// The operator asked to be offered feedback at the end of a run, not only when it went
+		// badly: a clean run is the one worth grading before it becomes the habit.
+		{name: "invoked and finished", transcript: invoked, plan: swept, wantAudit: true},
 		{name: "invoked with no plan on disk", transcript: invoked, planErr: true},
 	}
 	for _, tc := range cases {
@@ -76,8 +79,14 @@ func TestDecideAsksTheSecondQuestionWhenTheDisciplineRanAndStoppedHalfway(t *tes
 			if res.Audit != tc.wantAudit {
 				t.Fatalf("audit = %v, want %v (%s)", res.Audit, tc.wantAudit, res.Reason)
 			}
-			if tc.wantAudit && !strings.Contains(res.Reason, "appsec-adversarial-auditor") {
+			if tc.wantOwner && !strings.Contains(res.Reason, "appsec-adversarial-auditor") {
 				t.Fatalf("the audit must name the owner:\n%s", res.Reason)
+			}
+			if tc.wantAudit && !strings.Contains(strings.ToLower(res.Reason), "feedback") {
+				t.Fatalf("every audit offers feedback:\n%s", res.Reason)
+			}
+			if tc.wantAudit && !tc.wantOwner && strings.Contains(res.Reason, "never invoked") {
+				t.Fatalf("a finished run must not be told it owes layers:\n%s", res.Reason)
 			}
 		})
 	}
