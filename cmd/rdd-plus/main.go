@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/alesierraalta/rdd-plus/internal/bench"
+	"github.com/alesierraalta/rdd-plus/internal/check"
 	"github.com/alesierraalta/rdd-plus/internal/doctor"
 	"github.com/alesierraalta/rdd-plus/internal/gate"
 	"github.com/alesierraalta/rdd-plus/internal/plan"
@@ -33,6 +34,8 @@ commands:
   bench    run the testing skill against sealed-key fixtures and score it (run | score | history)
   plan     write the skeleton, check the contract, and name what breadth is still owed
            (init | check | gaps)
+  check    say what this repository still owes, from git and the plan alone: no hook payload,
+           no transcript, no host. Exit 1 when there is something to do.
   version  print the version
 
 flags shared by gate, sync, doctor:
@@ -49,6 +52,7 @@ bench rescore <results> [--bench-dir <dir>]
 plan init [--path docs/testing/test-plan.md] [--force]
 plan check [--path docs/testing/test-plan.md]
 plan gaps  [--path docs/testing/test-plan.md]
+check [--cwd .]
 `
 
 func defaultConfigDir() string {
@@ -75,6 +79,8 @@ func main() {
 		os.Exit(runBench(os.Args[2:]))
 	case "plan":
 		os.Exit(runPlan(os.Args[2:]))
+	case "check":
+		os.Exit(runCheck(os.Args[2:]))
 	case "version":
 		fmt.Println(Version)
 		os.Exit(0)
@@ -145,6 +151,17 @@ func selfDir() string {
 		exe = abs
 	}
 	return filepath.Dir(exe)
+}
+
+func runCheck(args []string) int {
+	fs := flag.NewFlagSet("check", flag.ContinueOnError)
+	cwd := fs.String("cwd", ".", "directory inside the repository to check")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	res := check.Run(*cwd, check.Deps{})
+	fmt.Println(strings.TrimRight(res.Text, "\n"))
+	return res.Exit
 }
 
 func runPlan(args []string) int {

@@ -1,0 +1,113 @@
+package check
+
+import (
+	"errors"
+	"strings"
+	"testing"
+)
+
+type fakeRepo struct {
+	root   string
+	status string
+	rootErr error
+	plan   string
+	planErr bool
+}
+
+func (f *fakeRepo) deps() Deps {
+	return Deps{
+		Git: func(dir string, args ...string) (string, error) {
+			if f.rootErr != nil {
+				return "", f.rootErr
+			}
+			if args[0] == "rev-parse" {
+				return f.root + "\n", nil
+			}
+			return f.status, nil
+		},
+		ReadFile: func(string) (string, error) {
+			if f.planErr {
+				return "", errors.New("no such file")
+			}
+			return f.plan, nil
+		},
+	}
+}
+
+const owing = "## Layer matrix\n\n| Layer | Skill | Scope | Status |\n|---|---|---|---|\n" +
+	"| Security | `appsec-adversarial-auditor` | input | pending |\n\n" +
+	"## Ranked targets\n\n| Target | Verdict | Status |\n|---|---|---|\n| 1. auth | probe | done |\n"
+
+const settled = "## Layer matrix\n\n| Layer | Skill | Scope | Status |\n|---|---|---|---|\n" +
+	"| Security | `appsec-adversarial-auditor` | input | done |\n\n" +
+	"## Ranked targets\n\n| Target | Verdict | Status |\n|---|---|---|\n| 1. auth | probe | done |\n"
+
+func porcelain(entries ...string) string {
+	var b strings.Builder
+	for _, e := range entries {
+		b.WriteString(e)
+		b.WriteByte(0)
+	}
+	return b.String()
+}
+
+// The question a host cannot answer for us is which session did what; the question any host can
+// answer is what the repository shows. This one needs no hook payload and no transcript, so it
+// works the same from a Claude Stop hook, another agent, a Makefile, or CI.
+func TestCheckReadsTheRepositoryAlone(t *testing.T) {
+	cases := []struct {
+		name     string
+		repo     *fakeRepo
+		wantExit int
+		wantOut  string
+	}{
+		{
+			name:     "changed source and no plan",
+			repo:     &fakeRepo{root: "/r", status: porcelain(" M src/app.js"), planErr: true},
+			wantExit: 1, wantOut: "no test plan",
+		},
+		{
+			name:     "changed source and a plan that owes breadth",
+			repo:     &fakeRepo{root: "/r", status: porcelain(" M src/app.js"), plan: owing},
+			wantExit: 1, wantOut: "appsec-adversarial-auditor",
+		},
+		{
+			name:     "changed source and a settled plan",
+			repo:     &fakeRepo{root: "/r", status: porcelain(" M src/app.js"), plan: settled},
+			wantExit: 0, wantOut: "owes nothing",
+		},
+		{
+			name:     "no production source changed",
+			repo:     &fakeRepo{root: "/r", status: porcelain(" M README.md", " M tests/a.test.js"), planErr: true},
+			wantExit: 0, wantOut: "no production source",
+		},
+		{
+			name:     "not a repository",
+			repo:     &fakeRepo{rootErr: errors.New("not a git repository")},
+			wantExit: 0, wantOut: "not a git repository",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res := Run(".", tc.repo.deps())
+			if res.Exit != tc.wantExit {
+				t.Fatalf("exit = %d, want %d: %s", res.Exit, tc.wantExit, res.Text)
+			}
+			if !strings.Contains(res.Text, tc.wantOut) {
+				t.Fatalf("text missing %q:\n%s", tc.wantOut, res.Text)
+			}
+		})
+	}
+}
+
+// Every host can read plain text; only some can read a hook schema.
+func TestTextNamesEveryChangedFileUpToALimit(t *testing.T) {
+	var entries []string
+	for _, n := range []string{"a", "b", "c", "d", "e", "f", "g", "h"} {
+		entries = append(entries, " M src/"+n+".js")
+	}
+	res := Run(".", (&fakeRepo{root: "/r", status: porcelain(entries...), planErr: true}).deps())
+	if !strings.Contains(res.Text, "src/a.js") || !strings.Contains(res.Text, "and 2 more") {
+		t.Fatalf("text = %s", res.Text)
+	}
+}

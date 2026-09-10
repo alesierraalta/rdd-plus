@@ -100,6 +100,30 @@ finding citing an evidence id that is not in the ledger, a settled finding that 
 test, and a `razonado` row sitting in the evidence ledger. It says nothing about whether the
 testing was good; it says the plan can be located, honoured, and re-scored.
 
+## Hosts
+
+The decisions live in Go; only the transport is per host. That split is what lets the same rules
+serve more than one agent, and it is why `check` exists:
+
+```
+rdd-plus check          # exit 1 and say what this repository owes, from git and the plan alone
+```
+
+It reads no hook payload, no transcript and no host configuration, so anything that can run a
+command can use it: another agent, a Makefile, a pre-push script, CI. What a host integration adds
+on top is knowing what THIS session did, which the repository cannot tell you.
+
+| Host | Status |
+|---|---|
+| Claude Code | verified: `sync` wires the Stop hook, `gate` reads its payload and answers in its schema, `doctor` runs the wired command and requires exit zero |
+| Anything that runs a command | verified: `check`, `plan init`, `plan check`, `plan gaps` need no host at all |
+| Gemini CLI | not implemented: its `settings.json` takes command hooks under different event names, and its payload and output schemas are not verified here |
+| Codex, OpenCode, Pi | not implemented: each has its own extension surface, and guessing a payload schema would ship a hook that silently never fires |
+
+Nothing above is a promise about a host that is not listed as verified. A hook that looks wired and
+never answers is the failure this project keeps finding, so a host counts as supported when its
+command has been run and its exit code checked, not when its configuration file has been written.
+
 ## The two questions at the Stop
 
 The gate asks one question when a session changed production source and never loaded the

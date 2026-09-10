@@ -1,0 +1,96 @@
+// Package check answers the testing questions from the repository alone: no hook payload, no
+// transcript, no host. Claude Code, another agent, a Makefile and CI can all run it, because the
+// only thing it needs is git and the persisted plan.
+package check
+
+import (
+	"fmt"
+	"os"
+	"os/exec"
+	"strings"
+
+	"github.com/alesierraalta/rdd-plus/internal/gate"
+	"github.com/alesierraalta/rdd-plus/internal/plan"
+)
+
+// Deps are the process boundaries, injected so the decision is testable without a repository.
+type Deps struct {
+	Git      func(dir string, args ...string) (string, error)
+	ReadFile func(path string) (string, error)
+}
+
+// Result is what the caller prints and exits with.
+type Result struct {
+	Exit  int
+	Text  string
+	Files []string
+}
+
+// MaxNamed is how many changed files the text names before counting the rest.
+const MaxNamed = 6
+
+// Run reports what the repository at cwd still owes. Exit 1 means there is something to do;
+// exit 0 means there is not, and the text says which of the two it is either way.
+func Run(cwd string, d Deps) Result {
+	if d.Git == nil {
+		d.Git = gitAt
+	}
+	if d.ReadFile == nil {
+		d.ReadFile = readFile
+	}
+	rootOut, err := d.Git(cwd, "rev-parse", "--show-toplevel")
+	root := strings.TrimSpace(rootOut)
+	if err != nil || root == "" {
+		return Result{Text: "not a git repository: nothing to check"}
+	}
+	statusOut, err := d.Git(root, "status", "--porcelain", "-z", "-uall")
+	if err != nil {
+		return Result{Text: "git status failed: nothing to check"}
+	}
+	var files []string
+	seen := map[string]bool{}
+	for _, p := range gate.ParsePorcelain(statusOut) {
+		if gate.IsProductionSource(p) && !seen[p] {
+			seen[p] = true
+			files = append(files, p)
+		}
+	}
+	if len(files) == 0 {
+		return Result{Text: "no production source is changed: nothing to check"}
+	}
+	body, err := d.ReadFile(root + "/" + plan.DefaultPath)
+	if err != nil {
+		return Result{Exit: 1, Files: files, Text: changedLine(files) +
+			"\nthere is no test plan at " + plan.DefaultPath + ": run the testing discipline, or write down why this change does not warrant it"}
+	}
+	gaps, err := plan.GapsIn(body)
+	if err != nil {
+		return Result{Exit: 1, Files: files, Text: changedLine(files) + "\nthe plan could not be read: " + err.Error()}
+	}
+	if !gaps.Any() {
+		return Result{Files: files, Text: changedLine(files) + "\n" + plan.DefaultPath + " owes nothing: every assigned layer was swept and every ranked target is done"}
+	}
+	return Result{Exit: 1, Files: files, Text: changedLine(files) + "\n" + gaps.Report()}
+}
+
+func changedLine(files []string) string {
+	shown := files
+	extra := ""
+	if len(files) > MaxNamed {
+		shown = files[:MaxNamed]
+		extra = fmt.Sprintf(" and %d more", len(files)-MaxNamed)
+	}
+	return fmt.Sprintf("%d production source file(s) changed: %s%s", len(files), strings.Join(shown, ", "), extra)
+}
+
+func gitAt(dir string, args ...string) (string, error) {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	return string(out), err
+}
+
+func readFile(path string) (string, error) {
+	body, err := os.ReadFile(path)
+	return string(body), err
+}
