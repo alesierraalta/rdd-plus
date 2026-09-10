@@ -85,6 +85,10 @@ are carried onto `fixture/` + `fix/all/` (they must be green there) and onto `fi
 in the summary, the aggregate, and the history. A run that reports a defect without a test that
 catches it, or catches it without reporting it, shows up as a gap between the two columns.
 
+**Pinned** is the third column: it counts defects whose finding names a test in the plan's
+`Pinning test` cell. It measures the claim, caught measures the outcome, and a run that pins more
+than it catches is naming tests that distinguish nothing.
+
 Every run keeps the plan it produced as `test-plan.md` beside its `result.json`, even when the
 workspace is removed, so older runs can be re-scored when the rule changes:
 `rdd-plus bench score --case bench/cases/<id> --plan <results>/<id>/<run>/test-plan.md`.

@@ -118,7 +118,12 @@ variant and run per test: a test green on `fix/all` and red on `fix/keep-D` catc
 on `fix/all` is broken or written to another API, so it is ignored and counted separately; a test
 green everywhere catches nothing.
 
-The gap between the two columns is the interesting number. A run can report a defect it never
+**Pinned** reads the plan's `Pinning test` cell: it counts defects whose finding names a test that
+holds them. Naming a test and having one that distinguishes the defect are different claims, so
+pinned sits next to caught, never instead of it. Plans written before rule 13 have no such column
+and simply claim nothing.
+
+The gap between the columns is the interesting number. A run can report a defect it never
 pinned with a test, or catch one it never wrote down.
 
 Per run: `result.json` and the `test-plan.md` it produced, kept even when the workspace is
