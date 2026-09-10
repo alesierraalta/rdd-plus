@@ -37,6 +37,7 @@ bench run [--cases <glob>] [--model <m>] [--runs N] [--max-turns N] [--timeout 3
           [--retries N] [--retry-delay 60s]   (--cases accepts comma-separated patterns)
 bench score --case <dir> --workspace <ws>
 bench history [--bench-dir <dir>]
+bench compare <before-results> <after-results>
 `
 
 func defaultConfigDir() string {
@@ -132,6 +133,8 @@ func runBench(args []string) int {
 		return runBenchScore(args[1:])
 	case "history":
 		return runBenchHistory(args[1:])
+	case "compare":
+		return runBenchCompare(args[1:])
 	default:
 		fmt.Fprint(os.Stderr, usage)
 		return 2
@@ -193,6 +196,20 @@ func runBenchScore(args []string) int {
 	res.Catch = bench.Discriminate(*caseDir, *ws, key, 10*time.Minute)
 	res.Caught = res.Catch.Count()
 	_ = enc.Encode(res)
+	return 0
+}
+
+func runBenchCompare(args []string) int {
+	if len(args) != 2 {
+		fmt.Fprintln(os.Stderr, "bench compare needs two result directories: <before> <after>")
+		return 2
+	}
+	cmp, err := bench.Compare(args[0], args[1])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "compare:", err)
+		return 1
+	}
+	fmt.Print(cmp.Markdown())
 	return 0
 }
 

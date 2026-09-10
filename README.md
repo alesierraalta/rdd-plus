@@ -94,6 +94,7 @@ copied into a workspace.
 rdd-plus bench run --cases 'bench/cases/*' --model sonnet --runs 1 --max-cost-usd 20
 rdd-plus bench score --case bench/cases/<id> --workspace <ws>     # re-score after grader changes
 rdd-plus bench history                                            # every run, never rewritten
+rdd-plus bench compare bench/results/<before> bench/results/<after>   # per-case reported and caught, side by side
 ```
 
 `bench run` scaffolds `<out>/<case>/<run>/ws` (default `bench/results/<timestamp>/`), commits the
