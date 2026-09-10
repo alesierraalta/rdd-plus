@@ -159,13 +159,35 @@ func table(sec string) (rows [][]string, header []string) {
 	return rows, header
 }
 
+// split cuts a markdown row into cells. A backslash-escaped pipe belongs to the cell it sits in;
+// splitting on it shifts every column to its right, so a crafted cell could move a layer's owner
+// out of the column the report reads.
 func split(line string) []string {
 	line = strings.TrimPrefix(strings.TrimSuffix(strings.TrimSpace(line), "|"), "|")
-	parts := strings.Split(line, "|")
-	for i := range parts {
-		parts[i] = strings.TrimSpace(parts[i])
+	var parts []string
+	var cur strings.Builder
+	escaped := false
+	for _, r := range line {
+		switch {
+		case escaped:
+			if r != '|' {
+				cur.WriteRune('\\')
+			}
+			cur.WriteRune(r)
+			escaped = false
+		case r == '\\':
+			escaped = true
+		case r == '|':
+			parts = append(parts, strings.TrimSpace(cur.String()))
+			cur.Reset()
+		default:
+			cur.WriteRune(r)
+		}
 	}
-	return parts
+	if escaped {
+		cur.WriteRune('\\')
+	}
+	return append(parts, strings.TrimSpace(cur.String()))
 }
 
 func isSeparator(cells []string) bool {

@@ -133,3 +133,18 @@ func TestCheckOnAMissingFile(t *testing.T) {
 
 const header = "## Findings\n\n| Id | Finding | Severity | Data safe? | Evidence id | Pinning test | Status | Verdict by / date | Reason | Fingerprint |\n|---|---|---|---|---|---|---|---|---|---|\n"
 const ledger = "\n## Evidence ledger\n\n| Id | Claim | Executed | Inputs | Observed | Mutation | Reproduction | Label |\n|---|---|---|---|---|---|---|---|\n"
+
+// A backslash-escaped pipe is part of its cell. Splitting on it shifts every column to the right,
+// which moves a layer's owner out of the column a report reads.
+func TestSplitHonoursEscapedPipes(t *testing.T) {
+	got := split(`| a \| b | ` + "`owner`" + ` | pending |`)
+	want := []string{"a | b", "`owner`", "pending"} // the escape belongs to the syntax, the pipe to the cell
+	if len(got) != len(want) {
+		t.Fatalf("cells = %q, want %q", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("cell %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+}

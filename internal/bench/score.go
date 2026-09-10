@@ -349,15 +349,36 @@ func dataRows(section string) [][]string {
 	return rows
 }
 
+// splitCells cuts a markdown row into cells. A backslash-escaped pipe belongs to the cell it sits
+// in; splitting on it shifts every column to its right, and the columns are what the score reads.
 func splitCells(row string) []string {
 	row = strings.TrimSpace(row)
 	row = strings.TrimPrefix(row, "|")
 	row = strings.TrimSuffix(row, "|")
-	parts := strings.Split(row, "|")
-	for i := range parts {
-		parts[i] = strings.TrimSpace(parts[i])
+	var parts []string
+	var cur strings.Builder
+	escaped := false
+	for _, r := range row {
+		switch {
+		case escaped:
+			if r != '|' {
+				cur.WriteRune('\\')
+			}
+			cur.WriteRune(r)
+			escaped = false
+		case r == '\\':
+			escaped = true
+		case r == '|':
+			parts = append(parts, strings.TrimSpace(cur.String()))
+			cur.Reset()
+		default:
+			cur.WriteRune(r)
+		}
 	}
-	return parts
+	if escaped {
+		cur.WriteRune('\\')
+	}
+	return append(parts, strings.TrimSpace(cur.String()))
 }
 
 func isSeparator(cells []string) bool {
