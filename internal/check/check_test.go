@@ -4,14 +4,17 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/alesierraalta/rdd-plus/internal/plan"
 )
 
 type fakeRepo struct {
-	root   string
-	status string
+	root    string
+	status  string
 	rootErr error
-	plan   string
+	plan    string
 	planErr bool
+	ignored bool
 }
 
 func (f *fakeRepo) deps() Deps {
@@ -20,8 +23,15 @@ func (f *fakeRepo) deps() Deps {
 			if f.rootErr != nil {
 				return "", f.rootErr
 			}
-			if args[0] == "rev-parse" {
+			switch args[0] {
+			case "rev-parse":
 				return f.root + "\n", nil
+			case "check-ignore":
+				// `git check-ignore -q` exits 0 (no error) only when the path is ignored.
+				if f.ignored {
+					return "", nil
+				}
+				return "", errors.New("exit status 1")
 			}
 			return f.status, nil
 		},
@@ -109,5 +119,65 @@ func TestTextNamesEveryChangedFileUpToALimit(t *testing.T) {
 	res := Run(".", (&fakeRepo{root: "/r", status: porcelain(entries...), planErr: true}).deps())
 	if !strings.Contains(res.Text, "src/a.js") || !strings.Contains(res.Text, "and 2 more") {
 		t.Fatalf("text = %s", res.Text)
+	}
+}
+
+// A plan git will never version is persistence without a record: the run's central artifact can
+// vanish from history while check reports the repository as settled. It is a warning, not a block.
+func TestCheckNamesAPlanGitIgnores(t *testing.T) {
+	repo := &fakeRepo{root: "/r", status: porcelain(" M README.md"), plan: settled, ignored: true}
+	res := Run(".", repo.deps())
+	if res.Exit != 0 {
+		t.Fatalf("an ignored plan is a warning, not a block: exit = %d: %s", res.Exit, res.Text)
+	}
+	for _, want := range []string{plan.DefaultPath, "git ignores", "versioned"} {
+		if !strings.Contains(res.Text, want) {
+			t.Fatalf("text missing %q:\n%s", want, res.Text)
+		}
+	}
+}
+
+// The caveat must not depend on the diff: a warning that only appears when source changed would
+// vanish on exactly the quiet runs whose plan still needs to be persisted.
+func TestIgnoredPlanWarnsEvenWithNoChangedSource(t *testing.T) {
+	repo := &fakeRepo{root: "/r", status: porcelain(" M README.md", " M tests/a.test.js"), plan: settled, ignored: true}
+	res := Run(".", repo.deps())
+	if res.Exit != 0 {
+		t.Fatalf("exit = %d: %s", res.Exit, res.Text)
+	}
+	if !strings.Contains(res.Text, "git ignores") {
+		t.Fatalf("text = %s", res.Text)
+	}
+	if !strings.Contains(res.Text, "no production source") {
+		t.Fatalf("the ordinary verdict must survive the warning: %s", res.Text)
+	}
+}
+
+// A tracked plan under version control is the good case and must add nothing.
+func TestTrackedPlanAddsNoWarning(t *testing.T) {
+	repo := &fakeRepo{root: "/r", status: porcelain(" M src/app.js"), plan: settled}
+	res := Run(".", repo.deps())
+	if strings.Contains(res.Text, "git ignores") {
+		t.Fatalf("a versioned plan needs no caveat:\n%s", res.Text)
+	}
+}
+
+// No repository, no plan, no claim: the versioning caveat must stay quiet and must not break the
+// verdicts check already produced.
+func TestVersioningCaveatStaysQuietWithoutARepositoryOrAPlan(t *testing.T) {
+	cases := []struct {
+		name string
+		repo *fakeRepo
+	}{
+		{"not a repository", &fakeRepo{rootErr: errors.New("not a git repository"), plan: settled, ignored: true}},
+		{"no plan file", &fakeRepo{root: "/r", status: porcelain(" M src/app.js"), planErr: true, ignored: true}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res := Run(".", tc.repo.deps())
+			if strings.Contains(res.Text, "git ignores") {
+				t.Fatalf("the caveat must stay quiet here:\n%s", res.Text)
+			}
+		})
 	}
 }

@@ -138,6 +138,32 @@ func TestGapsSanitiseWhatTheyQuote(t *testing.T) {
 	}
 }
 
+// The ratio is the verdict, so a reader has to be able to reproduce it. A field session reported
+// reverse-engineering the rule by diffing plans and reading the binary; the report must name it.
+func TestReportNamesTheRuleWhenALayerIsOwed(t *testing.T) {
+	doc := matrix("done", "pending", "done", "done", "done") + sprintf(ranked, "done", "done")
+	g, _ := GapsIn(doc)
+	ratio, _, _ := strings.Cut(g.Report(), "\n")
+	if !strings.Contains(ratio, "4 of 5") {
+		t.Fatalf("ratio line = %q", ratio)
+	}
+	for _, want := range []string{"n/a", "skipped", "done, fixed or closed"} {
+		if !strings.Contains(ratio, want) {
+			t.Fatalf("the ratio line must name the rule, missing %q:\n%s", want, g.Report())
+		}
+	}
+}
+
+// A complete sweep needs no explanation: the clause would only add noise to the good case.
+func TestCompleteSweepAddsNoRuleClause(t *testing.T) {
+	doc := matrix("done", "done", "n/a", "done", "done") + sprintf(ranked, "done", "done")
+	g, _ := GapsIn(doc)
+	ratio, _, _ := strings.Cut(g.Report(), "\n")
+	if ratio != "layers swept: 4 of 4" {
+		t.Fatalf("a complete sweep must stay as short as it is today, got %q", ratio)
+	}
+}
+
 // Sanitising must not turn an ordinary layer name into noise.
 func TestOrdinaryNamesSurviveSanitising(t *testing.T) {
 	doc := matrix("pending", "done", "done", "done", "done")

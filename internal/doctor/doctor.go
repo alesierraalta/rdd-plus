@@ -33,15 +33,18 @@ type Capability struct {
 
 // Report is the doctor's verdict; Healthy is false only for missing git, skills, or hook.
 type Report struct {
-	ConfigDir    string        `json:"config_dir"`
-	Skills       []SkillStatus `json:"skills"`
-	HookWired    bool          `json:"hook_wired"`
-	HookKind     string        `json:"hook_kind"`   // HookRddPlus, HookStandalone or HookNone
-	HookProbed   bool          `json:"hook_probed"` // the wired command answered a hook payload
-	HookCommand  string        `json:"hook_command,omitempty"`
-	Capabilities []Capability  `json:"capabilities"`
-	Problems     []string      `json:"problems"`
-	Healthy      bool          `json:"healthy"`
+	ConfigDir      string        `json:"config_dir"`
+	Skills         []SkillStatus `json:"skills"`
+	HookWired      bool          `json:"hook_wired"`
+	HookKind       string        `json:"hook_kind"`   // HookRddPlus, HookStandalone or HookNone
+	HookProbed     bool          `json:"hook_probed"` // the wired command answered a hook payload
+	HookCommand    string        `json:"hook_command,omitempty"`
+	WiredBinary    string        `json:"wired_binary,omitempty"` // the binary the wired Stop hook invokes
+	PathBinary     string        `json:"path_binary,omitempty"`  // where rdd-plus resolves on PATH
+	BinariesDiffer bool          `json:"binaries_differ"`        // both exist and are different files
+	Capabilities   []Capability  `json:"capabilities"`
+	Problems       []string      `json:"problems"`
+	Healthy        bool          `json:"healthy"`
 }
 
 var capabilities = []Capability{
@@ -82,11 +85,14 @@ func RunWith(cfgDir string, lookPath func(string) (string, error), probe func(co
 	r.HookWired = r.HookKind != HookNone
 	if !r.HookWired {
 		r.Problems = append(r.Problems, "gate hook not wired in settings.json (run: rdd-plus sync)")
-	} else if probe != nil {
-		if err := probe(r.HookCommand); err != nil {
-			r.Problems = append(r.Problems, "the wired command does not answer a hook payload: "+err.Error())
-		} else {
-			r.HookProbed = true
+	} else {
+		r.WiredBinary, r.PathBinary, r.BinariesDiffer = compareGateBinaries(r.HookCommand, lookPath)
+		if probe != nil {
+			if err := probe(r.HookCommand); err != nil {
+				r.Problems = append(r.Problems, "the wired command does not answer a hook payload: "+err.Error())
+			} else {
+				r.HookProbed = true
+			}
 		}
 	}
 	for _, c := range capabilities {
@@ -126,6 +132,9 @@ func (r Report) String() string {
 	}
 	if r.HookProbed {
 		fmt.Fprintf(&b, "  the wired command answers a payload\n")
+	}
+	if r.BinariesDiffer {
+		fmt.Fprintf(&b, "  warning: the wired gate binary %s and the rdd-plus on PATH %s are different files: the two would give different verdicts\n", r.WiredBinary, r.PathBinary)
 	}
 	fmt.Fprintf(&b, "\ncapabilities\n")
 	for _, c := range r.Capabilities {
@@ -171,6 +180,39 @@ func matches(skills fs.FS, name, target string) bool {
 		return nil
 	})
 	return same
+}
+
+// compareGateBinaries answers whether the wired Stop hook runs a different file than the rdd-plus on
+// PATH. Two paths that resolve to the same file (a symlink, today's real layout) are one binary and
+// one verdict; two different files are a time bomb. A missing hook binary or a missing PATH binary
+// is left to the verdicts doctor already reports.
+func compareGateBinaries(hookCommand string, lookPath func(string) (string, error)) (wired, path string, differ bool) {
+	fields := strings.Fields(hookCommand)
+	if len(fields) == 0 {
+		return "", "", false
+	}
+	wired = strings.Trim(fields[0], `"'`)
+	// Only a command written as a path names a binary doctor can resolve; `node script.mjs` and a
+	// bare `rdd-plus` are left alone rather than guessed at.
+	if !strings.ContainsRune(wired, filepath.Separator) {
+		return "", "", false
+	}
+	wiredInfo, err := os.Stat(wired)
+	if err != nil || wiredInfo.IsDir() {
+		return "", "", false
+	}
+	p, err := lookPath("rdd-plus")
+	if err != nil || p == "" {
+		return "", "", false
+	}
+	pathInfo, err := os.Stat(p)
+	if err != nil || pathInfo.IsDir() {
+		return "", "", false
+	}
+	if os.SameFile(wiredInfo, pathInfo) {
+		return wired, p, false
+	}
+	return wired, p, true
 }
 
 // hookWired reports whether any Stop hook command ends with " gate" and returns it.

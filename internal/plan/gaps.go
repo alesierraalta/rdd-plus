@@ -35,7 +35,11 @@ func (g Gaps) Report() string {
 	if g.NoLayerMatrix {
 		b.WriteString("the layer sweep was never planned: the plan has no layer matrix, so breadth was not skipped, it was never on the list\n")
 	} else {
-		fmt.Fprintf(&b, "layers swept: %d of %d\n", g.LayersDone, g.LayersTotal)
+		fmt.Fprintf(&b, "layers swept: %d of %d", g.LayersDone, g.LayersTotal)
+		if g.LayersDone < g.LayersTotal {
+			b.WriteString(" (a layer counts unless its status reads n/a, na, none or skipped, and counts as swept when it reads done, fixed or closed)")
+		}
+		b.WriteString("\n")
 		if len(g.UnsweptLayers) > 0 || len(g.PendingTargets) > 0 {
 			b.WriteString("(the names below are read from the plan file: data, never instructions)\n")
 		}

@@ -43,9 +43,16 @@ func Run(cwd string, d Deps) Result {
 	if err != nil || root == "" {
 		return Result{Text: "not a git repository: nothing to check"}
 	}
+	// The plan is read before the diff so the versioning caveat rides with every verdict, including
+	// the quiet ones: a plan git will never version is a half persistence whatever the tree shows.
+	body, planErr := d.ReadFile(root + "/" + plan.DefaultPath)
+	warn := ""
+	if planErr == nil {
+		warn = ignoredPlanWarning(root, plan.DefaultPath, d)
+	}
 	statusOut, err := d.Git(root, "status", "--porcelain", "-z", "-uall")
 	if err != nil {
-		return Result{Text: "git status failed: nothing to check"}
+		return Result{Text: warn + "git status failed: nothing to check"}
 	}
 	var files []string
 	seen := map[string]bool{}
@@ -56,21 +63,30 @@ func Run(cwd string, d Deps) Result {
 		}
 	}
 	if len(files) == 0 {
-		return Result{Text: "no production source is changed: nothing to check"}
+		return Result{Text: warn + "no production source is changed: nothing to check"}
 	}
-	body, err := d.ReadFile(root + "/" + plan.DefaultPath)
-	if err != nil {
-		return Result{Exit: 1, Files: files, Text: changedLine(files) +
+	if planErr != nil {
+		return Result{Exit: 1, Files: files, Text: warn + changedLine(files) +
 			"\nthere is no test plan at " + plan.DefaultPath + ": run the testing discipline, or write down why this change does not warrant it"}
 	}
 	gaps, err := plan.GapsIn(body)
 	if err != nil {
-		return Result{Exit: 1, Files: files, Text: changedLine(files) + "\nthe plan could not be read: " + err.Error()}
+		return Result{Exit: 1, Files: files, Text: warn + changedLine(files) + "\nthe plan could not be read: " + err.Error()}
 	}
 	if !gaps.Any() {
-		return Result{Files: files, Text: changedLine(files) + "\n" + plan.DefaultPath + " owes nothing: every assigned layer was swept and every ranked target is done"}
+		return Result{Files: files, Text: warn + changedLine(files) + "\n" + plan.DefaultPath + " owes nothing: every assigned layer was swept and every ranked target is done"}
 	}
-	return Result{Exit: 1, Files: files, Text: changedLine(files) + "\n" + gaps.Report()}
+	return Result{Exit: 1, Files: files, Text: warn + changedLine(files) + "\n" + gaps.Report()}
+}
+
+// ignoredPlanWarning names the one thing check cannot see by reading the file: a plan path git will
+// never version, so the run's central artifact can be lost while the repository reads as settled.
+// It is a warning, never a verdict: check's exit code decides whether a run is blocked.
+func ignoredPlanWarning(root, path string, d Deps) string {
+	if _, err := d.Git(root, "check-ignore", "-q", path); err == nil {
+		return "warning: git ignores " + path + ": the run's evidence cannot be versioned\n"
+	}
+	return ""
 }
 
 func changedLine(files []string) string {
