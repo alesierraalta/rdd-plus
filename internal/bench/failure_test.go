@@ -61,7 +61,7 @@ func TestRetryRecoversFromOneInfrastructureFailure(t *testing.T) {
 		if calls == 1 {
 			return AgentResult{ExitCode: 1}, errors.New("claude: exit status 1")
 		}
-		p := "# plan\n\n## Findings\n\n| Id | Finding | Sev | Safe | Evidence | Status | By | Reason | FP |\n|---|---|---|---|---|---|---|---|---|\n| F1 | src/x.js:3 wrong | M | yes | E1 | confirmed | t | r | f |\n\n## Evidence ledger\n\n| Id | Claim |\n|---|---|\n| E1 | c |\n"
+		p := "# plan\n\n## Findings\n\n| Id | Finding | Sev | Safe | Evidence | Status | By | Reason | FP |\n|---|---|---|---|---|---|---|---|---|\n| F1 | src/a.mjs:1 wrong | M | yes | E1 | confirmed | t | r | f |\n\n## Evidence ledger\n\n| Id | Claim |\n|---|---|\n| E1 | c |\n"
 		if err := os.MkdirAll(filepath.Dir(filepath.Join(ws, PlanPath)), 0o755); err != nil {
 			return AgentResult{}, err
 		}
