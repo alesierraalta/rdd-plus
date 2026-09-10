@@ -62,6 +62,22 @@ Known limits of the overlays, verified by running every trigger against every va
 three to five lowercase words a correct finding would contain. `trigger.actual` is pasted from a
 real execution against the fixture; a defect whose trigger was never run does not belong in a key.
 
+## Cost and wall clock
+
+The cost of a run is the number of agent turns; concurrency does not change it. The wall clock is
+another matter: cases are independent, so `--concurrency N` runs N of them side by side and the
+run takes about as long as its slowest case instead of the sum of all fifteen. In the four runs
+measured so far the sum was 26 to 39 minutes and the slowest single case was 5.4 minutes.
+
+`--agent-config bench` builds a throwaway Claude configuration holding only the embedded skills,
+with the operator's credentials symlinked in. A case then measures the skills rather than whatever
+else the machine makes a session do: in one 15-case run, 82 tool calls went to the memory protocol
+and to loading it, roughly a fifth of the turns.
+
+Trimming the corpus is the lever that does cost quality. Of the fifteen cases, thirteen produced
+different numbers across the four skill versions measured so far; only `n01` and `n05` were
+identical every time. There is little to remove.
+
 ## Scoring
 
 The runner copies `fixture/` into a fresh workspace, runs the flow under evaluation there, and

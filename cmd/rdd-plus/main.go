@@ -36,7 +36,7 @@ flags shared by gate, sync, doctor:
 
 bench run [--cases <glob>] [--model <m>] [--runs N] [--max-turns N] [--timeout 30m]
           [--max-cost-usd N] [--out <dir>] [--bench-dir <dir>] [--dry-run] [--keep]
-          [--retries N] [--retry-delay 60s] [--agent-config bench|<dir>]
+          [--retries N] [--retry-delay 60s] [--agent-config bench|<dir>] [--concurrency N]
           (--cases accepts comma-separated patterns)
 bench score --case <dir> --workspace <ws>
 bench history [--bench-dir <dir>]
@@ -129,6 +129,19 @@ func runDoctor(args []string) int {
 	return 1
 }
 
+// selfDir is the directory of the running binary, so a spawned agent runs this build when the
+// skill tells it to call `rdd-plus plan init`.
+func selfDir() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	if abs, err := filepath.Abs(exe); err == nil {
+		exe = abs
+	}
+	return filepath.Dir(exe)
+}
+
 func runPlan(args []string) int {
 	if len(args) == 0 {
 		fmt.Fprint(os.Stderr, usage)
@@ -205,6 +218,7 @@ func runBenchRun(args []string) int {
 	keep := fs.Bool("keep", false, "keep workspaces after scoring")
 	retries := fs.Int("retries", 1, "retries per case on infrastructure failures (exit status, error result)")
 	retryDelay := fs.Duration("retry-delay", 60*time.Second, "pause before a retry")
+	workers := fs.Int("concurrency", 1, "cases to run side by side; the wall clock shortens, the cost does not")
 	agentConfig := fs.String("agent-config", "", "Claude config directory for the agent; \"bench\" builds a throwaway one holding only the embedded skills")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -232,8 +246,8 @@ func runBenchRun(args []string) int {
 		CasesGlob: *cases, Model: *model, Runs: *runs, MaxTurns: *maxTurns, Timeout: *timeout,
 		SuiteTimeout: *suiteTimeout, MaxCostUSD: *maxCost, Out: *out, BenchDir: *benchDir,
 		SkillFile: skillFile,
-		ConfigDir: cfgDir,
-		DryRun:    *dryRun, Keep: *keep, Retries: *retries, RetryDelay: *retryDelay, Log: os.Stdout,
+		ConfigDir: cfgDir, BinDir: selfDir(), Workers: *workers,
+		DryRun: *dryRun, Keep: *keep, Retries: *retries, RetryDelay: *retryDelay, Log: os.Stdout,
 	})
 	fmt.Printf("results: %s\n", filepath.Join(*out, "summary.md"))
 	return code

@@ -28,6 +28,7 @@ type Options struct {
 	SuiteTimeout time.Duration
 	ConfigDir    string  // Claude config directory for the agent; empty inherits the operator's
 	BinDir       string  // put first on the agent's PATH, so `rdd-plus plan init` is the build under test
+	Workers      int     // cases run side by side; below 1 means one at a time
 	MaxCostUSD   float64 // 0 means no ceiling
 	Out          string
 	BenchDir     string
