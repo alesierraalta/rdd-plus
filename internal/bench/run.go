@@ -3,6 +3,8 @@ package bench
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -66,6 +68,37 @@ type Aggregate struct {
 	RescoredFrom   string   `json:"rescored_from,omitempty"` // set when this aggregate re-reads another run with newer rules
 	RunTS          string   `json:"run_ts,omitempty"`        // rescore: when the run it re-reads happened
 	SkillVersion   string   `json:"skill_version,omitempty"` // rescore: the version that produced the run
+	Corpus         string   `json:"corpus,omitempty"`        // digest of the case names and defect ids this run measured
+}
+
+// CorpusCase is one case of a corpus: its name and the ids of the defects planted in it.
+type CorpusCase struct {
+	Name    string
+	Defects []string
+}
+
+// CorpusDigest identifies a corpus by its case names and defect ids. It is stable under case
+// and defect-id reordering, and changes when a case name or a defect id changes or a defect is
+// added or removed. Two runs whose digests differ did not measure the same ground.
+func CorpusDigest(cases []CorpusCase) string {
+	lines := make([]string, 0, len(cases))
+	for _, c := range cases {
+		ids := append([]string(nil), c.Defects...)
+		sort.Strings(ids)
+		lines = append(lines, c.Name+":"+strings.Join(ids, ","))
+	}
+	sort.Strings(lines)
+	sum := sha256.Sum256([]byte(strings.Join(lines, "\n")))
+	return "sha256:" + hex.EncodeToString(sum[:])[:16]
+}
+
+// defectIDs lists a key's defect ids in key order; the digest sorts them.
+func defectIDs(k Key) []string {
+	ids := make([]string, 0, len(k.Defects))
+	for _, d := range k.Defects {
+		ids = append(ids, d.ID)
+	}
+	return ids
 }
 
 // ExitCostCeiling is returned when the run stopped early because the cost ceiling was reached.
@@ -105,10 +138,13 @@ func Run(opts Options) (Aggregate, int) {
 		return agg, 1
 	}
 	code := 0
+	var corpus []CorpusCase
 loop:
 	for _, caseDir := range caseDirs {
 		key, err := LoadKey(caseDir)
 		name := filepath.Base(caseDir)
+		// A case whose run later fails or is invalid is still part of the corpus.
+		corpus = append(corpus, CorpusCase{Name: name, Defects: defectIDs(key)})
 		if err != nil {
 			fmt.Fprintf(opts.Log, "[%s] skipped: %v\n", name, err)
 			agg.Cases = append(agg.Cases, Result{Case: name, Invalid: true, InvalidReason: err.Error()})
@@ -151,6 +187,7 @@ loop:
 		code = ExitPartial
 		fmt.Fprintf(opts.Log, "partial: %d failed, %d invalid; recall covers valid cases only\n", agg.Failed, agg.Invalid)
 	}
+	agg.Corpus = CorpusDigest(corpus)
 	writeJSON(filepath.Join(opts.Out, "aggregate.json"), agg)
 	_ = os.WriteFile(filepath.Join(opts.Out, "summary.md"), []byte(Summary(agg)), 0o644)
 	if !opts.DryRun && opts.BenchDir != "" {
@@ -159,7 +196,7 @@ loop:
 			Found: agg.Found, Recall: agg.Recall, Caught: agg.Caught, RecallCaught: agg.RecallCaught,
 			FalsePositives: agg.FalsePositives, CostUSD: agg.CostUSD,
 			Failed: agg.Failed, Invalid: agg.Invalid, NoPlan: agg.NoPlan, Kind: KindRun,
-			SkillVersion: SkillVersion(opts.SkillFile),
+			SkillVersion: SkillVersion(opts.SkillFile), Corpus: agg.Corpus,
 		})
 	}
 	return agg, code
@@ -322,6 +359,9 @@ func Summary(agg Aggregate) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Bench %s\n\nModel: %s · cases: %d · defects: %d · reported: %d (%.2f) · claimed a pinning test: %d · caught by a test: %d (%.2f) · false positives: %d · failed: %d · invalid: %d · no plan: %d · cost: $%.3f",
 		agg.TS, agg.Model, len(agg.Cases), agg.Defects, agg.Found, agg.Recall, agg.ClaimedPinned, agg.Caught, agg.RecallCaught, agg.FalsePositives, agg.Failed, agg.Invalid, agg.NoPlan, agg.CostUSD)
+	if agg.Corpus != "" {
+		fmt.Fprintf(&b, " · corpus: %s", agg.Corpus)
+	}
 	if agg.DryRun {
 		b.WriteString(" · dry-run")
 	}

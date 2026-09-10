@@ -32,6 +32,10 @@ func Compare(beforeDir, afterDir string) (Comparison, error) {
 	if cmp.After, err = readAggregate(afterDir); err != nil {
 		return cmp, err
 	}
+	// Two runs that measured different corpora are not a delta, whatever their case sets look like.
+	if cmp.Before.Corpus != "" && cmp.After.Corpus != "" && cmp.Before.Corpus != cmp.After.Corpus {
+		return cmp, fmt.Errorf("different corpora: before %s, after %s", cmp.Before.Corpus, cmp.After.Corpus)
+	}
 	byCase := func(a Aggregate) map[string]Result {
 		m := map[string]Result{}
 		for _, r := range a.Cases {
@@ -54,6 +58,12 @@ func Compare(beforeDir, afterDir string) (Comparison, error) {
 	}
 	sort.Strings(names)
 	for _, name := range names {
+		// A case's defect count belongs to the corpus, not to the score: a case that failed in
+		// either run still carries the count read from its key, and a change there is a change of
+		// ground, not a change of result.
+		if b[name].Total != a[name].Total {
+			return cmp, fmt.Errorf("case %s: %d defects before, %d after", name, b[name].Total, a[name].Total)
+		}
 		row := CompareRow{Case: name, Before: b[name], After: a[name]}
 		row.OnlyAfterValid = (row.Before.Failed || row.Before.Invalid) && !(row.After.Failed || row.After.Invalid)
 		cmp.Rows = append(cmp.Rows, row)

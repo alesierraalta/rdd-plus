@@ -48,7 +48,7 @@ bench run [--cases <glob>] [--model <m>] [--runs N] [--max-turns N] [--timeout 3
 bench score --case <dir> --workspace <ws>
 bench history [--bench-dir <dir>]
 bench compare <before-results> <after-results>
-bench rescore <results> [--bench-dir <dir>]
+bench rescore [--bench-dir <dir>] <results>
 plan init [--path docs/testing/test-plan.md] [--force]
 plan check [--path docs/testing/test-plan.md]
 plan gaps  [--path docs/testing/test-plan.md]
@@ -383,6 +383,7 @@ func runBenchRescore(args []string) int {
 		Found: agg.Found, Recall: agg.Recall, Caught: agg.Caught, RecallCaught: agg.RecallCaught,
 		FalsePositives: agg.FalsePositives, Failed: agg.Failed, Invalid: agg.Invalid, NoPlan: agg.NoPlan,
 		Kind: bench.KindRescore, RunTS: agg.RunTS, SourceRun: results, SkillVersion: agg.SkillVersion,
+		Corpus: agg.Corpus,
 	})
 	fmt.Print(bench.Summary(agg))
 	return 0

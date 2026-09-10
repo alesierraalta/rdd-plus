@@ -31,6 +31,33 @@ func TestAppendHistoryIsAdditive(t *testing.T) {
 	}
 }
 
+// The corpus is the new last column. The history stays append-only: a file written under the
+// previous column set keeps its rows and gains a fresh header above the new one.
+func TestHistoryAddsTheCorpusColumn(t *testing.T) {
+	dir := t.TempDir()
+	old := "| ts | kind | out | model | cases | defects | reported | recall | caught | recall caught | false positives | failed | invalid | no plan | cost USD | skill version | scorer |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n| t0 | run | o | m | 1 | 2 | 1 | 0.50 | 0 | 0.00 | 0 | 0 | 0 | 0 | 1.000 | 0.3.0 | abc |\n"
+	if err := os.WriteFile(filepath.Join(dir, "history.md"), []byte(old), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := AppendHistory(dir, HistoryEntry{TS: "t1", Out: "o", Model: "m", Cases: 1, Defects: 2, Corpus: "sha256:0123456789abcdef"}); err != nil {
+		t.Fatal(err)
+	}
+	md, _ := os.ReadFile(filepath.Join(dir, "history.md"))
+	if !strings.Contains(string(md), "| t0 | run | o | m | 1 | 2 | 1 | 0.50 | 0 | 0.00 | 0 | 0 | 0 | 0 | 1.000 | 0.3.0 | abc |") {
+		t.Fatalf("an earlier row must stay as it was: %s", md)
+	}
+	if !strings.Contains(string(md), "| scorer | corpus |") {
+		t.Fatalf("a fresh header with the corpus column must be appended: %s", md)
+	}
+	if !strings.Contains(string(md), "| sha256:0123456789abcdef |") {
+		t.Fatalf("the new row must carry the corpus: %s", md)
+	}
+	data, _ := os.ReadFile(filepath.Join(dir, "history.jsonl"))
+	if !strings.Contains(string(data), `"corpus":"sha256:0123456789abcdef"`) {
+		t.Fatalf("the jsonl row must carry the corpus: %s", data)
+	}
+}
+
 func TestSkillVersion(t *testing.T) {
 	dir := t.TempDir()
 	f := filepath.Join(dir, "SKILL.md")

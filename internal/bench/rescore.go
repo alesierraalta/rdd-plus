@@ -20,7 +20,7 @@ func Rescore(results string, lookup func(caseName string) (string, error), suite
 		return orig, err
 	}
 	agg := Aggregate{TS: time.Now().UTC().Format(time.RFC3339), Out: filepath.Join(results, "rescored"), Model: orig.Model,
-		RescoredFrom: results, RunTS: orig.TS, SkillVersion: skillVersionOf(results)}
+		RescoredFrom: results, RunTS: orig.TS, SkillVersion: skillVersionOf(results), Corpus: orig.Corpus}
 	for _, old := range orig.Cases {
 		res := old
 		agg.CostUSD += old.CostUSD

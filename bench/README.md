@@ -143,8 +143,11 @@ written: the history is append-only, so a rename would rewrite evidence instead 
 
 A number is citable only together with its instrument: the corpus commit, the scorer build, the
 skill version, the model, and at least two runs per configuration. One run of a `+dirty` build is a
-reading, not a baseline, and `bench compare` refuses two runs whose case sets differ, so extending
-the corpus starts a new series instead of a delta.
+reading, not a baseline, and `bench compare` refuses two runs whose case sets differ, whose recorded
+corpus digests differ, or whose per-case defect counts differ, so extending or editing the corpus
+starts a new series instead of a delta. Every run records `corpus`, a digest over the case names and
+defect ids it measured, in its aggregate and in a `corpus` column appended last to the history; a
+case that failed or was invalid still contributes its name and key defect ids to that digest.
 
 ```
 git commit                      # a build from a dirty tree prints a warning and cannot be re-derived
