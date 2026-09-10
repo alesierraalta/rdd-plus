@@ -4,7 +4,8 @@ description: "Trigger: haz el testing, testea esto, prueba esto, test this, test
 license: Apache-2.0
 metadata:
   author: gentleman-programming
-  version: "0.3.4"
+  version: "0.3.5"
+  requires_rdd_plus: "0.3.5"
   scope: [common]
   auto_invoke: "Any request to test something: infer scope and mode from repo state, build or resume the persisted plan, execute it through specialized testing skills"
 ---
@@ -19,6 +20,18 @@ from the state table, act. Never ask which mode; one question only if the target
   the plan only. **EXECUTE**: next pending target → sandbox → sibling → update the plan.
 
 This skill decides WHICH targets and routes; siblings do the work.
+
+## Tooling
+
+This skill is written for `rdd-plus 0.3.5`, and `rdd-plus version` prints the build present.
+Install it from the repository with `make build`, which writes `bin/rdd-plus`; put that on `PATH`,
+or use `go install github.com/alesierraalta/rdd-plus/cmd/rdd-plus@latest` once the module is
+published. Without the binary the run continues on documented fallbacks: `plan init` is replaced
+by copying [assets/test-plan-template.md](assets/test-plan-template.md) (rule 12); `plan check` by
+applying its four checks by hand — findings that are not rows, cells that cite no `path:line`,
+evidence ids that do not exist, rows that settle without a pinning test — plus the template's
+table shape, saying in the report that the gate was applied by hand; and `doctor` by deciding
+CodeGraph availability from `codegraph` and `git ls-files` instead of the capability probe.
 
 ## Hard Rules
 
@@ -37,7 +50,8 @@ This skill decides WHICH targets and routes; siblings do the work.
 6. **DEFAULT BUDGET is everything.** No user cap: every selected target runs to its target rung.
    Stop only at a testability defect or a user cap; report the remainder.
 7. **Routing is an instruction.** INVOKE the sibling (Skill tool, or read
-   `~/.claude/skills/<name>/SKILL.md`); never approximate it.
+   `~/.claude/skills/<name>/SKILL.md` and apply it inline where no Skill tool exists); what is
+   forbidden is approximating it from memory.
 8. **No claim without execution.** Every finding and every "works" carries an evidence record
    per [references/evidence.md](references/evidence.md); `razonado` items are hypotheses.
 9. **Regression gate.** A diff is validated only when the existing suite is green, its blast-radius
@@ -56,7 +70,8 @@ This skill decides WHICH targets and routes; siblings do the work.
     `rdd-plus plan check` passes: it reports findings that are not rows, cite no location, cite
     an evidence id that does not exist, or settle without a pinning test. A finding that exists
     only in chat does not exist, and one nothing can parse is the same thing. Asking the user
-    whether to fix something never replaces writing the row first.
+    whether to fix something never replaces writing the row first. When the binary is absent, the
+    Tooling section names the fallback for each call.
 13. **Every confirmed finding leaves a pinning test in the suite, asserting the CORRECT
     behaviour.** A probe in the scratchpad proves the defect once; a test in the repository's own
     suite proves it on every run. The assertion states what the contract promises, so the test is
@@ -84,7 +99,9 @@ This skill decides WHICH targets and routes; siblings do the work.
 | Monorepo with several apps, none named | Ask one question: which app |
 
 Scope: a diff means its blast radius first, closed by the regression gate (rule 9); a clean
-tree on main means the whole app.
+tree on main means the whole app. A scope may keep its own plan beside another scope's — for
+example `docs/testing/test-plan-reports.md` beside an existing `test-plan.md` — closing against
+`plan check` on its own path.
 
 **Verdict per target**: probe · pin · none (`n/a`), profiles in
 [references/prioritization.md](references/prioritization.md). **Routing** by need: full table in
@@ -108,7 +125,10 @@ main, the test runner. Pick mode and scope from the state table; state the infer
    ranks what siblings contribute, never invents it.
 3. Rank ([references/prioritization.md](references/prioritization.md)).
 4. Per target: altitude, target rung L1–L5, sibling skill, verdict.
-5. Layer matrix (one row per layer plus sandbox); name anti-priorities with reasons.
+5. Layer matrix (one row per layer plus sandbox); name anti-priorities with reasons. `plan gaps`
+   counts a row as swept when its status reads `done`, `fixed` or `closed`, and `n/a`, `na`, `none`
+   and `skipped` leave the breadth denominator: marking a layer out of scope is a decision the plan
+   records, never a silent omission. The `Skill` cell only labels what is still owed.
 6. Record the baseline (`assets/fingerprint.sh`: repo fingerprint; per-finding cited-files fingerprint) and persist to
    `docs/testing/test-plan.md` (or the path the user names). Create the file with
    `rdd-plus plan init --path <plan>`, which writes
@@ -120,7 +140,8 @@ main, the test runner. Pick mode and scope from the state table; state the infer
 1. Pick the first `pending` row, or the one the user names.
 2. Sandbox: throwaway worktree or ephemeral container; environment proof; probes in scratchpad
    or gitignored `testLocales/`.
-3. Invoke the assigned sibling; it climbs to the target rung without reduction.
+3. Invoke the assigned sibling (read its `SKILL.md` and apply it inline where no Skill tool
+   exists); it climbs to the target rung without reduction.
 4. Promote the reddening probe into the suite through `no-excess-tests`, asserting the promised
    behaviour, then run it twice: RED on the current code, GREEN with the minimal fix or the
    mutation reverted. If the first run is green, the assertion is pointing at the defect instead
@@ -137,7 +158,9 @@ This describes the CHAT REPLY, never the file: the plan's structure is
 
 Return: inferred mode and scope (one line); plan path and delta; ranked table; layer matrix;
 not-testing list; routing ledger (per sibling: `contributed rows` / `invoked` / `skipped` +
-reason; assigned-but-never-invoked is an open gap); evidence ledger; findings with verdicts and
+reason; an `invoked` entry says how it ran — the Skill tool, or `inline: <path to its SKILL.md>` where
+the harness has none — because nothing in the plan tells an inline run from a skipped one;
+assigned-but-never-invoked is an open gap); evidence ledger; findings with verdicts and
 precision, each confirmed one naming its pinning test; execution ratio (done / rows excluding
 `n/a`) and the ordered remainder.
 

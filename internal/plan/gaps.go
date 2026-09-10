@@ -9,11 +9,16 @@ import (
 
 // Gaps is what a finished run still owes: the breadth half of the discipline, which is the half
 // a session can skip while its report still reads as complete.
+//
+// Every number here is read from the plan's own cells, so the check is as honest as the labels in
+// it: a status still says a sibling was invoked even when nothing can prove it. A run that applied
+// a sibling by reading its SKILL.md and working inline is indistinguishable from one that skipped
+// it, which is why the reply's routing ledger has to name the invocation mode.
 type Gaps struct {
 	NoLayerMatrix  bool     `json:"no_layer_matrix"`          // breadth was never planned, not merely left undone
 	UnsweptLayers  []string `json:"unswept_layers,omitempty"` // "Security (appsec-adversarial-auditor)"
-	LayersDone     int      `json:"layers_done"`
-	LayersTotal    int      `json:"layers_total"` // excluding layers the plan marked n/a
+	LayersDone     int      `json:"layers_done"`              // status reads done, fixed or closed
+	LayersTotal    int      `json:"layers_total"`             // every row except those marked n/a, na, none or skipped
 	TargetsDone    int      `json:"targets_done"`
 	TargetsTotal   int      `json:"targets_total"`
 	PendingTargets []string `json:"pending_targets,omitempty"`

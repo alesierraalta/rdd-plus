@@ -15,15 +15,13 @@ import (
 	"time"
 
 	"github.com/alesierraalta/rdd-plus/internal/bench"
+	"github.com/alesierraalta/rdd-plus/internal/buildinfo"
 	"github.com/alesierraalta/rdd-plus/internal/check"
 	"github.com/alesierraalta/rdd-plus/internal/doctor"
 	"github.com/alesierraalta/rdd-plus/internal/gate"
 	"github.com/alesierraalta/rdd-plus/internal/plan"
 	"github.com/alesierraalta/rdd-plus/internal/sync"
 )
-
-// Version is overridable at build time: -ldflags "-X main.Version=v1.2.3".
-var Version = "dev"
 
 const usage = `usage: rdd-plus <command> [flags]
 
@@ -52,6 +50,7 @@ bench rescore [--bench-dir <dir>] <results>
 plan init [--path docs/testing/test-plan.md] [--force]
 plan check [--path docs/testing/test-plan.md]
 plan gaps  [--path docs/testing/test-plan.md]
+           (swept = status done, fixed or closed; n/a, na, none and skipped leave the denominator)
 check [--cwd .]
 `
 
@@ -82,7 +81,7 @@ func main() {
 	case "check":
 		os.Exit(runCheck(os.Args[2:]))
 	case "version":
-		fmt.Println(Version)
+		fmt.Println(buildinfo.String())
 		os.Exit(0)
 	default:
 		fmt.Fprint(os.Stderr, usage)

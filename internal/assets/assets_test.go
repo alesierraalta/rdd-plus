@@ -3,7 +3,10 @@ package assets
 import (
 	"io/fs"
 	"regexp"
+	"strings"
 	"testing"
+
+	"github.com/alesierraalta/rdd-plus/internal/buildinfo"
 )
 
 var expected = []string{
@@ -33,6 +36,26 @@ func TestEverySkillIsEmbeddedWithAMatchingName(t *testing.T) {
 				t.Fatalf("frontmatter name does not match directory: %q", m)
 			}
 		})
+	}
+}
+
+// The skill tells a session which binary it was written for; the two versions must move together,
+// or a session cannot tell whether the tool it has is the tool the skill expects.
+func TestSkillNamesTheRddPlusVersionItRequires(t *testing.T) {
+	data, err := fs.ReadFile(Skills(), "test-strategy/SKILL.md")
+	if err != nil {
+		t.Fatalf("SKILL.md missing: %v", err)
+	}
+	field := regexp.MustCompile(`(?m)^\s*requires_rdd_plus:\s*"?([0-9]+\.[0-9]+\.[0-9]+)"?\s*$`).FindSubmatch(data)
+	if field == nil {
+		t.Fatalf("test-strategy frontmatter has no requires_rdd_plus; this build is %s", buildinfo.Version)
+	}
+	if got := string(field[1]); got != buildinfo.Version {
+		t.Fatalf("test-strategy requires rdd-plus %s, but this build is %s", got, buildinfo.Version)
+	}
+	if !strings.Contains(string(data), "make build") ||
+		!strings.Contains(string(data), "go install github.com/alesierraalta/rdd-plus/cmd/rdd-plus@latest") {
+		t.Fatalf("test-strategy requires rdd-plus %s but names no install path", buildinfo.Version)
 	}
 }
 

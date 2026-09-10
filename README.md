@@ -139,6 +139,17 @@ assigned and never invoked.
 rdd-plus plan gaps                # exit 1 and name every layer still owed, with its owner
 ```
 
+`plan gaps` reads the layer matrix's status cells. A row counts as swept when its status reads
+`done`, `fixed` or `closed`, and `n/a`, `na`, `none` and `skipped` leave the denominator entirely:
+marking a layer out of scope is a decision the plan records, not a silent omission. The `Skill`
+cell only labels the rows still owed, so a row with no owner still has to be swept.
+
+Nothing verifies that an assigned sibling was really invoked — the cell is what the check has, and
+that is deliberate, because the check must run with no host and no transcript. So the routing
+ledger in the reply says how each sibling ran: through a Skill tool, or `inline: <path to its
+SKILL.md>` where the harness has none. Without that line an inline run and a skipped one look
+identical in the plan.
+
 At the Stop the same check runs by itself. The model is told which surfaces went unexamined and
 asked to say so plainly in its final message rather than let depth read as coverage, and the
 operator gets one line in their own terminal offering feedback on the run, so the offer does not

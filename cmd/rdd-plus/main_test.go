@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -34,7 +35,6 @@ func TestCLIContract(t *testing.T) {
 	}{
 		{name: "no command prints usage and exits 2", wantExit: 2, wantOut: "usage: rdd-plus"},
 		{name: "unknown command prints usage and exits 2", args: []string{"bogus"}, wantExit: 2, wantOut: "usage: rdd-plus"},
-		{name: "version prints the version and exits 0", args: []string{"version"}, wantExit: 0, wantOut: "dev"},
 		{name: "bench with no subcommand exits 2", args: []string{"bench"}, wantExit: 2, wantOut: "usage: rdd-plus"},
 		{name: "bench with an unknown subcommand exits 2", args: []string{"bench", "bogus"}, wantExit: 2, wantOut: "usage: rdd-plus"},
 		{name: "bench score without arguments exits 2", args: []string{"bench", "score"}, wantExit: 2, wantOut: "needs --case"},
@@ -96,6 +96,21 @@ func TestUsageListsEveryBenchSubcommand(t *testing.T) {
 		if !strings.Contains(usage, "  "+cmd+" ") {
 			t.Errorf("usage does not document the %q command", cmd)
 		}
+	}
+}
+
+// The version command names the build: the release and the commit behind it. A bare literal
+// would say nothing about which build is installed, so the shape is the contract.
+func TestVersionNamesTheBuild(t *testing.T) {
+	bin := buildCLI(t)
+	out, err := exec.Command(bin, "version").CombinedOutput()
+	if err != nil {
+		t.Fatalf("version: %v\n%s", err, out)
+	}
+	got := strings.TrimSpace(string(out))
+	want := regexp.MustCompile(`^0\.3\.5 \(([0-9a-f]{7}(\+dirty)?|unknown)\)$`)
+	if !want.MatchString(got) {
+		t.Fatalf("version printed %q, want %s", got, want)
 	}
 }
 

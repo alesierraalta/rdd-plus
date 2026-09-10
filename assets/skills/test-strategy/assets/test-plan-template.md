@@ -37,6 +37,10 @@ How each critical journey is driven for real (`real-run-validation`), so EXECUTE
 | Critical e2e journeys | `real-run-validation` | <journey 1>, <journey 2>, <journey 3> | pending |
 | Sandbox | `docker-test-containers` | ephemeral DB/cache, environment proof | pending |
 
+Statuses: pending · in progress · done · blocked · n/a. `plan gaps` counts a row as swept when its
+status cell reads `done`, `fixed` or `closed`, and drops `n/a`, `na`, `none` and `skipped` from the
+denominator entirely; the `Skill` cell only labels the rows still owed.
+
 ## Not testing, on purpose
 
 | Target | Reason |
