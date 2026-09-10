@@ -189,7 +189,10 @@ func runBenchScore(args []string) int {
 		_ = enc.Encode(bench.ScorePlanFile(*planFile, key))
 		return 0
 	}
-	_ = enc.Encode(bench.ScoreWorkspace(*ws, key))
+	res := bench.ScoreWorkspace(*ws, key)
+	res.Catch = bench.Discriminate(*caseDir, *ws, key, 10*time.Minute)
+	res.Caught = res.Catch.Count()
+	_ = enc.Encode(res)
 	return 0
 }
 

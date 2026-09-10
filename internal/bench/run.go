@@ -51,6 +51,8 @@ type Aggregate struct {
 	Defects        int      `json:"defects"`
 	Found          int      `json:"found"`
 	Recall         float64  `json:"recall"`
+	Caught         int      `json:"caught"`        // defects distinguished by an agent test
+	RecallCaught   float64  `json:"recall_caught"` // caught over defects of valid runs
 	FalsePositives int      `json:"false_positives"`
 	CostUSD        float64  `json:"cost_usd"`
 	Invalid        int      `json:"invalid"`
@@ -114,13 +116,14 @@ loop:
 			} else {
 				agg.Defects += res.Total
 				agg.Found += res.Found
+				agg.Caught += res.Caught
 				agg.FalsePositives += res.FalsePositives
 				if !res.PlanFound {
 					agg.NoPlan++
 				}
 			}
-			fmt.Fprintf(opts.Log, "[%s #%d] recall %.2f (%d/%d) fp %d cost $%.3f turns %d%s%s\n",
-				name, run, res.Recall, res.Found, res.Total, res.FalsePositives, res.CostUSD, res.Turns, invalidTag(res), noPlanTag(res))
+			fmt.Fprintf(opts.Log, "[%s #%d] reported %d/%d caught %d/%d fp %d cost $%.3f turns %d%s%s\n",
+				name, run, res.Found, res.Total, res.Caught, res.Total, res.FalsePositives, res.CostUSD, res.Turns, invalidTag(res), noPlanTag(res))
 			if opts.MaxCostUSD > 0 && agg.CostUSD >= opts.MaxCostUSD {
 				agg.CostCeilingHit = true
 				code = ExitCostCeiling
@@ -131,6 +134,7 @@ loop:
 	}
 	if agg.Defects > 0 {
 		agg.Recall = float64(agg.Found) / float64(agg.Defects)
+		agg.RecallCaught = float64(agg.Caught) / float64(agg.Defects)
 	}
 	if code == 0 && (agg.Failed > 0 || agg.Invalid > 0) {
 		code = ExitPartial
@@ -141,7 +145,8 @@ loop:
 	if !opts.DryRun && opts.BenchDir != "" {
 		_ = AppendHistory(opts.BenchDir, HistoryEntry{
 			TS: agg.TS, Out: opts.Out, Model: opts.Model, Cases: len(caseDirs), Defects: agg.Defects,
-			Found: agg.Found, Recall: agg.Recall, FalsePositives: agg.FalsePositives, CostUSD: agg.CostUSD,
+			Found: agg.Found, Recall: agg.Recall, Caught: agg.Caught, RecallCaught: agg.RecallCaught,
+			FalsePositives: agg.FalsePositives, CostUSD: agg.CostUSD,
 			Failed: agg.Failed, Invalid: agg.Invalid, NoPlan: agg.NoPlan,
 			SkillVersion: SkillVersion(opts.SkillFile),
 		})
@@ -200,7 +205,10 @@ func runOnce(caseDir string, key Key, run int, opts Options) Result {
 		return finish(res, opts, true)
 	}
 	res = merge(res, ScoreWorkspace(ws, key))
-	return finish(res, opts, res.Recall < 1) // misses keep their workspace so they can be classified
+	res.Catch = Discriminate(caseDir, ws, key, opts.SuiteTimeout)
+	res.Caught = res.Catch.Count()
+	// Misses of either measure keep their workspace so they can be classified.
+	return finish(res, opts, res.Recall < 1 || (res.Catch.Checked && res.Caught < res.Total))
 }
 
 // writeAgentLog keeps the tail of each attempt's raw stream beside result.json.
@@ -301,22 +309,22 @@ func writeJSON(path string, v any) {
 // Summary renders the aggregate as the markdown table written to summary.md.
 func Summary(agg Aggregate) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "# Bench %s\n\nModel: %s · cases: %d · defects: %d · found: %d · recall: %.2f · false positives: %d · failed: %d · invalid: %d · cost: $%.3f",
-		agg.TS, agg.Model, len(agg.Cases), agg.Defects, agg.Found, agg.Recall, agg.FalsePositives, agg.Failed, agg.Invalid, agg.CostUSD)
+	fmt.Fprintf(&b, "# Bench %s\n\nModel: %s · cases: %d · defects: %d · reported: %d (%.2f) · caught by a test: %d (%.2f) · false positives: %d · failed: %d · invalid: %d · no plan: %d · cost: $%.3f",
+		agg.TS, agg.Model, len(agg.Cases), agg.Defects, agg.Found, agg.Recall, agg.Caught, agg.RecallCaught, agg.FalsePositives, agg.Failed, agg.Invalid, agg.NoPlan, agg.CostUSD)
 	if agg.DryRun {
 		b.WriteString(" · dry-run")
 	}
 	if agg.CostCeilingHit {
 		b.WriteString(" · cost ceiling hit")
 	}
-	b.WriteString("\n\n| case | recall | found/total | false positives | cost USD | turns | minutes | invalid? |\n|---|---|---|---|---|---|---|---|\n")
+	b.WriteString("\n\n| case | reported | caught | false positives | cost USD | turns | minutes | note |\n|---|---|---|---|---|---|---|---|\n")
 	for _, c := range agg.Cases {
-		inv := ""
-		if c.Invalid {
-			inv = c.InvalidReason
+		note := strings.TrimSpace(invalidTag(c) + noPlanTag(c))
+		if c.Catch.Checked && len(c.Catch.Notes) > 0 {
+			note = strings.TrimSpace(note + " " + strings.Join(c.Catch.Notes, "; "))
 		}
-		fmt.Fprintf(&b, "| %s | %.2f | %d/%d | %d | %.3f | %d | %.1f | %s |\n",
-			c.Case, c.Recall, c.Found, c.Total, c.FalsePositives, c.CostUSD, c.Turns, c.Seconds/60, inv)
+		fmt.Fprintf(&b, "| %s | %d/%d | %d/%d | %d | %.3f | %d | %.1f | %s |\n",
+			c.Case, c.Found, c.Total, c.Caught, c.Total, c.FalsePositives, c.CostUSD, c.Turns, c.Seconds/60, note)
 	}
 	return b.String()
 }

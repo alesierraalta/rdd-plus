@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -24,9 +25,11 @@ type HistoryEntry struct {
 	Failed         int     `json:"failed"`
 	Invalid        int     `json:"invalid"`
 	NoPlan         int     `json:"no_plan"`
+	Caught         int     `json:"caught"`
+	RecallCaught   float64 `json:"recall_caught"`
 }
 
-const historyHeader = "| ts | out | model | cases | defects | found | recall | false positives | cost USD | skill version |\n|---|---|---|---|---|---|---|---|---|---|\n"
+const historyHeader = "| ts | out | model | cases | defects | reported | recall | caught | recall caught | false positives | failed | invalid | no plan | cost USD | skill version |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n"
 
 // AppendHistory adds one line to history.jsonl and one row to history.md under benchDir;
 // both files are append-only and never rewritten.
@@ -42,13 +45,19 @@ func AppendHistory(benchDir string, e HistoryEntry) error {
 		return err
 	}
 	md := filepath.Join(benchDir, "history.md")
-	if _, err := os.Stat(md); os.IsNotExist(err) {
+	existing, err := os.ReadFile(md)
+	if os.IsNotExist(err) {
 		if err := appendFile(md, []byte("# Benchmark history\n\nOne row per `rdd-plus bench run`; never rewritten.\n\n"+historyHeader)); err != nil {
 			return err
 		}
+	} else if !strings.Contains(string(existing), historyHeader) {
+		// The columns changed: rows already written stay as they are under their own header.
+		if err := appendFile(md, []byte("\n"+historyHeader)); err != nil {
+			return err
+		}
 	}
-	row := fmt.Sprintf("| %s | %s | %s | %d | %d | %d | %.2f | %d | %.3f | %s |\n",
-		e.TS, e.Out, e.Model, e.Cases, e.Defects, e.Found, e.Recall, e.FalsePositives, e.CostUSD, e.SkillVersion)
+	row := fmt.Sprintf("| %s | %s | %s | %d | %d | %d | %.2f | %d | %.2f | %d | %d | %d | %d | %.3f | %s |\n",
+		e.TS, e.Out, e.Model, e.Cases, e.Defects, e.Found, e.Recall, e.Caught, e.RecallCaught, e.FalsePositives, e.Failed, e.Invalid, e.NoPlan, e.CostUSD, e.SkillVersion)
 	return appendFile(md, []byte(row))
 }
 

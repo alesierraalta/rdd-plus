@@ -47,6 +47,8 @@ type Result struct {
 	Suite                SuiteResult    `json:"suite"`
 	Workspace            string         `json:"workspace,omitempty"`
 	PlanFound            bool           `json:"plan_found"`
+	Caught               int            `json:"caught"` // defects some agent test distinguishes (fixture vs fix)
+	Catch                CatchResult    `json:"catch"`
 }
 
 var (
@@ -109,10 +111,7 @@ func Score(plan string, key Key) Result {
 			// The evidence rows a finding cites are part of its claim: the file is often named
 			// there while the finding itself names the symbol.
 			linked := linkedLedgerText(row, ledgerByID)
-			if len(linked) > 0 {
-				text += " | " + strings.Join(linked, " | ")
-			}
-			by := matches(text, d)
+			by := matches(text, strings.Join(linked, " | "), d)
 			if by == "" {
 				continue
 			}
@@ -149,8 +148,9 @@ func Score(plan string, key Key) Result {
 }
 
 // matches reports how a finding row matches a defect: "line", "keyword", or "" for no match.
-func matches(rowText string, d Defect) string {
-	cites := citations(rowText)
+// evidenceText may cite the file and line; only rowText may supply a keyword.
+func matches(rowText, evidenceText string, d Defect) string {
+	cites := append(citations(rowText), citations(evidenceText)...)
 	fileCited := false
 	for _, c := range cites {
 		if !samePath(c.path, d.File) {

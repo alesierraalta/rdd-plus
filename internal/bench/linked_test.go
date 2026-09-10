@@ -73,3 +73,18 @@ func writePlan(t *testing.T, ws, content string) {
 		t.Fatal(err)
 	}
 }
+
+// Keywords are matched in the finding row only: a linked ledger row may name the file, but its
+// prose must not credit a defect the finding does not describe ("attempts" in a retry ledger).
+func TestKeywordsInTheLinkedLedgerRowDoNotCount(t *testing.T) {
+	key := Key{ID: "n06", Defects: []Defect{
+		{ID: "D1", File: "src/retry.js", Line: 11, Keywords: []string{"429", "attempts"}},
+		{ID: "D2", File: "src/retry.js", Line: 18, Keywords: []string{"fail-open", "null"}},
+	}}
+	finding := "| F1 | `src/retry.js:18` returns ok with null data when retries are exhausted | M | yes | E1 | open | me | - | - |\n"
+	ledger := "| E1 | c | probe with maxAttempts 3 against src/retry.js | i | o | m | r | observado |\n"
+	r := Score(plan(finding, ledger), key)
+	if r.Found != 1 || !r.Defects[1].Found || r.Defects[0].Found {
+		t.Fatalf("found = %d, defects = %+v", r.Found, r.Defects)
+	}
+}

@@ -136,7 +136,7 @@ func TestRunWithFakeAgent(t *testing.T) {
 		t.Fatalf("history not appended: %v %s", err, hist)
 	}
 	summary, _ := os.ReadFile(filepath.Join(out, "summary.md"))
-	if !strings.Contains(string(summary), "| case-01 | 1.00 | 1/1 | 0 | 0.420 | 5 |") {
+	if !strings.Contains(string(summary), "| case-01 | 1/1 | 0/1 | 0 | 0.420 | 5 |") {
 		t.Fatalf("summary row: %s", summary)
 	}
 }
