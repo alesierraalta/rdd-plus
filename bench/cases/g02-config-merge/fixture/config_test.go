@@ -10,22 +10,22 @@ func TestOverrideWins(t *testing.T) {
 }
 
 func TestDebugCanBeEnabled(t *testing.T) {
-	got := Merge(Defaults, Config{Debug: true})
-	if !got.Debug {
+	got := Merge(Defaults, Config{Debug: boolp(true)})
+	if got.Debug == nil || !*got.Debug {
 		t.Fatal("debug should be enabled by the override")
 	}
 }
 
 func TestRetriesOverride(t *testing.T) {
-	got := Merge(Defaults, Config{Retries: 5})
-	if got.Retries != 5 {
-		t.Fatalf("retries = %d, want 5", got.Retries)
+	got := Merge(Defaults, Config{Retries: intp(5)})
+	if got.Retries == nil || *got.Retries != 5 {
+		t.Fatalf("retries = %v, want 5", got.Retries)
 	}
 }
 
 func TestLayersApplyInOrder(t *testing.T) {
 	got := Load(Config{Port: 9000, Region: "eu-west-1"}, Config{Port: 9100})
-	if got.Port != 9100 || got.Region != "eu-west-1" || got.Retries != 3 {
+	if got.Port != 9100 || got.Region != "eu-west-1" || got.Retries == nil || *got.Retries != 3 {
 		t.Fatalf("layers misapplied: %+v", got)
 	}
 }

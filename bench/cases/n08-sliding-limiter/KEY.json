@@ -6,6 +6,6 @@
    "why_missed":"The suite stops below the limit or reads remaining(), which computes limit minus count and is correct; only the (limit+1)-th call reaches the wrong comparison."},
   {"id":"D2","file":"src/limiter.js","line":8,"class":"normalization","keywords":["case","lowercase","token","normalize","budget"],
    "description":"Only user identifiers are lowercased, so token identifiers that differ by case get separate budgets.",
-   "trigger":{"input":"const l = createLimiter({limit:1, windowMs:1000, now:() => 1000}); l.allow('token:ABC'); l.allow('token:abc')","expected":"false","actual":"true"},
+   "trigger":{"input":"const l = createLimiter({limit:1, windowMs:1000, now:() => 1000}); l.allow('token:ABC'); l.allow('token:ABC'); l.allow('token:abc')","expected":"false","actual":"true","note":"two prior hits so the off-by-one defect alone cannot make the third call pass; this trigger isolates the normalization defect"},
    "why_missed":"The case-insensitivity test only uses user identifiers, the one kind the normalizer handles; the token kind is never exercised with mixed case."}
  ]}

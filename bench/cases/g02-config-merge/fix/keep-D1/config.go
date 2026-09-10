@@ -26,7 +26,7 @@ func Merge(base, override Config) Config {
 	if override.Region != "" {
 		out.Region = override.Region
 	}
-	if override.Retries != nil && *override.Retries != 0 {
+	if override.Retries != nil {
 		out.Retries = override.Retries
 	}
 	return out

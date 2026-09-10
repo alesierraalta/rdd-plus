@@ -17,7 +17,7 @@ var Defaults = Config{Debug: boolp(false), Port: 8080, Region: "us-east-1", Retr
 // Merge applies override on top of base.
 func Merge(base, override Config) Config {
 	out := base
-	if override.Debug != nil && *override.Debug {
+	if override.Debug != nil {
 		out.Debug = override.Debug
 	}
 	if override.Port != 0 {

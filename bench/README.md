@@ -13,7 +13,8 @@ same ground.
 bench/cases/<id>/
   KEY.json          the answer key: defects, exact lines, triggers with observed output
   fixture/          the project the agent sees: README.md, src (or *.go), tests, package.json / go.mod
-  fix/              corrected copies of only the defective files, at the same relative paths
+  fix/all/          corrected copies of only the defective files, at the same relative paths
+  fix/keep-<ID>/    every other defect fixed, defect <ID> left exactly as in fixture/ (multi-defect cases)
 ```
 
 Node fixtures run with `node --test` (ESM, no dependencies). Go fixtures run with `go test ./...`
@@ -21,25 +22,27 @@ Node fixtures run with `node --test` (ESM, no dependencies). Go fixtures run wit
 
 ## Fixed versions
 
-`fix/` holds the corrected version of every file named in `KEY.json`, and nothing else. Overlaying
-`fix/` on a copy of `fixture/` gives a project where every keyed trigger produces `trigger.expected`
-and the happy-path suite is still green. The agent never sees `fix/`; the scorer uses it to check
-that a test DISCRIMINATES: a test that finds a defect must fail on `fixture/` and pass on the overlay.
-A test that passes on both never touched the defect, whatever its finding text says.
+`fix/all/` holds the corrected version of every file named in `KEY.json`, and nothing else. For a
+case with more than one defect, `fix/keep-<ID>/` fixes every defect except `<ID>`, which stays
+byte-for-byte as in `fixture/`; a single-defect case has only `fix/all/`. Overlaying a variant on
+a copy of `fixture/` gives a project whose happy-path suite is still green.
 
-Known limits of the overlay, verified by running every trigger against it:
+The agent never sees `fix/`. The runner uses it to attribute a catch from suite exit codes alone:
+the agent's tests must be green on `fixture/` + `fix/all/`, and defect D counts as caught when the
+same tests are red on `fixture/` + `fix/keep-D/`. A test that is green on every variant never
+touched a defect, whatever its finding text says.
 
-- `g02-config-merge`: the triggers are written with literal `Config{Debug: false, Retries: 0}`,
-  which in Go is byte-identical to `Config{}`, so no implementation can honor that literal without
-  clearing every unset field and breaking the happy suite. The fix adds `SetDebug`, `SetPort`,
-  `SetRegion`, and `SetRetries`, which record an explicit zero; a discriminating test has to use
-  them (`Config{}.SetDebug(false).SetRetries(0)`).
+Known limits of the overlays, verified by running every trigger against every variant:
+
 - `n05-keyset-pagination`: the happy suite pins the cursor to a plain `created_at` string, so the
   fix appends `#<id>` to the cursor only when another row shares that `created_at`.
 - `n09-json-ids`: JavaScript numbers cannot hold the keyed id, so the fix parses integer ids as
   `BigInt`; `trigger.expected` lists the values, not their runtime type.
 - `n04-slug-normalize`: the fix folds accents (`café` and `café` both become `cafe`), which is
   the first form the key accepts.
+- `n08-sliding-limiter`: the D2 trigger as written (limit 1, one prior hit) is also red while D1
+  is present, so a test copied from it is attributed to both defects. A probe that isolates D2
+  makes two prior hits on `token:ABC` before calling `token:abc`.
 
 ## Key schema
 
@@ -70,6 +73,13 @@ empty ledger makes every citation dangling.
 
 A **false positive** is a finding whose location is not in the key. Recall is found over key
 defects; precision is found over findings.
+
+That is the **reported** measure. The **caught** measure asks whether the agent's tests distinguish
+the defective code from the correct one, plan or no plan: the test files the agent added or changed
+are carried onto `fixture/` + `fix/all/` (they must be green there) and onto `fixture/` +
+`fix/keep-<ID>/` (red means some test distinguishes `<ID>`). Both measures are recorded per defect,
+in the summary, the aggregate, and the history. A run that reports a defect without a test that
+catches it, or catches it without reporting it, shows up as a gap between the two columns.
 
 Every run keeps the plan it produced as `test-plan.md` beside its `result.json`, even when the
 workspace is removed, so older runs can be re-scored when the rule changes:

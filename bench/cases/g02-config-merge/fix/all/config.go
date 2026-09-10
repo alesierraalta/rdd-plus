@@ -14,10 +14,10 @@ func intp(v int) *int    { return &v }
 // Defaults is the lowest layer.
 var Defaults = Config{Debug: boolp(false), Port: 8080, Region: "us-east-1", Retries: intp(3)}
 
-// Merge applies override on top of base.
+// Merge applies override on top of base; a set field wins even when its value is false or 0.
 func Merge(base, override Config) Config {
 	out := base
-	if override.Debug != nil && *override.Debug {
+	if override.Debug != nil {
 		out.Debug = override.Debug
 	}
 	if override.Port != 0 {
@@ -26,7 +26,7 @@ func Merge(base, override Config) Config {
 	if override.Region != "" {
 		out.Region = override.Region
 	}
-	if override.Retries != nil && *override.Retries != 0 {
+	if override.Retries != nil {
 		out.Retries = override.Retries
 	}
 	return out
