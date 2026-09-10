@@ -325,6 +325,9 @@ func Summary(agg Aggregate) string {
 	b.WriteString("\n\n| case | reported | pinned | caught | false positives | cost USD | turns | minutes | note |\n|---|---|---|---|---|---|---|---|---|\n")
 	for _, c := range agg.Cases {
 		note := strings.TrimSpace(invalidTag(c) + noPlanTag(c))
+		if len(c.Notes) > 0 {
+			note = strings.TrimSpace(note + " " + strings.Join(c.Notes, "; "))
+		}
 		if c.Catch.Checked && len(c.Catch.Notes) > 0 {
 			note = strings.TrimSpace(note + " " + strings.Join(c.Catch.Notes, "; "))
 		}

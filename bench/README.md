@@ -75,6 +75,10 @@ A finding row must cite at least one id that exists in the Evidence ledger; a ro
 defect without linked evidence is recorded as `unlinked` and does not count, whatever it says. An
 empty ledger makes every citation dangling.
 
+A plan whose findings are prose scores zero exactly like a plan with no findings, so the run
+records which of the two happened: `plan_format` is `table`, `prose` or `empty`, and a prose plan
+carries a note saying nothing in it can be located or re-scored.
+
 One finding row is one claim: a row is credited to the defect it names by keyword (to several
 only if it names several), and a row that matches by line alone goes to the nearest defect. Four
 cases plant two defects within the line tolerance of each other, so without this a run that

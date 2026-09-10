@@ -24,3 +24,13 @@ One row per `rdd-plus bench run`; never rewritten.
 | 2026-09-10T02:32:51Z | rescore of bench/results/20260910-023251 | bench/results/20260910-023251/rescored | sonnet | 15 | 27 | 14 | 0.52 | 20 | 0.74 | 1 | 0 | 0 | 6 | 0.000 | 3.0 |
 | 2026-09-10T09:56:29Z | rescore of bench/results/20260910-095629 | bench/results/20260910-095629/rescored | sonnet | 15 | 27 | 22 | 0.81 | 19 | 0.70 | 0 | 0 | 0 | 0 | 0.000 | 3.1 |
 | 2026-09-10T10:26:59Z | rescore of bench/results/20260910-102659 | bench/results/20260910-102659/rescored | sonnet | 15 | 27 | 25 | 0.93 | 22 | 0.81 | 0 | 0 | 0 | 0 | 0.000 | 3.2 |
+| 2026-09-10T11:08:54Z | run | bench/results/20260910-110854 | sonnet | 15 | 27 | 18 | 0.67 | 23 | 0.85 | 3 | 0 | 0 | 0 | 10.736 | 3.3 |
+
+| ts | kind | out | model | cases | defects | reported | recall | caught | recall caught | false positives | failed | invalid | no plan | cost USD | skill version | scorer |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 2026-09-10T11:08:54Z | rescore of bench/results/20260910-110854 | bench/results/20260910-110854/rescored | sonnet | 15 | 27 | 17 | 0.63 | 24 | 0.89 | 3 | 0 | 0 | 0 | 0.000 | 3.3 | bbc93e2+dirty |
+| 2026-09-10T11:08:54Z | rescore of bench/results/20260910-110854 | bench/results/20260910-110854/rescored | sonnet | 15 | 27 | 17 | 0.63 | 24 | 0.89 | 3 | 0 | 0 | 0 | 0.000 | 3.3 | bb1df9e+dirty |
+| 2026-09-10T02:32:51Z | rescore of bench/results/20260910-023251 | bench/results/20260910-023251/rescored | sonnet | 15 | 27 | 14 | 0.52 | 20 | 0.74 | 1 | 0 | 0 | 6 | 0.000 | 3.0 | bb1df9e+dirty |
+| 2026-09-10T09:56:29Z | rescore of bench/results/20260910-095629 | bench/results/20260910-095629/rescored | sonnet | 15 | 27 | 22 | 0.81 | 20 | 0.74 | 0 | 0 | 0 | 0 | 0.000 | 3.1 | bb1df9e+dirty |
+| 2026-09-10T10:26:59Z | rescore of bench/results/20260910-102659 | bench/results/20260910-102659/rescored | sonnet | 15 | 27 | 25 | 0.93 | 22 | 0.81 | 0 | 0 | 0 | 0 | 0.000 | 3.2 | bb1df9e+dirty |
+| 2026-09-10T11:08:54Z | rescore of bench/results/20260910-110854 | bench/results/20260910-110854/rescored | sonnet | 15 | 27 | 17 | 0.63 | 24 | 0.89 | 3 | 0 | 0 | 0 | 0.000 | 3.3 | bb1df9e+dirty |

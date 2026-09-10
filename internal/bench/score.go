@@ -1,6 +1,7 @@
 package bench
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -50,8 +51,10 @@ type Result struct {
 	Suite                SuiteResult    `json:"suite"`
 	Workspace            string         `json:"workspace,omitempty"`
 	PlanFound            bool           `json:"plan_found"`
-	ClaimedPinned        int            `json:"claimed_pinned"` // defects whose finding names a pinning test
-	Caught               int            `json:"caught"`         // defects some agent test distinguishes (fixture vs fix)
+	PlanFormat           string         `json:"plan_format"`       // FormatTable, FormatProse or FormatEmpty
+	RowsWithoutPath      int            `json:"rows_without_path"` // finding rows that name no file, so nothing can be located
+	ClaimedPinned        int            `json:"claimed_pinned"`    // defects whose finding names a pinning test
+	Caught               int            `json:"caught"`            // defects some agent test distinguishes (fixture vs fix)
 	Catch                CatchResult    `json:"catch"`
 }
 
@@ -59,7 +62,7 @@ var (
 	// A cell that means "no rows yet" rather than data.
 	placeholderRe = regexp.MustCompile(`^(?i)(|-|—|n/?a|none|\(none\)|tbd)$`)
 	// A path with an extension, optionally followed by :line or :first-last.
-	citationRe = regexp.MustCompile(`([A-Za-z0-9_./\\-]+\.[A-Za-z0-9]+)(?::(\d+)(?:-(\d+))?)?`)
+	citationRe = regexp.MustCompile(`([A-Za-z0-9_./\\-]+\.[A-Za-z][A-Za-z0-9]*)(?::(\d+)(?:-(\d+))?)?`)
 )
 
 type citation struct {
@@ -97,6 +100,10 @@ func Score(plan string, key Key) Result {
 	// The pinning column exists only in plans written under rule 13; find it by its header so
 	// its position can move.
 	pinCol := columnIndex(headerCells(findings), "pinning test")
+	r.PlanFormat = planFormat(findings, rows)
+	if r.PlanFormat == FormatProse {
+		r.Notes = append(r.Notes, "findings are not in the template table; nothing in this plan can be located or re-scored")
+	}
 	for _, row := range rows {
 		if len(row) > 4 && !placeholderRe.MatchString(strings.TrimSpace(row[4])) {
 			r.FindingsWithEvidence++
@@ -130,6 +137,9 @@ func Score(plan string, key Key) Result {
 		linked := linkedLedgerText(row, ledgerByID)
 		linkedText[i] = strings.Join(linked, " | ")
 		credited[i] = map[string]bool{}
+		if len(citations(text)) == 0 && len(citations(linkedText[i])) == 0 {
+			r.RowsWithoutPath++
+		}
 		var specific []Defect
 		var nearest *Defect
 		nearestDist := 0
@@ -186,6 +196,9 @@ func Score(plan string, key Key) Result {
 		if !m {
 			r.FalsePositives++
 		}
+	}
+	if r.RowsWithoutPath > 0 {
+		r.Notes = append(r.Notes, fmt.Sprintf("%d finding row(s) cite no file, in the plan or in the evidence they link", r.RowsWithoutPath))
 	}
 	if r.Total > 0 {
 		r.Recall = float64(r.Found) / float64(r.Total)
@@ -412,4 +425,26 @@ func cellFilled(row []string, col int) bool {
 		return false
 	}
 	return !placeholderRe.MatchString(strings.TrimSpace(row[col]))
+}
+
+// How a plan states its findings. Prose scores zero exactly like an empty plan, so the run has
+// to say which of the two happened.
+const (
+	FormatTable = "table"
+	FormatProse = "prose"
+	FormatEmpty = "empty"
+)
+
+// planFormat classifies the Findings section: template rows, prose, or nothing yet.
+func planFormat(section string, rows [][]string) string {
+	if len(rows) > 0 {
+		return FormatTable
+	}
+	for _, l := range strings.Split(section, "\n") {
+		t := strings.TrimSpace(l)
+		if strings.HasPrefix(t, "###") || strings.HasPrefix(t, "- ") || strings.HasPrefix(t, "* ") {
+			return FormatProse
+		}
+	}
+	return FormatEmpty
 }
