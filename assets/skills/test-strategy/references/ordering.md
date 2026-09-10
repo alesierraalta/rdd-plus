@@ -3,7 +3,8 @@
 ## Characterization tests — before touching legacy you do not fully understand
 
 The purpose is not to prove the code is right. It is to make any change in behavior
-VISIBLE in a diff instead of discovered in production.
+VISIBLE in a diff instead of discovered in production (Feathers, *Working Effectively with
+Legacy Code*: a characterization test documents what the code does, not what it should do).
 
 1. Pick the seam and drive the existing code with representative inputs.
 2. Record what it ACTUALLY does — including the results you believe are wrong.
@@ -27,9 +28,10 @@ not need them all. You need the ones covering the blast radius of THIS change.
 then one test per equivalence class, test-first where repo policy requires it. The
 strategy layer decides WHICH tests exist; it never overrides a test-first policy.
 
-**A bug** — reproduce in a red test BEFORE the fix. Two reasons: it proves you found the
-cause rather than a symptom, and it is the only test in the codebase guaranteed to catch
-this exact regression. Then ask the systemic question — do sibling call sites share the
+**A bug** — reproduce in a red test BEFORE the fix: a FAIL_TO_PASS test in SWE-bench terms,
+red on the defective version, green after the fix, while the existing suite stays PASS_TO_PASS.
+Two reasons: it proves you found the cause rather than a symptom, and it is the only test in
+the codebase guaranteed to catch this exact regression. Then ask the systemic question — do sibling call sites share the
 defect? — and decide whether the class deserves one test or several.
 
 **A refactor with no behavior change** — the tests must not change. Any test you have to

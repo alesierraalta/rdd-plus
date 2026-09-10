@@ -37,6 +37,12 @@ asserting call counts on your own internal collaborators · asserting on source 
 a test that mirrors the implementation line by line · needing to change the test in every
 refactor that changes no behavior · a mock of a class that lives in your own domain.
 
+These have names. Google's "Change-Detector Tests Considered Harmful" is the test that breaks
+on every edit and catches nothing; "Test Behavior, Not Implementation" is the cure. tsDetect
+(Peruma et al., FSE 2020) catalogs 19 detectable smells; the ones that matter here are
+assertion roulette, eager test, mystery guest, conditional test logic, sensitive equality,
+and the unknown test with no assertion at all. Name the smell in the finding; it is checkable.
+
 ## Altitude smells — you are too high
 
 Every failure requires a debugging session to locate · a single test covers eight

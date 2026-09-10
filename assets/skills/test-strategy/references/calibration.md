@@ -53,3 +53,8 @@ The reporter's own summary is never that metric.
   Findings table with status `rejected` so it is never re-proposed.
 - Compare recall across skill versions on the same files and seed; a version that drops recall
   is a regression of the testing itself, whatever its report says.
+- Mutants are a valid proxy for real faults, not a complete one: mutant detection correlates
+  with real-fault detection independently of coverage, yet some real faults are coupled to no
+  mutant (Just et al., FSE 2014). That is why the benchmark pairs seeded mutants with
+  hand-planted realistic defects whose happy suites stay green; a skill version must move both
+  numbers, and a recall gain on mutants alone is not a gain.

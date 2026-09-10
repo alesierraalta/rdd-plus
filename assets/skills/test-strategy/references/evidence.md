@@ -19,11 +19,16 @@ findings. This contract applies to every testing skill routed by `test-strategy`
      went red or stayed green (for example `>=` → `>` at `path:line` → probe went red).
    - **Reproduction** — the smallest input or sequence that shows it.
    - **Label** — the literal word `observado`. No synonyms (`observed`, `observed-state`, `verified`); a record with any other label is treated as `razonado`.
-3. **"It works" needs the same record.** Green is evidence only when the probe was shown to
+3. **Name the test's direction in the field's terms.** A reddening test is FAIL_TO_PASS: it
+   fails on the defective version and passes once the fix lands (the SWE-bench and SWT-bench
+   definition). The existing suite that must stay green through the change is PASS_TO_PASS.
+   Record both per finding: the FAIL_TO_PASS test that proves the defect, and the PASS_TO_PASS
+   set that proves the fix broke nothing else.
+4. **"It works" needs the same record.** Green is evidence only when the probe was shown to
    go red under mutation or a negative control. A green that cannot be made red is a
    decorative-suite finding, not a pass.
-4. **Never paraphrase output; quote it.** Trim, do not rewrite.
-5. **Never report a defect from reading alone.** If it was not executed, it is `razonado`.
+5. **Never paraphrase output; quote it.** Trim, do not rewrite.
+6. **Never report a defect from reading alone.** If it was not executed, it is `razonado`.
 
 ## Record template
 

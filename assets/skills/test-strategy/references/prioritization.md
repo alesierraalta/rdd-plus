@@ -41,6 +41,12 @@ a silently wrong answer a human will act on · a visible error · cosmetic. A si
 wrong answer outranks a visible crash: the crash announces itself, the wrong answer does
 not (`silent-degradation`).
 
+Error-handling code sits at the top of this ranking by default. Yuan et al. (OSDI 2014) traced
+92% of catastrophic failures in five production systems to mishandled errors the system had
+explicitly signaled, and 58% of those were catchable by a simple test of the handler. A `catch`
+with nothing in it, a handler that returns success, or a `TODO` inside one is a probe target
+before any happy path is.
+
 **4. Existing evidence and bounded cost.** Record the evidence type, result, limitations,
 and cost before choosing the next probe. For mutation, preserve Stryker's raw outcomes:
 killed, survived, no coverage, timeout, and invalid; Stryker treats a timeout as detected,
@@ -79,6 +85,8 @@ X because Y" stops asking, and a silent gap looks identical to an oversight.
 A coverage percentage counts lines executed. A line executed by a test with no meaningful
 assertion counts exactly the same as one properly pinned. That is why coverage targets
 reliably produce tests that assert nothing — the metric is satisfied by execution alone.
+Measured, not opined: across 31,000 suites on five Java systems, coverage correlated only
+weakly with effectiveness once suite size was controlled (Inozemtseva & Holmes, ICSE 2014).
 
 When someone asks for a coverage number, translate the request: they want confidence that
 a regression would be caught. Answer with the mutation result on the ranked list, which
