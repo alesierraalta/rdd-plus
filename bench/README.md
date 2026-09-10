@@ -13,10 +13,33 @@ same ground.
 bench/cases/<id>/
   KEY.json          the answer key: defects, exact lines, triggers with observed output
   fixture/          the project the agent sees: README.md, src (or *.go), tests, package.json / go.mod
+  fix/              corrected copies of only the defective files, at the same relative paths
 ```
 
 Node fixtures run with `node --test` (ESM, no dependencies). Go fixtures run with `go test ./...`
 (standard library only). Every suite is green with the defects present.
+
+## Fixed versions
+
+`fix/` holds the corrected version of every file named in `KEY.json`, and nothing else. Overlaying
+`fix/` on a copy of `fixture/` gives a project where every keyed trigger produces `trigger.expected`
+and the happy-path suite is still green. The agent never sees `fix/`; the scorer uses it to check
+that a test DISCRIMINATES: a test that finds a defect must fail on `fixture/` and pass on the overlay.
+A test that passes on both never touched the defect, whatever its finding text says.
+
+Known limits of the overlay, verified by running every trigger against it:
+
+- `g02-config-merge`: the triggers are written with literal `Config{Debug: false, Retries: 0}`,
+  which in Go is byte-identical to `Config{}`, so no implementation can honor that literal without
+  clearing every unset field and breaking the happy suite. The fix adds `SetDebug`, `SetPort`,
+  `SetRegion`, and `SetRetries`, which record an explicit zero; a discriminating test has to use
+  them (`Config{}.SetDebug(false).SetRetries(0)`).
+- `n05-keyset-pagination`: the happy suite pins the cursor to a plain `created_at` string, so the
+  fix appends `#<id>` to the cursor only when another row shares that `created_at`.
+- `n09-json-ids`: JavaScript numbers cannot hold the keyed id, so the fix parses integer ids as
+  `BigInt`; `trigger.expected` lists the values, not their runtime type.
+- `n04-slug-normalize`: the fix folds accents (`café` and `café` both become `cafe`), which is
+  the first form the key accepts.
 
 ## Key schema
 
@@ -37,13 +60,25 @@ real execution against the fixture; a defect whose trigger was never run does no
 The runner copies `fixture/` into a fresh workspace, runs the flow under evaluation there, and
 reads the `docs/testing/test-plan.md` it produced. For every key defect:
 
-- **found** when a finding in the plan cites the same file and either a line within ±5 of the key
-  line or any of the key's keywords;
+- **found** when a finding row, together with the Evidence ledger rows it cites, names the same
+  file and either a line within ±5 of the key line or any of the key's keywords;
 - **missed** otherwise.
 
+A finding row must cite at least one id that exists in the Evidence ledger; a row that names the
+defect without linked evidence is recorded as `unlinked` and does not count, whatever it says. An
+empty ledger makes every citation dangling.
+
 A **false positive** is a finding whose location is not in the key. Recall is found over key
-defects; precision is found over findings. A finding without an executed evidence record does not
-count as found, whatever it says.
+defects; precision is found over findings.
+
+Every run keeps the plan it produced as `test-plan.md` beside its `result.json`, even when the
+workspace is removed, so older runs can be re-scored when the rule changes:
+`rdd-plus bench score --case bench/cases/<id> --plan <results>/<id>/<run>/test-plan.md`.
+
+A valid run that never wrote `docs/testing/test-plan.md` scores zero and is reported as
+`NO PLAN` (`no_plan` in the aggregate and the history): the flow ran and did not persist its
+deliverable, which is a different failure from missing the defect. Runs where the agent did not
+complete are `FAILED`, excluded from recall, and make the command exit 3.
 
 ## Rules
 

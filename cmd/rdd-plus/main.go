@@ -173,8 +173,9 @@ func runBenchScore(args []string) int {
 	fs := flag.NewFlagSet("bench score", flag.ContinueOnError)
 	caseDir := fs.String("case", "", "case directory holding KEY.json")
 	ws := fs.String("workspace", "", "workspace to score")
-	if err := fs.Parse(args); err != nil || *caseDir == "" || *ws == "" {
-		fmt.Fprintln(os.Stderr, "bench score needs --case and --workspace")
+	planFile := fs.String("plan", "", "plan file to score, such as the test-plan.md a run keeps beside result.json")
+	if err := fs.Parse(args); err != nil || *caseDir == "" || (*ws == "") == (*planFile == "") {
+		fmt.Fprintln(os.Stderr, "bench score needs --case and exactly one of --workspace or --plan")
 		return 2
 	}
 	key, err := bench.LoadKey(*caseDir)
@@ -184,6 +185,10 @@ func runBenchScore(args []string) int {
 	}
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
+	if *planFile != "" {
+		_ = enc.Encode(bench.ScorePlanFile(*planFile, key))
+		return 0
+	}
 	_ = enc.Encode(bench.ScoreWorkspace(*ws, key))
 	return 0
 }

@@ -54,7 +54,8 @@ type Aggregate struct {
 	FalsePositives int      `json:"false_positives"`
 	CostUSD        float64  `json:"cost_usd"`
 	Invalid        int      `json:"invalid"`
-	Failed         int      `json:"failed"` // agent did not run to completion; excluded from recall
+	Failed         int      `json:"failed"`  // agent did not run to completion; excluded from recall
+	NoPlan         int      `json:"no_plan"` // valid runs that never wrote docs/testing/test-plan.md; scored zero
 	CostCeilingHit bool     `json:"cost_ceiling_hit"`
 }
 
@@ -114,9 +115,12 @@ loop:
 				agg.Defects += res.Total
 				agg.Found += res.Found
 				agg.FalsePositives += res.FalsePositives
+				if !res.PlanFound {
+					agg.NoPlan++
+				}
 			}
-			fmt.Fprintf(opts.Log, "[%s #%d] recall %.2f (%d/%d) fp %d cost $%.3f turns %d%s\n",
-				name, run, res.Recall, res.Found, res.Total, res.FalsePositives, res.CostUSD, res.Turns, invalidTag(res))
+			fmt.Fprintf(opts.Log, "[%s #%d] recall %.2f (%d/%d) fp %d cost $%.3f turns %d%s%s\n",
+				name, run, res.Recall, res.Found, res.Total, res.FalsePositives, res.CostUSD, res.Turns, invalidTag(res), noPlanTag(res))
 			if opts.MaxCostUSD > 0 && agg.CostUSD >= opts.MaxCostUSD {
 				agg.CostCeilingHit = true
 				code = ExitCostCeiling
@@ -138,7 +142,7 @@ loop:
 		_ = AppendHistory(opts.BenchDir, HistoryEntry{
 			TS: agg.TS, Out: opts.Out, Model: opts.Model, Cases: len(caseDirs), Defects: agg.Defects,
 			Found: agg.Found, Recall: agg.Recall, FalsePositives: agg.FalsePositives, CostUSD: agg.CostUSD,
-			Failed: agg.Failed, Invalid: agg.Invalid,
+			Failed: agg.Failed, Invalid: agg.Invalid, NoPlan: agg.NoPlan,
 			SkillVersion: SkillVersion(opts.SkillFile),
 		})
 	}
@@ -225,11 +229,24 @@ func merge(res, scored Result) Result {
 func finish(res Result, opts Options, keepWS bool) Result {
 	dir := filepath.Dir(res.Workspace)
 	writeJSON(filepath.Join(dir, "result.json"), res)
+	// The plan is the run's deliverable: keep it beside result.json so a later scorer can re-read it.
+	if data, err := os.ReadFile(filepath.Join(res.Workspace, PlanPath)); err == nil {
+		_ = os.WriteFile(filepath.Join(dir, "test-plan.md"), data, 0o644)
+	}
 	if !opts.Keep && !keepWS && !res.Invalid && !res.Failed {
 		_ = os.RemoveAll(res.Workspace)
 		res.Workspace = ""
 	}
 	return res
+}
+
+// A valid run that wrote no plan scores zero but is reported apart: the flow ran and never
+// persisted its deliverable, which is a different failure from missing the defect.
+func noPlanTag(r Result) string {
+	if !r.Invalid && !r.Failed && !r.PlanFound {
+		return " NO PLAN"
+	}
+	return ""
 }
 
 func invalidTag(r Result) string {

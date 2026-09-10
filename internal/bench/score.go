@@ -46,6 +46,7 @@ type Result struct {
 	FailReason           string         `json:"fail_reason,omitempty"`
 	Suite                SuiteResult    `json:"suite"`
 	Workspace            string         `json:"workspace,omitempty"`
+	PlanFound            bool           `json:"plan_found"`
 }
 
 var (
@@ -63,13 +64,20 @@ type citation struct {
 
 // ScoreWorkspace reads the plan from a workspace and scores it; a missing plan scores zero.
 func ScoreWorkspace(ws string, key Key) Result {
-	raw, err := os.ReadFile(filepath.Join(ws, PlanPath))
+	return ScorePlanFile(filepath.Join(ws, PlanPath), key)
+}
+
+// ScorePlanFile scores one plan file, such as the copy a run keeps next to its result.json.
+func ScorePlanFile(path string, key Key) Result {
+	raw, err := os.ReadFile(path)
 	if err != nil {
 		r := Score("", key)
 		r.Notes = append(r.Notes, "no plan")
 		return r
 	}
-	return Score(string(raw), key)
+	r := Score(string(raw), key)
+	r.PlanFound = true
+	return r
 }
 
 // Score applies the scoring rule to plan text. A defect is found when a finding row cites its
@@ -86,10 +94,10 @@ func Score(plan string, key Key) Result {
 	}
 	ledgerRows := dataRows(sectionText(plan, "Evidence ledger"))
 	r.LedgerRows = len(ledgerRows)
-	ledgerIDs := map[string]bool{}
+	ledgerByID := map[string]string{}
 	for _, lr := range ledgerRows {
 		if len(lr) > 0 {
-			ledgerIDs[strings.Trim(strings.TrimSpace(lr[0]), "`")] = true
+			ledgerByID[strings.Trim(strings.TrimSpace(lr[0]), "`")] = strings.Join(lr, " | ")
 		}
 	}
 
@@ -98,6 +106,12 @@ func Score(plan string, key Key) Result {
 		dr := DefectResult{ID: d.ID, File: d.File, Line: d.Line}
 		for i, row := range rows {
 			text := strings.Join(row, " | ")
+			// The evidence rows a finding cites are part of its claim: the file is often named
+			// there while the finding itself names the symbol.
+			linked := linkedLedgerText(row, ledgerByID)
+			if len(linked) > 0 {
+				text += " | " + strings.Join(linked, " | ")
+			}
 			by := matches(text, d)
 			if by == "" {
 				continue
@@ -105,7 +119,7 @@ func Score(plan string, key Key) Result {
 			matchedRow[i] = true
 			// A row that names the defect but cites no ledger row is prose, not a catch; it is
 			// recorded as "unlinked" and does not count.
-			if !evidenceLinked(row, ledgerIDs) {
+			if len(linked) == 0 {
 				if !dr.Found && dr.MatchedBy == "" {
 					dr.MatchedBy, dr.Row = "unlinked:"+by, text
 				}
@@ -261,20 +275,29 @@ func isSeparator(cells []string) bool {
 	return true
 }
 
-// evidenceLinked reports whether the finding row's evidence cell cites at least one id that
-// exists in the Evidence ledger. An empty ledger makes every citation dangling.
-func evidenceLinked(row []string, ledgerIDs map[string]bool) bool {
+// citedEvidenceIDs reads the ids in a finding row's evidence cell ("E1, E2", "E1/E3").
+func citedEvidenceIDs(row []string) []string {
 	if len(row) <= 4 {
-		return false
+		return nil
 	}
 	cell := strings.TrimSpace(row[4])
 	if cell == "" || placeholderRe.MatchString(cell) {
-		return false
+		return nil
 	}
+	var ids []string
 	for _, part := range strings.FieldsFunc(cell, func(c rune) bool { return c == ',' || c == ';' || c == '/' || c == ' ' }) {
-		if ledgerIDs[strings.Trim(part, "`")] {
-			return true
+		ids = append(ids, strings.Trim(part, "`"))
+	}
+	return ids
+}
+
+// linkedLedgerText returns the text of the ledger rows a finding row cites and that exist.
+func linkedLedgerText(row []string, ledgerByID map[string]string) []string {
+	var out []string
+	for _, id := range citedEvidenceIDs(row) {
+		if text, ok := ledgerByID[id]; ok {
+			out = append(out, text)
 		}
 	}
-	return false
+	return out
 }

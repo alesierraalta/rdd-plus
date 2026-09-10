@@ -23,6 +23,7 @@ type HistoryEntry struct {
 	SkillVersion   string  `json:"skill_version"`
 	Failed         int     `json:"failed"`
 	Invalid        int     `json:"invalid"`
+	NoPlan         int     `json:"no_plan"`
 }
 
 const historyHeader = "| ts | out | model | cases | defects | found | recall | false positives | cost USD | skill version |\n|---|---|---|---|---|---|---|---|---|---|\n"
