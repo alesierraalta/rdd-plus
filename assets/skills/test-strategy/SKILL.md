@@ -4,7 +4,7 @@ description: "Trigger: haz el testing, testea esto, prueba esto, test this, test
 license: Apache-2.0
 metadata:
   author: gentleman-programming
-  version: "3.0"
+  version: "3.1"
   scope: [common]
   auto_invoke: "Any request to test something: infer scope and mode from repo state, build or resume the persisted plan, execute it through specialized testing skills"
 ---
@@ -45,6 +45,11 @@ This skill decides WHICH targets and routes; siblings do the work.
 11. **Findings persist with verdicts** (template "Findings"). Severity is the consequence class;
     state whether data is safe. Never re-propose a `rejected` or `wontfix` finding unless its
     cited-files fingerprint changed; cite the row when skipping.
+12. **Persist before you report.** The final message is written only after
+    `docs/testing/test-plan.md` is on disk with every finding row, its evidence row, and the row
+    statuses of this run. A finding that exists only in chat does not exist: the next run cannot
+    honor its verdict, and nobody can re-score it. Asking the user whether to fix something never
+    replaces writing the finding first.
 
 ## Decision Gates
 
@@ -100,7 +105,7 @@ main, the test runner. Pick mode and scope from the state table; state the infer
 3. Invoke the assigned sibling; it climbs to the target rung without reduction.
 4. Promote probes through `no-excess-tests`.
 5. Update the plan: row status, rung, evidence ledger, findings, testability blocks with the
-   minimal change that opens them. Report the delta.
+   minimal change that opens them. Write the file, then report the delta (rule 12).
 
 ## Output Contract
 
