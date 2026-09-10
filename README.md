@@ -94,6 +94,7 @@ copied into a workspace.
 rdd-plus bench run --cases 'bench/cases/*' --model sonnet --runs 1 --max-cost-usd 20
 rdd-plus bench score --case bench/cases/<id> --workspace <ws>     # re-score after grader changes
 rdd-plus bench history                                            # every run, never rewritten
+rdd-plus bench rescore bench/results/<run>                        # re-read a finished run with today's rules
 rdd-plus bench compare bench/results/<before> bench/results/<after>   # per-case reported and caught, side by side
 ```
 
@@ -101,17 +102,31 @@ rdd-plus bench compare bench/results/<before> bench/results/<after>   # per-case
 fixture, checks its suite is green (otherwise the case is invalid and skipped), spawns
 `claude -p "haz el testing"` in it, then scores `docs/testing/test-plan.md`:
 
-- a planted defect is **found** when a Findings row cites its file (suffix match, so
-  `render.js:9` and `fixture/src/render.js` both name `src/render.js`) and either a cited line
-  within ±5 of the planted line (`file:line` or `file:l1-l2`) or one of its keywords;
-- a Findings row that matches no planted defect is a **false positive** (rows, not defects);
-- rows with a real evidence id and Evidence-ledger rows are counted; a missing plan scores 0.
+Two measures per planted defect, because saying it and catching it are different claims.
 
-Per run: `result.json`. Per bench: `aggregate.json`, `summary.md` (case | recall | found/total |
-false positives | cost | turns | minutes | invalid?), one line appended to `bench/history.jsonl`
-and one row to `bench/history.md` with the installed `test-strategy` version, so skill versions
-compare on identical fixtures. `--dry-run` scaffolds and checks fixtures without spawning or
-recording; `--max-cost-usd` stops the run early with exit code 2 and keeps partial results.
+**Reported** reads `docs/testing/test-plan.md`: a defect is found when a Findings row cites its
+file (suffix match, so `render.js:9` and `fixture/src/render.js` both name `src/render.js`) and
+either a line within ±5 of the planted line or one of its keywords. The row must cite an id that
+exists in the Evidence ledger; an unlinked row is prose and does not count, and an empty ledger
+makes every citation dangling. The file and line may come from the linked ledger rows, the
+keyword only from the finding itself. A row matching no planted defect is a **false positive**.
+
+**Caught** ignores the plan and asks whether the tests distinguish broken code from correct code.
+Each case ships `fix/all/` (every defect fixed) and, when it has more than one, `fix/keep-<ID>/`
+(every defect but that one fixed). The test files the agent added or changed are carried onto each
+variant and run per test: a test green on `fix/all` and red on `fix/keep-D` catches D. A test red
+on `fix/all` is broken or written to another API, so it is ignored and counted separately; a test
+green everywhere catches nothing.
+
+The gap between the two columns is the interesting number. A run can report a defect it never
+pinned with a test, or catch one it never wrote down.
+
+Per run: `result.json` and the `test-plan.md` it produced, kept even when the workspace is
+removed. Per bench: `aggregate.json`, `summary.md`, one line in `bench/history.jsonl` and one row
+in `bench/history.md` with the installed `test-strategy` version, so skill versions compare on
+identical fixtures. `--dry-run` scaffolds and checks fixtures without spawning or recording;
+`--max-cost-usd` stops early with exit code 2; a run with any failed or invalid case exits 3, so a
+partial number is never read as a corpus result.
 
 ## License
 
