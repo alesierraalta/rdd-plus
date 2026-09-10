@@ -84,7 +84,14 @@ func Score(plan string, key Key) Result {
 			r.FindingsWithEvidence++
 		}
 	}
-	r.LedgerRows = len(dataRows(sectionText(plan, "Evidence ledger")))
+	ledgerRows := dataRows(sectionText(plan, "Evidence ledger"))
+	r.LedgerRows = len(ledgerRows)
+	ledgerIDs := map[string]bool{}
+	for _, lr := range ledgerRows {
+		if len(lr) > 0 {
+			ledgerIDs[strings.Trim(strings.TrimSpace(lr[0]), "`")] = true
+		}
+	}
 
 	matchedRow := make([]bool, len(rows))
 	for _, d := range key.Defects {
@@ -96,6 +103,14 @@ func Score(plan string, key Key) Result {
 				continue
 			}
 			matchedRow[i] = true
+			// A row that names the defect but cites no ledger row is prose, not a catch; it is
+			// recorded as "unlinked" and does not count.
+			if !evidenceLinked(row, ledgerIDs) {
+				if !dr.Found && dr.MatchedBy == "" {
+					dr.MatchedBy, dr.Row = "unlinked:"+by, text
+				}
+				continue
+			}
 			if !dr.Found {
 				dr.Found, dr.MatchedBy, dr.Row = true, by, text
 			}
@@ -244,4 +259,22 @@ func isSeparator(cells []string) bool {
 		}
 	}
 	return true
+}
+
+// evidenceLinked reports whether the finding row's evidence cell cites at least one id that
+// exists in the Evidence ledger. An empty ledger makes every citation dangling.
+func evidenceLinked(row []string, ledgerIDs map[string]bool) bool {
+	if len(row) <= 4 {
+		return false
+	}
+	cell := strings.TrimSpace(row[4])
+	if cell == "" || placeholderRe.MatchString(cell) {
+		return false
+	}
+	for _, part := range strings.FieldsFunc(cell, func(c rune) bool { return c == ',' || c == ';' || c == '/' || c == ' ' }) {
+		if ledgerIDs[strings.Trim(part, "`")] {
+			return true
+		}
+	}
+	return false
 }

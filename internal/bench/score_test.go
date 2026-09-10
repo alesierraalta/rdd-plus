@@ -43,7 +43,8 @@ func TestScore(t *testing.T) {
 			name:      "found by keyword when the file is cited without a line",
 			findings:  "| F1 | render.js never escapes an embedded quote | M | yes | E1 | open | me | - | - |\n",
 			key:       renderKey,
-			wantFound: 1, wantBy: "keyword", wantRows: 1, wantEvidence: 1,
+			ledger:    "| E1 | c | cmd | i | o | m | r | observado |\n| E2 | c | cmd | i | o | m | r | observado |\n",
+			wantFound: 1, wantBy: "keyword", wantRows: 1, wantEvidence: 1, wantLedgerRows: 2,
 		},
 		{
 			name:      "keyword alone without the file is not a match, and the row is a false positive",
@@ -67,19 +68,22 @@ func TestScore(t *testing.T) {
 			name:      "a line range counts when the planted line is within tolerance of it",
 			findings:  "| F1 | src/render.js:10-14 quoting | M | yes | E2 | open | me | - | - |\n",
 			key:       Key{ID: "c1", Defects: []Defect{{ID: "d1", File: "src/render.js", Line: 18, Keywords: []string{"zzz"}}}},
-			wantFound: 1, wantBy: "line", wantRows: 1, wantEvidence: 1,
+			ledger:    "| E1 | c | cmd | i | o | m | r | observado |\n| E2 | c | cmd | i | o | m | r | observado |\n",
+			wantFound: 1, wantBy: "line", wantRows: 1, wantEvidence: 1, wantLedgerRows: 2,
 		},
 		{
 			name:      "suffix paths match: fixture/src/render.js names src/render.js",
 			findings:  "| F1 | fixture/src/render.js:12 broken | M | yes | E1 | open | me | - | - |\n",
 			key:       renderKey,
-			wantFound: 1, wantBy: "line", wantRows: 1, wantEvidence: 1,
+			ledger:    "| E1 | c | cmd | i | o | m | r | observado |\n| E2 | c | cmd | i | o | m | r | observado |\n",
+			wantFound: 1, wantBy: "line", wantRows: 1, wantEvidence: 1, wantLedgerRows: 2,
 		},
 		{
 			name:      "one matching row and one unrelated row: found 1, false positive 1",
 			findings:  "| F1 | src/render.js:12 escape | M | yes | E1 | open | me | - | - |\n| F2 | src/other.js:3 thing | N | yes | E2 | open | me | - | - |\n",
 			key:       renderKey,
-			wantFound: 1, wantBy: "line", wantFP: 1, wantRows: 2, wantEvidence: 2,
+			ledger:    "| E1 | c | cmd | i | o | m | r | observado |\n| E2 | c | cmd | i | o | m | r | observado |\n",
+			wantFound: 1, wantBy: "line", wantFP: 1, wantRows: 2, wantEvidence: 2, wantLedgerRows: 2,
 		},
 	}
 	for _, tc := range cases {
@@ -117,7 +121,7 @@ func TestScoreRecallOverSeveralDefects(t *testing.T) {
 		{ID: "c", File: "src/c.js", Line: 5, Keywords: []string{"gamma"}},
 		{ID: "d", File: "src/d.js", Line: 5, Keywords: []string{"delta"}},
 	}}
-	r := Score(plan("| F1 | src/a.js:5 x | M | yes | E1 | open | me | - | - |\n| F2 | src/c.js beta gamma | M | yes | E1 | open | me | - | - |\n", ""), key)
+	r := Score(plan("| F1 | src/a.js:5 x | M | yes | E1 | open | me | - | - |\n| F2 | src/c.js beta gamma | M | yes | E1 | open | me | - | - |\n", "| E1 | c | cmd | i | o | m | r | observado |\n| E2 | c | cmd | i | o | m | r | observado |\n"), key)
 	if r.Found != 2 || r.Recall != 0.5 || r.FalsePositives != 0 {
 		t.Fatalf("got found %d recall %.2f fp %d", r.Found, r.Recall, r.FalsePositives)
 	}
@@ -135,7 +139,7 @@ func TestScoreWorkspaceReadsThePlanFile(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(ws, "docs", "testing"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	p := plan("| F1 | src/render.js:12 escape | M | yes | E1 | open | me | - | - |\n", "")
+	p := plan("| F1 | src/render.js:12 escape | M | yes | E1 | open | me | - | - |\n", "| E1 | c | cmd | i | o | m | r | observado |\n| E2 | c | cmd | i | o | m | r | observado |\n")
 	if err := os.WriteFile(filepath.Join(ws, PlanPath), []byte(p), 0o644); err != nil {
 		t.Fatal(err)
 	}

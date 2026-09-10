@@ -61,6 +61,10 @@ type Aggregate struct {
 // ExitCostCeiling is returned when the run stopped early because the cost ceiling was reached.
 const ExitCostCeiling = 2
 
+// ExitPartial is returned when some case failed or was invalid: the numbers are incomplete
+// evidence and must not be read as a measurement of the whole corpus.
+const ExitPartial = 3
+
 // Run scaffolds, runs, and scores every case; it returns the aggregate and a process exit code.
 func Run(opts Options) (Aggregate, int) {
 	if opts.Log == nil {
@@ -123,6 +127,10 @@ loop:
 	}
 	if agg.Defects > 0 {
 		agg.Recall = float64(agg.Found) / float64(agg.Defects)
+	}
+	if code == 0 && (agg.Failed > 0 || agg.Invalid > 0) {
+		code = ExitPartial
+		fmt.Fprintf(opts.Log, "partial: %d failed, %d invalid; recall covers valid cases only\n", agg.Failed, agg.Invalid)
 	}
 	writeJSON(filepath.Join(opts.Out, "aggregate.json"), agg)
 	_ = os.WriteFile(filepath.Join(opts.Out, "summary.md"), []byte(Summary(agg)), 0o644)

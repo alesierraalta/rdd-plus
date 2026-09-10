@@ -7,6 +7,8 @@ it must accept and a negative fixture it must reject. No model calls, no cost.
 """
 import importlib.util, os, sys, tempfile
 
+sys.dont_write_bytecode = True  # the evals tree is embedded into a binary; bytecode must not land there
+
 spec = importlib.util.spec_from_file_location("ev", os.path.join(os.path.dirname(os.path.abspath(__file__)), "run_evals.py"))
 ev = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ev)
@@ -46,6 +48,21 @@ CASES = [
      {"type": "findings_have_evidence", "path": PLAN},
      plan(findings="| F1 | leak | M | yes | E1 | open | me | - | - |\n", ledger="| E1 | c | cmd | i | o | m | r | observado |\n"),
      plan(findings="| F1 | leak | M | yes | E9 | open | me | - | - |\n", ledger="| E1 | c | cmd | i | o | m | r | observado |\n")),
+
+    ("findings_have_evidence: a citation into an EMPTY ledger is dangling",
+     {"type": "findings_have_evidence", "path": PLAN},
+     plan(findings="| F1 | leak | M | yes | E1 | open | me | - | - |\n", ledger="| E1 | c | cmd | i | o | m | r | observado |\n"),
+     plan(findings="| F1 | leak | M | yes | E1 | open | me | - | - |\n", ledger="")),
+
+    ("findings_rows_matching counts only matching rows",
+     {"type": "findings_rows_matching", "path": PLAN, "pattern": "leak", "count": 1},
+     plan(findings="| F1 | leak | M | yes | E1 | open | me | - | - |\n", ledger="| E1 | c | cmd | i | o | m | r | observado |\n"),
+     plan(findings="| F1 | leak | M | yes | E1 | open | me | - | - |\n| F2 | leak again | M | yes | E1 | open | me | - | - |\n", ledger="| E1 | c | cmd | i | o | m | r | observado |\n")),
+
+    ("status_changed: a still-pending table is unchanged",
+     {"type": "status_changed", "path": PLAN},
+     plan().replace("| a | pending |", "| a | done |"),
+     plan()),
 
     ("file_regex observado: must not match the template header alone",
      {"type": "file_regex", "path": PLAN, "section": "Evidence ledger", "pattern": r"^\|.*\|\s*observado\s*\|?\s*$"},
@@ -90,6 +107,27 @@ def main():
     ]
     for g, expected in checks:
         got, det = ev.grade(g, ws, {"output": "", "tool_inputs": []})
+        label = ev.grader_name(g)
+        if got != expected:
+            failures.append(f"{label}: expected {expected}, got {got} ({det})")
+        print(f"  [{'ok' if got == expected else 'BROKEN'}] {label} -> {expected}")
+
+    run_checks = [
+        ({"type": "output_regex", "pattern": "PLAN"}, {"output": "Mode: PLAN then EXECUTE", "tool_inputs": []}, True),
+        ({"type": "output_regex", "pattern": "PLAN"}, {"output": "nothing here", "tool_inputs": []}, False),
+        ({"type": "output_not_regex", "pattern": r"\?\s*$", "scope": "last_line"}, {"output": "done.\nAll good.", "tool_inputs": []}, True),
+        ({"type": "output_not_regex", "pattern": r"\?\s*$", "scope": "last_line"}, {"output": "done.\nShall I continue?", "tool_inputs": []}, False),
+        ({"type": "question_count", "count": 1}, {"output": "Which app?\n", "tool_inputs": []}, True),
+        ({"type": "question_count", "count": 1}, {"output": "Which app?\nAnd why?\n", "tool_inputs": []}, False),
+        ({"type": "tool_regex", "pattern": "node --test"}, {"output": "", "tool_inputs": ["{\"command\":\"node --test\"}"]}, True),
+        ({"type": "tool_regex", "pattern": "node --test"}, {"output": "", "tool_inputs": ["{\"command\":\"ls\"}"]}, False),
+        ({"type": "tool_not_regex", "pattern": "rm -rf"}, {"output": "", "tool_inputs": ["{\"command\":\"ls\"}"]}, True),
+        ({"type": "tool_not_regex", "pattern": "rm -rf"}, {"output": "", "tool_inputs": ["{\"command\":\"rm -rf /\"}"]}, False),
+        ({"type": "file_not_exists", "path": "tests/missing.js"}, {"output": "", "tool_inputs": []}, True),
+        ({"type": "file_not_exists", "path": "tests/a.test.js"}, {"output": "", "tool_inputs": []}, False),
+    ]
+    for g, run, expected in run_checks:
+        got, det = ev.grade(g, ws, run)
         label = ev.grader_name(g)
         if got != expected:
             failures.append(f"{label}: expected {expected}, got {got} ({det})")

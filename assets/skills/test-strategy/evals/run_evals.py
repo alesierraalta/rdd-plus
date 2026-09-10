@@ -246,7 +246,7 @@ def grade(g: dict, ws: str, run: dict) -> tuple[bool, str]:
                 missing.append(r[0])
                 continue
             cited = {c.strip().strip("`") for c in re.split(r"[,;/]| and ", cell) if c.strip()}
-            if ledger_ids and not (cited & ledger_ids):
+            if not (cited & ledger_ids):  # an empty ledger makes every citation dangling
                 dangling.append(r[0])
         bad = missing + dangling
         return not bad, f"{len(rows)} finding(s), {len(missing)} without an id, {len(dangling)} citing an id absent from the ledger"
