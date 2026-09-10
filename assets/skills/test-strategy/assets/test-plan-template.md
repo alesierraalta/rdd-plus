@@ -57,8 +57,9 @@ How each critical journey is driven for real (`real-run-validation`), so EXECUTE
 A rejected or wontfix finding is a known non-issue: it is never re-proposed unless the fingerprint
 of its cited files changed; when a run skips it, it cites the row. Severity is the consequence class
 (`references/prioritization.md`); always state whether data is safe. A `confirmed` or `fixed`
-finding names the promoted test that is red without the fix (rule 13); one that never got a test
-stays `open` with reason `not pinned`.
+finding names the promoted test that asserts the promised behaviour, so it is red on the current
+code and green once fixed (rule 13); a test written the other way round is a characterization
+test and says so in its name. A finding that never got a test stays `open`, reason `not pinned`.
 
 | Id | Finding (path:line, one line) | Severity (consequence class) | Data safe? | Evidence id | Pinning test (suite path :: test name) | Status | Verdict by / date | Reason | Cited-files fingerprint at verdict |
 |---|---|---|---|---|---|---|---|---|---|

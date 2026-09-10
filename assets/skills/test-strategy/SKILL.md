@@ -4,7 +4,7 @@ description: "Trigger: haz el testing, testea esto, prueba esto, test this, test
 license: Apache-2.0
 metadata:
   author: gentleman-programming
-  version: "3.2"
+  version: "3.3"
   scope: [common]
   auto_invoke: "Any request to test something: infer scope and mode from repo state, build or resume the persisted plan, execute it through specialized testing skills"
 ---
@@ -28,7 +28,10 @@ This skill decides WHICH targets and routes; siblings do the work.
    differential, metamorphic, or observed state. Coverage percentage is not evidence.
 3. **Contract boundary that survives a refactor** ([references/altitude.md](references/altitude.md));
    doubles only at process boundaries.
-4. **Legacy: characterization tests first**, labeled. **Bug: the reddening test first.**
+4. **Legacy: characterization tests first**, labeled as such. **Bug: the reddening test first.**
+   The two point in opposite directions: a characterization test asserts what the code does
+   today, a reddening test asserts what the contract promises. Never let one stand in for the
+   other (rule 13).
 5. **THE PLAN NEVER SHRINKS.** Every ranked target keeps its row and target rung; budget decides
    order and how far today, never what is dropped.
 6. **DEFAULT BUDGET is everything.** No user cap: every selected target runs to its target rung.
@@ -50,11 +53,16 @@ This skill decides WHICH targets and routes; siblings do the work.
     statuses of this run. A finding that exists only in chat does not exist: the next run cannot
     honor its verdict, and nobody can re-score it. Asking the user whether to fix something never
     replaces writing the finding first.
-13. **Every confirmed finding leaves a pinning test in the suite.** A probe in the scratchpad
-    proves the defect once; a test in the repository's own suite proves it on every run. Promote
-    it through `no-excess-tests`, name it in the finding row, and record that it is RED without
-    the fix and GREEN with it. A test that passes both ways pins nothing, whatever it is called.
-    A finding whose probe was never promoted stays `open`, reason `not pinned`.
+13. **Every confirmed finding leaves a pinning test in the suite, asserting the CORRECT
+    behaviour.** A probe in the scratchpad proves the defect once; a test in the repository's own
+    suite proves it on every run. The assertion states what the contract promises, so the test is
+    RED on today's code and GREEN once the defect is fixed, in that order. Run it both ways and
+    record which run was which. Two failures look like compliance and are not: a test that passes
+    either way pins nothing, and a test that asserts the defective output is a characterization
+    test (rule 4) that turns red the day someone fixes the bug, so it defends the defect instead
+    of demanding its repair. Promote through `no-excess-tests`, name it in the finding row, and
+    label any characterization test as such in its own name. A finding whose probe was never
+    promoted stays `open`, reason `not pinned`.
 
 ## Decision Gates
 
@@ -108,9 +116,11 @@ main, the test runner. Pick mode and scope from the state table; state the infer
 2. Sandbox: throwaway worktree or ephemeral container; environment proof; probes in scratchpad
    or gitignored `testLocales/`.
 3. Invoke the assigned sibling; it climbs to the target rung without reduction.
-4. Promote the reddening probe into the suite through `no-excess-tests`, then run it twice:
-   RED with the defect present, GREEN with the minimal fix or the mutation reverted. Those two
-   runs are one evidence row, and the test's identity goes in the finding (rule 13).
+4. Promote the reddening probe into the suite through `no-excess-tests`, asserting the promised
+   behaviour, then run it twice: RED on the current code, GREEN with the minimal fix or the
+   mutation reverted. If the first run is green, the assertion is pointing at the defect instead
+   of the contract: rewrite it before promoting. Those two runs are one evidence row, and the
+   test's identity goes in the finding (rule 13).
 5. Update the plan: row status, rung, evidence ledger, findings, testability blocks with the
    minimal change that opens them. Write the file, then report the delta (rule 12).
 
