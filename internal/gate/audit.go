@@ -30,7 +30,8 @@ func BuildCompleteReason(planPath string) string {
 	}, "\n")
 }
 
-const feedbackOffer = "Want the run graded? Offer the operator feedback on the testing itself, in " +
-	"one short pass: what was executed, what was skipped, which findings a different order would " +
-	"have surfaced first, and what you would still not know if the suite were green. This is a " +
-	"reminder, not an approval gate. Silence it for this repository with a .no-testing-gate file."
+const feedbackOffer = "Want the run graded? Offer the operator feedback on the testing itself with " +
+	"`rdd-plus feedback --template`, in one short pass: what was executed, what was skipped, which " +
+	"findings a different order would have surfaced first, and what you would still not know if the " +
+	"suite were green. This is a reminder, not an approval gate. Silence it for this repository with " +
+	"a .no-testing-gate file."

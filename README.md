@@ -31,6 +31,7 @@ directory and `--dry-run` to see the plan.
 | `rdd-plus gate` | The Stop hook. Reads the hook payload on stdin, decides, logs one line, and emits Stop feedback when a session changed production source without loading the adversarial testing discipline. Always exits 0. |
 | `rdd-plus sync` | Installs the embedded skills and wires the gate. Idempotent. |
 | `rdd-plus doctor` | Reports installed skills (and whether they drift from the embedded version), whether the hook is wired, and which optional tools are on PATH with what degrades without each. `--json` for machines. Exit 1 when git, a skill, or the hook is missing. |
+| `rdd-plus feedback` | Records one honest process report about the testing method itself, or reads the reports back. `--template` prints a fillable skeleton, `--file <path>` records it, `--summary` (the default) answers whether the method is earning its keep. |
 | `rdd-plus version` | Prints the version. |
 
 ## How the gate decides
@@ -155,6 +156,25 @@ asked to say so plainly in its final message rather than let depth read as cover
 operator gets one line in their own terminal offering feedback on the run, so the offer does not
 depend on the model remembering to make it. It is a reminder, not an approval gate, and a
 `.no-testing-gate` file silences it.
+
+## Run feedback
+
+The most valuable artifact a run can hand back is an honest report on the method itself: what
+paid off, what was ceremony, where a rule had to be reverse-engineered, and whether it earned its
+keep. The gate offers it at every Stop; `feedback` is where the answer lands.
+
+```sh
+rdd-plus feedback --template          # a fillable skeleton with the run's identity already filled
+rdd-plus feedback --file report.md    # record one report; refusals exit 2 and write nothing
+rdd-plus feedback --summary           # counts per verdict and per skill version, plus the guesses
+rdd-plus feedback                     # no flags: the summary, the cheapest path to the answer
+```
+
+One report is `paid`, `cost`, `reason`, and a `verdict` of `paid`, `partly`, or `ceremony`; `guess`
+and `freeform` are optional. Each report appends one JSON line to
+`<config-dir>/telemetry/run-feedback.jsonl` and one section to `run-feedback.md`, beside the gate's
+own log. The summary counts reports, verdicts, and skill versions and prints the `guess` lines of
+the most recent reports; it clusters nothing and invents no score.
 
 ## Benchmark
 

@@ -4,8 +4,8 @@ description: "Trigger: haz el testing, testea esto, prueba esto, test this, test
 license: Apache-2.0
 metadata:
   author: gentleman-programming
-  version: "0.3.5"
-  requires_rdd_plus: "0.3.5"
+  version: "0.3.6"
+  requires_rdd_plus: "0.3.6"
   scope: [common]
   auto_invoke: "Any request to test something: infer scope and mode from repo state, build or resume the persisted plan, execute it through specialized testing skills"
 ---
@@ -23,7 +23,7 @@ This skill decides WHICH targets and routes; siblings do the work.
 
 ## Tooling
 
-This skill is written for `rdd-plus 0.3.5`, and `rdd-plus version` prints the build present.
+This skill is written for `rdd-plus 0.3.6`, and `rdd-plus version` prints the build present.
 Install it from the repository with `make build`, which writes `bin/rdd-plus`; put that on `PATH`,
 or use `go install github.com/alesierraalta/rdd-plus/cmd/rdd-plus@latest` once the module is
 published. Without the binary the run continues on documented fallbacks: `plan init` is replaced
@@ -32,6 +32,9 @@ applying its four checks by hand — findings that are not rows, cells that cite
 evidence ids that do not exist, rows that settle without a pinning test — plus the template's
 table shape, saying in the report that the gate was applied by hand; and `doctor` by deciding
 CodeGraph availability from `codegraph` and `git ls-files` instead of the capability probe.
+The run's process feedback — what paid off, what was ceremony, where a rule had to be
+reverse-engineered, and whether the method earned its keep — is recorded with
+`rdd-plus feedback --template`.
 
 ## Hard Rules
 

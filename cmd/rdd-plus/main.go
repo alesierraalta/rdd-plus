@@ -18,6 +18,7 @@ import (
 	"github.com/alesierraalta/rdd-plus/internal/buildinfo"
 	"github.com/alesierraalta/rdd-plus/internal/check"
 	"github.com/alesierraalta/rdd-plus/internal/doctor"
+	"github.com/alesierraalta/rdd-plus/internal/feedback"
 	"github.com/alesierraalta/rdd-plus/internal/gate"
 	"github.com/alesierraalta/rdd-plus/internal/plan"
 	"github.com/alesierraalta/rdd-plus/internal/sync"
@@ -34,9 +35,11 @@ commands:
            (init | check | gaps)
   check    say what this repository still owes, from git and the plan alone: no hook payload,
            no transcript, no host. Exit 1 when there is something to do.
+  feedback record an honest process report on the method itself, or read the reports back
+           (--template | --file <path> | --summary)
   version  print the version
 
-flags shared by gate, sync, doctor:
+flags shared by gate, sync, doctor, feedback:
   --config-dir <dir>   Claude config directory (default: ~/.claude)
 
 bench run [--cases <glob>] [--model <m>] [--runs N] [--max-turns N] [--timeout 30m]
@@ -52,6 +55,7 @@ plan check [--path docs/testing/test-plan.md]
 plan gaps  [--path docs/testing/test-plan.md]
            (swept = status done, fixed or closed; n/a, na, none and skipped leave the denominator)
 check [--cwd .]
+feedback [--config-dir <dir>] [--template] [--file <path>] [--plan <path>] [--summary]
 `
 
 func defaultConfigDir() string {
@@ -80,6 +84,8 @@ func main() {
 		os.Exit(runPlan(os.Args[2:]))
 	case "check":
 		os.Exit(runCheck(os.Args[2:]))
+	case "feedback":
+		os.Exit(runFeedback(os.Args[2:]))
 	case "version":
 		fmt.Println(buildinfo.String())
 		os.Exit(0)
@@ -161,6 +167,63 @@ func runCheck(args []string) int {
 	res := check.Run(*cwd, check.Deps{})
 	fmt.Println(strings.TrimRight(res.Text, "\n"))
 	return res.Exit
+}
+
+// runFeedback is the destination the gate's Stop offer never had: --template hands the operator a
+// fillable report, --file records it, and no flags reads the reports back.
+func runFeedback(args []string) int {
+	fs := flag.NewFlagSet("feedback", flag.ContinueOnError)
+	configDir := fs.String("config-dir", defaultConfigDir(), "Claude config directory")
+	template := fs.Bool("template", false, "print a fillable skeleton and write nothing")
+	file := fs.String("file", "", "submit the report written in this file")
+	plan := fs.String("plan", "", "repository-relative plan path the report is about")
+	summary := fs.Bool("summary", false, "read the reports back and print the summary")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	switch {
+	case *template:
+		fmt.Print(feedback.Template(feedback.Report{
+			TS:    time.Now().UTC().Format(time.RFC3339),
+			Repo:  feedback.RepoRoot("."),
+			Plan:  *plan,
+			Skill: feedback.EmbeddedSkillVersion(),
+			Build: buildinfo.String(),
+		}))
+		return 0
+	case *file != "":
+		raw, err := os.ReadFile(*file)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "feedback:", err)
+			return 1
+		}
+		r, err := feedback.Parse(string(raw))
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "feedback:", err)
+			return 2
+		}
+		if *plan != "" {
+			r.Plan = *plan
+		}
+		if strings.TrimSpace(r.Plan) == "" {
+			r.Plan = feedback.NotGiven
+		}
+		if err := feedback.Record(*configDir, r); err != nil {
+			fmt.Fprintln(os.Stderr, "feedback:", err)
+			return 1
+		}
+		fmt.Printf("recorded %s feedback for %s\n", r.Verdict, r.Repo)
+		return 0
+	default:
+		_ = *summary // --summary and no flags are the same cheapest path to the answer
+		out, err := feedback.Summary(*configDir)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "feedback:", err)
+			return 1
+		}
+		fmt.Print(out)
+		return 0
+	}
 }
 
 func runPlan(args []string) int {

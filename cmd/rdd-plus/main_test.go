@@ -85,6 +85,104 @@ func asExit(err error, target *exec.ExitError) bool {
 	return ok
 }
 
+// The feedback command is the destination the gate's offer always lacked: --template prints a
+// skeleton, --file records it, and no flags reads the reports back.
+func TestFeedbackCLI(t *testing.T) {
+	bin := buildCLI(t)
+	dir := t.TempDir()
+
+	out, code := runCLI(t, bin, "feedback", "--config-dir", dir, "--template")
+	if code != 0 {
+		t.Fatalf("template exit = %d\n%s", code, out)
+	}
+	for _, want := range []string{"ts:", "repo:", "plan:", "skill:", "build:", "--file", "verdict"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("template missing %q:\n%s", want, out)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, "telemetry")); !os.IsNotExist(err) {
+		t.Fatalf("--template must write nothing, found a telemetry directory")
+	}
+
+	// No subcommand is the cheapest path to the answer.
+	out, code = runCLI(t, bin, "feedback", "--config-dir", dir)
+	if code != 0 || !strings.Contains(strings.ToLower(out), "no reports") {
+		t.Fatalf("bare feedback = %d %q", code, out)
+	}
+
+	report := filepath.Join(t.TempDir(), "report.md")
+	body := "ts: 2026-09-10T12:00:00Z\n" +
+		"repo: " + dir + "\n" +
+		"plan: docs/testing/test-plan.md\n" +
+		"skill: 0.3.6\n" +
+		"build: test\n" +
+		"paid: it found the defect\n" +
+		"cost: one hour\n" +
+		"reason: it earned its keep\n" +
+		"verdict: paid\n" +
+		"guess: what a probe proves\n"
+	if err := os.WriteFile(report, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, code = runCLI(t, bin, "feedback", "--config-dir", dir, "--file", report)
+	if code != 0 {
+		t.Fatalf("submit exit = %d\n%s", code, out)
+	}
+	out, code = runCLI(t, bin, "feedback", "--config-dir", dir, "--summary")
+	if code != 0 || !strings.Contains(out, "1 report") || !strings.Contains(out, "paid: 1") {
+		t.Fatalf("summary after one report = %d\n%s", code, out)
+	}
+
+	bad := filepath.Join(t.TempDir(), "bad.md")
+	if err := os.WriteFile(bad, []byte(body+"surprise: x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, code = runCLI(t, bin, "feedback", "--config-dir", dir, "--file", bad)
+	if code != 2 || !strings.Contains(out, "surprise") {
+		t.Fatalf("unknown key = %d %q", code, out)
+	}
+
+	if err := os.WriteFile(bad, []byte(strings.Replace(body, "verdict: paid", "verdict: maybe", 1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, code = runCLI(t, bin, "feedback", "--config-dir", dir, "--file", bad)
+	if code != 2 || !strings.Contains(out, "paid") || !strings.Contains(out, "partly") || !strings.Contains(out, "ceremony") {
+		t.Fatalf("bad verdict = %d %q", code, out)
+	}
+
+	if err := os.WriteFile(bad, []byte(strings.Replace(body, "cost: one hour\n", "", 1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, code = runCLI(t, bin, "feedback", "--config-dir", dir, "--file", bad)
+	if code != 2 || !strings.Contains(out, "cost") {
+		t.Fatalf("missing field = %d %q", code, out)
+	}
+
+	// Every refusal wrote nothing: the ledger still holds the one accepted report.
+	raw, err := os.ReadFile(filepath.Join(dir, "telemetry", "run-feedback.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rows := strings.Count(strings.TrimRight(string(raw), "\n"), "\n") + 1; rows != 1 {
+		t.Fatalf("a refusal must write nothing, ledger has %d rows:\n%s", rows, raw)
+	}
+}
+
+func runCLI(t *testing.T, bin string, args ...string) (string, int) {
+	t.Helper()
+	cmd := exec.Command(bin, args...)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		return string(out), 0
+	}
+	var ee exec.ExitError
+	if asExit(err, &ee) {
+		return string(out), ee.ExitCode()
+	}
+	t.Fatalf("run %v: %v", args, err)
+	return "", -1
+}
+
 // A usage text that does not list a command it accepts sends users to the wrong place.
 func TestUsageListsEveryBenchSubcommand(t *testing.T) {
 	for _, sub := range []string{"bench run", "bench score", "bench history", "bench compare", "bench rescore", "plan init", "plan check", "plan gaps"} {
@@ -92,7 +190,7 @@ func TestUsageListsEveryBenchSubcommand(t *testing.T) {
 			t.Errorf("usage does not document %q", sub)
 		}
 	}
-	for _, cmd := range []string{"gate", "sync", "doctor", "bench", "plan", "version"} {
+	for _, cmd := range []string{"gate", "sync", "doctor", "bench", "plan", "feedback", "version"} {
 		if !strings.Contains(usage, "  "+cmd+" ") {
 			t.Errorf("usage does not document the %q command", cmd)
 		}
@@ -108,7 +206,7 @@ func TestVersionNamesTheBuild(t *testing.T) {
 		t.Fatalf("version: %v\n%s", err, out)
 	}
 	got := strings.TrimSpace(string(out))
-	want := regexp.MustCompile(`^0\.3\.5 \(([0-9a-f]{7}(\+dirty)?|unknown)\)$`)
+	want := regexp.MustCompile(`^0\.3\.6 \(([0-9a-f]{7}(\+dirty)?|unknown)\)$`)
 	if !want.MatchString(got) {
 		t.Fatalf("version printed %q, want %s", got, want)
 	}

@@ -34,6 +34,10 @@ func TestAuditReasonOffersFeedbackWithoutDemandingIt(t *testing.T) {
 	if !strings.Contains(low, "feedback") {
 		t.Fatalf("the operator asked to be offered feedback:\n%s", reason)
 	}
+	// An offer with no command attached is not actionable: the operator cannot record the run.
+	if !strings.Contains(reason, "rdd-plus feedback") {
+		t.Fatalf("the offer must name the recording command:\n%s", reason)
+	}
 	for _, forbidden := range []string{"you must", "block", "refuse"} {
 		if strings.Contains(low, forbidden) {
 			t.Fatalf("this is a reminder, not a gate: %q in\n%s", forbidden, reason)
