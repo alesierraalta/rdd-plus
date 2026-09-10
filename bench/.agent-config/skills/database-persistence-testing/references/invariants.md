@@ -1,0 +1,17 @@
+# Persistence invariants — full rule text
+
+1. **Migration invariants are contract-dependent.** Select the invariant from the migration's reversibility, database dialect, operation, and declared deployment contract. Reversible migrations must verify the documented rollback cycle and schema equivalence; irreversible expand/contract operations must instead verify forward/backward compatibility and a documented rollback or backup/restore path. Do not pretend `DOWN` is valid when the operation is irreversible. A missing required invariant fails closed; any exception must name its scope, owner, rationale, and observable compensating evidence.
+2. **Zero-downtime expand/contract contract.** Never drop, rename, or add non-nullable columns without default in a single migration. Split into three releases: Phase 1 (Expand): add nullable/default column, application dual-writes. Phase 2 (Backfill): background chunked migration with lock throttling. Phase 3 (Contract): switch reads, drop deprecated column/table in a subsequent PR.
+3. **Lock and latency budget.** Each migration declares an environment-appropriate lock/latency budget with provenance (SLO, platform limit, or measured baseline), sample context, and rationale. Use the target dialect's supported control where applicable; do not impose a universal timeout. A required but missing budget or telemetry fails closed; approved exceptions must be observable in the report.
+4. **No BDD / Cucumber on SQL tables.** Never wrap database tables in Gherkin/Cucumber step definitions. Write persistence tests with native domain object builders, table-driven tests, and real ephemeral databases via `docker-test-containers` / Testcontainers.
+5. **Concurrency and isolation probing.** Concurrency tests exercise real parallel connections at the declared workload, with worker count and isolation contract justified by the target risk and environment. Assert the applicable race and locking invariant, such as optimistic locking (`WHERE version = :expected`) or dialect-supported pessimistic locking (`SELECT ... FOR UPDATE SKIP LOCKED`).
+6. **Query budget enforcement.** Declare a query/latency budget for the operation with provenance, sample context, and rationale. Enforce it with framework-native counters or telemetry, including scaling behavior; a missing applicable budget is a blocker, not a pass. Exceptions must be explicit and observable.
+7. **Foreign key index audit.** Determine whether each foreign key requires an index under the active dialect, workload, and deployment contract. Report justified exceptions (a proven supporting index, an immutable/low-risk relationship) with catalog evidence; fail closed when an applicable index invariant is required but unverified.
+8. **Teardown and isolation.** Persistence tests run in isolated transactions with automatic rollback or clean container instances per suite. Never leak state across runs.
+
+# Static migration checks (cheap, always in the plan)
+
+- File naming and ordering: every migration file follows the project's naming scheme (timestamp or sequence prefix, descriptive slug); ordering is strictly monotonic; no two files share a prefix.
+- Up/down presence: reversible migrations ship both directions; irreversible ones declare it and name the rollback or backup/restore path.
+- Idempotency: applying the full set twice on a fresh database yields the same canonical schema dump (`assets/migration-idempotency-check.sh`).
+- Index and FK audit: `assets/unindexed-foreign-keys.sql` (PostgreSQL) or the dialect equivalent.

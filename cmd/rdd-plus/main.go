@@ -36,7 +36,8 @@ flags shared by gate, sync, doctor:
 
 bench run [--cases <glob>] [--model <m>] [--runs N] [--max-turns N] [--timeout 30m]
           [--max-cost-usd N] [--out <dir>] [--bench-dir <dir>] [--dry-run] [--keep]
-          [--retries N] [--retry-delay 60s]   (--cases accepts comma-separated patterns)
+          [--retries N] [--retry-delay 60s] [--agent-config bench|<dir>]
+          (--cases accepts comma-separated patterns)
 bench score --case <dir> --workspace <ws>
 bench history [--bench-dir <dir>]
 bench compare <before-results> <after-results>
@@ -204,16 +205,34 @@ func runBenchRun(args []string) int {
 	keep := fs.Bool("keep", false, "keep workspaces after scoring")
 	retries := fs.Int("retries", 1, "retries per case on infrastructure failures (exit status, error result)")
 	retryDelay := fs.Duration("retry-delay", 60*time.Second, "pause before a retry")
+	agentConfig := fs.String("agent-config", "", "Claude config directory for the agent; \"bench\" builds a throwaway one holding only the embedded skills")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	if *out == "" {
 		*out = filepath.Join(*benchDir, "results", bench.Stamp(time.Now()))
 	}
+	cfgDir, skillFile := *agentConfig, filepath.Join(defaultConfigDir(), "skills", "test-strategy", "SKILL.md")
+	if cfgDir == "bench" {
+		// A throwaway configuration holding only the embedded skills, so the run measures them
+		// and not the operator's global instructions, memory protocol, or MCP servers.
+		cfgDir = filepath.Join(*benchDir, ".agent-config")
+		if err := bench.WriteBenchConfig(cfgDir); err != nil {
+			fmt.Fprintln(os.Stderr, "bench config:", err)
+			return 1
+		}
+		if abs, err := filepath.Abs(cfgDir); err == nil {
+			cfgDir = abs
+		}
+	}
+	if cfgDir != "" {
+		skillFile = filepath.Join(cfgDir, "skills", "test-strategy", "SKILL.md")
+	}
 	_, code := bench.Run(bench.Options{
 		CasesGlob: *cases, Model: *model, Runs: *runs, MaxTurns: *maxTurns, Timeout: *timeout,
 		SuiteTimeout: *suiteTimeout, MaxCostUSD: *maxCost, Out: *out, BenchDir: *benchDir,
-		SkillFile: filepath.Join(defaultConfigDir(), "skills", "test-strategy", "SKILL.md"),
+		SkillFile: skillFile,
+		ConfigDir: cfgDir,
 		DryRun:    *dryRun, Keep: *keep, Retries: *retries, RetryDelay: *retryDelay, Log: os.Stdout,
 	})
 	fmt.Printf("results: %s\n", filepath.Join(*out, "summary.md"))

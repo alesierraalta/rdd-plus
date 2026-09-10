@@ -4,7 +4,7 @@ description: "Trigger: haz el testing, testea esto, prueba esto, test this, test
 license: Apache-2.0
 metadata:
   author: gentleman-programming
-  version: "3.4"
+  version: "3.3"
   scope: [common]
   auto_invoke: "Any request to test something: infer scope and mode from repo state, build or resume the persisted plan, execute it through specialized testing skills"
 ---
@@ -48,15 +48,11 @@ This skill decides WHICH targets and routes; siblings do the work.
 11. **Findings persist with verdicts** (template "Findings"). Severity is the consequence class;
     state whether data is safe. Never re-propose a `rejected` or `wontfix` finding unless its
     cited-files fingerprint changed; cite the row when skipping.
-12. **Persist before you report, in the shipped shape.** The plan is a set of tables, not a
-    document you compose: create it with `rdd-plus plan init` (or copy
-    [assets/test-plan-template.md](assets/test-plan-template.md) when the binary is absent) and
-    fill its rows. Prose replaces no row, and every finding cell opens with `path:line`. The
-    final message is written only after `docs/testing/test-plan.md` is on disk and
-    `rdd-plus plan check` passes: it reports findings that are not rows, cite no location, cite
-    an evidence id that does not exist, or settle without a pinning test. A finding that exists
-    only in chat does not exist, and one nothing can parse is the same thing. Asking the user
-    whether to fix something never replaces writing the row first.
+12. **Persist before you report.** The final message is written only after
+    `docs/testing/test-plan.md` is on disk with every finding row, its evidence row, and the row
+    statuses of this run. A finding that exists only in chat does not exist: the next run cannot
+    honor its verdict, and nobody can re-score it. Asking the user whether to fix something never
+    replaces writing the finding first.
 13. **Every confirmed finding leaves a pinning test in the suite, asserting the CORRECT
     behaviour.** A probe in the scratchpad proves the defect once; a test in the repository's own
     suite proves it on every run. The assertion states what the contract promises, so the test is
@@ -110,10 +106,9 @@ main, the test runner. Pick mode and scope from the state table; state the infer
 4. Per target: altitude, target rung L1–L5, sibling skill, verdict.
 5. Layer matrix (one row per layer plus sandbox); name anti-priorities with reasons.
 6. Record the baseline (`assets/fingerprint.sh`: repo fingerprint; per-finding cited-files fingerprint) and persist to
-   `docs/testing/test-plan.md` (or the path the user names). Create the file with
-   `rdd-plus plan init --path <plan>`, which writes
-   [assets/test-plan-template.md](assets/test-plan-template.md) with every table in place; rows
-   start `pending`, `none` rows start `n/a`. Close the run with `rdd-plus plan check` (rule 12).
+   `docs/testing/test-plan.md` (or the path the user names) using
+   [assets/test-plan-template.md](assets/test-plan-template.md); rows start `pending`,
+   `none` rows start `n/a`.
 
 **EXECUTE**
 
@@ -127,13 +122,9 @@ main, the test runner. Pick mode and scope from the state table; state the infer
    of the contract: rewrite it before promoting. Those two runs are one evidence row, and the
    test's identity goes in the finding (rule 13).
 5. Update the plan: row status, rung, evidence ledger, findings, testability blocks with the
-   minimal change that opens them. Write the file, run `rdd-plus plan check` until it passes,
-   then report the delta (rule 12).
+   minimal change that opens them. Write the file, then report the delta (rule 12).
 
 ## Output Contract
-
-This describes the CHAT REPLY, never the file: the plan's structure is
-[assets/test-plan-template.md](assets/test-plan-template.md) and nothing else.
 
 Return: inferred mode and scope (one line); plan path and delta; ranked table; layer matrix;
 not-testing list; routing ledger (per sibling: `contributed rows` / `invoked` / `skipped` +

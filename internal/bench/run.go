@@ -26,6 +26,8 @@ type Options struct {
 	MaxTurns     int
 	Timeout      time.Duration
 	SuiteTimeout time.Duration
+	ConfigDir    string  // Claude config directory for the agent; empty inherits the operator's
+	BinDir       string  // put first on the agent's PATH, so `rdd-plus plan init` is the build under test
 	MaxCostUSD   float64 // 0 means no ceiling
 	Out          string
 	BenchDir     string
@@ -346,6 +348,7 @@ func claudeAgent(ctx context.Context, ws string, opts Options) (AgentResult, err
 	}
 	cmd := exec.CommandContext(ctx, "claude", args...)
 	cmd.Dir = ws
+	cmd.Env = agentEnv(os.Environ(), opts.ConfigDir, opts.BinDir)
 	cmd.Stdin = strings.NewReader("")
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
