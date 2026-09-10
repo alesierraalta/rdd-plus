@@ -21,7 +21,10 @@ type DefectResult struct {
 	Line      int    `json:"line"`
 	Found     bool   `json:"found"`
 	MatchedBy string `json:"matched_by,omitempty"` // "line" or "keyword"
-	Row       string `json:"row,omitempty"`        // the finding row that matched, for audit
+	// ClaimedPinned reports that the finding names a test pinning it; whether that test
+	// distinguishes anything is measured separately, by the catch check.
+	ClaimedPinned bool   `json:"claimed_pinned,omitempty"`
+	Row           string `json:"row,omitempty"` // the finding row that matched, for audit
 }
 
 // Result is the score of one workspace against its key.
@@ -47,7 +50,8 @@ type Result struct {
 	Suite                SuiteResult    `json:"suite"`
 	Workspace            string         `json:"workspace,omitempty"`
 	PlanFound            bool           `json:"plan_found"`
-	Caught               int            `json:"caught"` // defects some agent test distinguishes (fixture vs fix)
+	ClaimedPinned        int            `json:"claimed_pinned"` // defects whose finding names a pinning test
+	Caught               int            `json:"caught"`         // defects some agent test distinguishes (fixture vs fix)
 	Catch                CatchResult    `json:"catch"`
 }
 
@@ -87,8 +91,12 @@ func ScorePlanFile(path string, key Key) Result {
 // is a false positive.
 func Score(plan string, key Key) Result {
 	r := Result{Case: key.ID, Total: len(key.Defects)}
-	rows := dataRows(sectionText(plan, "Findings"))
+	findings := sectionText(plan, "Findings")
+	rows := dataRows(findings)
 	r.FindingRows = len(rows)
+	// The pinning column exists only in plans written under rule 13; find it by its header so
+	// its position can move.
+	pinCol := columnIndex(headerCells(findings), "pinning test")
 	for _, row := range rows {
 		if len(row) > 4 && !placeholderRe.MatchString(strings.TrimSpace(row[4])) {
 			r.FindingsWithEvidence++
@@ -126,10 +134,14 @@ func Score(plan string, key Key) Result {
 			}
 			if !dr.Found {
 				dr.Found, dr.MatchedBy, dr.Row = true, by, text
+				dr.ClaimedPinned = cellFilled(row, pinCol)
 			}
 		}
 		if dr.Found {
 			r.Found++
+			if dr.ClaimedPinned {
+				r.ClaimedPinned++
+			}
 		}
 		r.Defects = append(r.Defects, dr)
 	}
@@ -300,4 +312,32 @@ func linkedLedgerText(row []string, ledgerByID map[string]string) []string {
 		}
 	}
 	return out
+}
+
+// headerCells returns the header row of the first markdown table in a section.
+func headerCells(section string) []string {
+	for _, l := range strings.Split(section, "\n") {
+		if t := strings.TrimSpace(l); strings.HasPrefix(t, "|") {
+			return splitCells(t)
+		}
+	}
+	return nil
+}
+
+// columnIndex finds the column whose header contains name, case-insensitively.
+func columnIndex(header []string, name string) int {
+	for i, h := range header {
+		if strings.Contains(strings.ToLower(strings.TrimSpace(h)), strings.ToLower(name)) {
+			return i
+		}
+	}
+	return -1
+}
+
+// cellFilled reports whether a row carries real content in the given column.
+func cellFilled(row []string, col int) bool {
+	if col < 0 || col >= len(row) {
+		return false
+	}
+	return !placeholderRe.MatchString(strings.TrimSpace(row[col]))
 }

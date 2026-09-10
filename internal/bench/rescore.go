@@ -55,6 +55,7 @@ func Rescore(results string, lookup func(caseName string) (string, error), suite
 		agg.Defects += res.Total
 		agg.Found += res.Found
 		agg.Caught += res.Caught
+		agg.ClaimedPinned += res.ClaimedPinned
 		agg.FalsePositives += res.FalsePositives
 		if !res.PlanFound {
 			agg.NoPlan++
