@@ -37,3 +37,7 @@ One row per `rdd-plus bench run`; never rewritten.
 | 2026-09-10T12:10:44Z | run | bench/results/20260910-121044 | sonnet | 15 | 0 | 0 | 0.00 | 0 | 0.00 | 0 | 15 | 0 | 0 | 0.000 | 3.4 | 492d23d+dirty |
 | 2026-09-10T12:47:10Z | run | bench/results/20260910-124710 | sonnet | 15 | 27 | 25 | 0.93 | 23 | 0.85 | 0 | 0 | 0 | 0 | 13.956 | 3.4 | 5bb7a4b+dirty |
 | 2026-09-10T13:58:16Z | run | bench/results/20260910-135816 | sonnet | 15 | 24 | 22 | 0.92 | 21 | 0.88 | 0 | 2 | 0 | 0 | 12.834 | 3.4 | 5962de5+dirty |
+
+| ts | kind | out | model | cases | defects | reported | recall | caught | recall caught | false positives | failed | invalid | no plan | cost USD | skill version | scorer | corpus |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 2026-09-10T17:36:37Z | run | bench/results/20260910-173637 | sonnet | 18 | 31 | 29 | 0.94 | 29 | 0.94 | 0 | 0 | 0 | 0 | 17.884 | 0.3.4 | fcb4ce6 | sha256:cca548cb8aad9c02 |
