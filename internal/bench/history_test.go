@@ -92,3 +92,52 @@ func TestRescoreRowIsMarkedAndCostsNothing(t *testing.T) {
 		t.Fatalf("the header must say caught can exceed reported: %s", md)
 	}
 }
+
+// Two rescores of one run can disagree when the scoring rules change between them. A row that
+// does not say which build produced it turns that into a contradiction nobody can resolve.
+func TestEveryRowRecordsTheScorerThatProducedIt(t *testing.T) {
+	dir := t.TempDir()
+	run := HistoryEntry{TS: "t0", Out: "r1", Model: "m", Cases: 1, Defects: 4, Found: 2, Caught: 2, SkillVersion: "3.1"}
+	if err := AppendHistory(dir, run); err != nil {
+		t.Fatal(err)
+	}
+	rescore := HistoryEntry{TS: "t1", Out: "r1/rescored", Model: "m", Cases: 1, Defects: 4, Found: 2, Caught: 3, SkillVersion: "3.1", Kind: KindRescore, RunTS: "t0", SourceRun: "r1"}
+	if err := AppendHistory(dir, rescore); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(filepath.Join(dir, "history.jsonl"))
+	for i, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		var e HistoryEntry
+		if err := json.Unmarshal([]byte(line), &e); err != nil {
+			t.Fatal(err)
+		}
+		if e.Scorer == "" {
+			t.Fatalf("row %d records no scorer: %s", i+1, line)
+		}
+	}
+	md, _ := os.ReadFile(filepath.Join(dir, "history.md"))
+	if !strings.Contains(string(md), "| scorer |") {
+		t.Fatalf("the markdown table must carry the scorer column: %s", md)
+	}
+	if !strings.Contains(string(md), "supersedes") {
+		t.Fatalf("the intro must say a later rescore supersedes an earlier one: %s", md)
+	}
+}
+
+// An explicit scorer is kept as given, so a row can be attributed to the build it came from.
+func TestScorerCanBeStated(t *testing.T) {
+	dir := t.TempDir()
+	if err := AppendHistory(dir, HistoryEntry{TS: "t", Out: "o", Model: "m", Scorer: "abc1234"}); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(filepath.Join(dir, "history.jsonl"))
+	if !strings.Contains(string(data), `"scorer":"abc1234"`) {
+		t.Fatalf("scorer not kept: %s", data)
+	}
+}
+
+func TestScorerRevisionIsNeverEmpty(t *testing.T) {
+	if scorerRevision() == "" {
+		t.Fatal("a row must always be attributable to something, even outside a repository")
+	}
+}
