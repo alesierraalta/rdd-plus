@@ -10,10 +10,14 @@ import (
 	"github.com/alesierraalta/rdd-plus/internal/assets"
 )
 
+// CredentialsFile is the only piece of the operator's configuration a benchmark run needs: the
+// agent cannot log in without it.
+const CredentialsFile = ".credentials.json"
+
 // WriteBenchConfig builds a Claude configuration directory holding the embedded skills and
 // nothing else. A benchmark case must measure the testing skills, not the operator's global
 // instructions, memory protocol, or MCP servers, which cost turns and vary between machines.
-func WriteBenchConfig(dir string) error {
+func WriteBenchConfig(dir, credentialsFrom string) error {
 	skills := filepath.Join(dir, "skills")
 	if err := os.RemoveAll(skills); err != nil {
 		return err
@@ -42,7 +46,17 @@ func WriteBenchConfig(dir string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, "settings.json"), append(settings, '\n'), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, "settings.json"), append(settings, '\n'), 0o644); err != nil {
+		return err
+	}
+	// Linked, never copied: the token stays in one place, and a refresh writes through to it.
+	src := filepath.Join(credentialsFrom, CredentialsFile)
+	if _, err := os.Stat(src); err != nil {
+		return nil
+	}
+	link := filepath.Join(dir, CredentialsFile)
+	_ = os.Remove(link)
+	return os.Symlink(src, link)
 }
 
 // agentEnv returns the environment for the agent process: CLAUDE_CONFIG_DIR set to cfgDir,

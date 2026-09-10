@@ -217,7 +217,7 @@ func runBenchRun(args []string) int {
 		// A throwaway configuration holding only the embedded skills, so the run measures them
 		// and not the operator's global instructions, memory protocol, or MCP servers.
 		cfgDir = filepath.Join(*benchDir, ".agent-config")
-		if err := bench.WriteBenchConfig(cfgDir); err != nil {
+		if err := bench.WriteBenchConfig(cfgDir, defaultConfigDir()); err != nil {
 			fmt.Fprintln(os.Stderr, "bench config:", err)
 			return 1
 		}

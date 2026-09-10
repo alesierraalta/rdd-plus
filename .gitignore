@@ -8,3 +8,6 @@ bench/results/
 bench/**/ws/
 # Local Pi runtime state
 .atl/
+
+# Throwaway Claude config the benchmark builds; holds a symlink to the operator credentials.
+bench/.agent-config/

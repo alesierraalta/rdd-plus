@@ -11,8 +11,15 @@ import (
 // configuration makes a session do. The agent runs against a config directory the run owns.
 func TestMinimalConfigHoldsTheSkillsAndNothingElse(t *testing.T) {
 	dir := t.TempDir()
+	real := filepath.Join(dir, "real")
+	if err := os.MkdirAll(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(real, CredentialsFile), []byte(`{"token":"x"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	cfg := filepath.Join(dir, "cfg")
-	if err := WriteBenchConfig(cfg); err != nil {
+	if err := WriteBenchConfig(cfg, real); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(cfg, "skills", "test-strategy", "SKILL.md")); err != nil {
@@ -29,6 +36,31 @@ func TestMinimalConfigHoldsTheSkillsAndNothingElse(t *testing.T) {
 		if strings.Contains(string(data), unwanted) {
 			t.Fatalf("settings must carry no %s: %s", unwanted, data)
 		}
+	}
+	// Without the operator's credentials the agent cannot log in and every case fails at once.
+	link := filepath.Join(cfg, CredentialsFile)
+	target, err := os.Readlink(link)
+	if err != nil {
+		t.Fatalf("credentials must be linked, not copied: %v", err)
+	}
+	if target != filepath.Join(real, CredentialsFile) {
+		t.Fatalf("credentials link points at %q", target)
+	}
+	got, err := os.ReadFile(link)
+	if err != nil || string(got) != `{"token":"x"}` {
+		t.Fatalf("credentials unreadable through the link: %v %s", err, got)
+	}
+}
+
+// A config directory built with no credentials to link is still usable; it simply cannot log in,
+// which the run reports as a failed case rather than a recall of zero.
+func TestBenchConfigWithoutCredentials(t *testing.T) {
+	cfg := filepath.Join(t.TempDir(), "cfg")
+	if err := WriteBenchConfig(cfg, filepath.Join(t.TempDir(), "absent")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(cfg, CredentialsFile)); !os.IsNotExist(err) {
+		t.Fatal("nothing to link, so nothing must be created")
 	}
 }
 
