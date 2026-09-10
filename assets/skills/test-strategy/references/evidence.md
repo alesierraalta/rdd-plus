@@ -29,6 +29,11 @@ findings. This contract applies to every testing skill routed by `test-strategy`
    decorative-suite finding, not a pass.
 5. **Never paraphrase output; quote it.** Trim, do not rewrite.
 6. **Never report a defect from reading alone.** If it was not executed, it is `razonado`.
+7. **The probe must survive as a test.** A probe that lived only in the scratchpad is gone when
+   the session ends: nobody can re-run it, and the next change cannot break it visibly. Every
+   `observado` defect names the promoted test (suite path and test name) whose outcome flips
+   with the fix, and the evidence row records both runs. A test green with and without the fix
+   pins nothing; it is a decoration with a defect's name on it.
 
 ## Record template
 

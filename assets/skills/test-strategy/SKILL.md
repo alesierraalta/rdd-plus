@@ -4,7 +4,7 @@ description: "Trigger: haz el testing, testea esto, prueba esto, test this, test
 license: Apache-2.0
 metadata:
   author: gentleman-programming
-  version: "3.1"
+  version: "3.2"
   scope: [common]
   auto_invoke: "Any request to test something: infer scope and mode from repo state, build or resume the persisted plan, execute it through specialized testing skills"
 ---
@@ -50,6 +50,11 @@ This skill decides WHICH targets and routes; siblings do the work.
     statuses of this run. A finding that exists only in chat does not exist: the next run cannot
     honor its verdict, and nobody can re-score it. Asking the user whether to fix something never
     replaces writing the finding first.
+13. **Every confirmed finding leaves a pinning test in the suite.** A probe in the scratchpad
+    proves the defect once; a test in the repository's own suite proves it on every run. Promote
+    it through `no-excess-tests`, name it in the finding row, and record that it is RED without
+    the fix and GREEN with it. A test that passes both ways pins nothing, whatever it is called.
+    A finding whose probe was never promoted stays `open`, reason `not pinned`.
 
 ## Decision Gates
 
@@ -103,7 +108,9 @@ main, the test runner. Pick mode and scope from the state table; state the infer
 2. Sandbox: throwaway worktree or ephemeral container; environment proof; probes in scratchpad
    or gitignored `testLocales/`.
 3. Invoke the assigned sibling; it climbs to the target rung without reduction.
-4. Promote probes through `no-excess-tests`.
+4. Promote the reddening probe into the suite through `no-excess-tests`, then run it twice:
+   RED with the defect present, GREEN with the minimal fix or the mutation reverted. Those two
+   runs are one evidence row, and the test's identity goes in the finding (rule 13).
 5. Update the plan: row status, rung, evidence ledger, findings, testability blocks with the
    minimal change that opens them. Write the file, then report the delta (rule 12).
 
@@ -112,7 +119,8 @@ main, the test runner. Pick mode and scope from the state table; state the infer
 Return: inferred mode and scope (one line); plan path and delta; ranked table; layer matrix;
 not-testing list; routing ledger (per sibling: `contributed rows` / `invoked` / `skipped` +
 reason; assigned-but-never-invoked is an open gap); evidence ledger; findings with verdicts and
-precision; execution ratio (done / rows excluding `n/a`) and the ordered remainder.
+precision, each confirmed one naming its pinning test; execution ratio (done / rows excluding
+`n/a`) and the ordered remainder.
 
 ## References
 
