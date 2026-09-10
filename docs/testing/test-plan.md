@@ -150,6 +150,9 @@ One row per `observado` conclusion (`references/evidence.md`). `razonado` items 
 
 ## Calibration history
 
+Skill versions before 2026-09-10 used the `3.N` scheme; the same releases are `0.3.N`
+(`3.0`…`3.4` ≡ `0.3.0`…`0.3.4`). Each row keeps the label it was recorded under.
+
 | Date | Skill version | K | Found | Recall | Misses (file:line operator, why) | False positives |
 |---|---|---|---|---|---|---|
 | 2026-09-10 | 3.3 (installed) | 27 planted defects, 15 cases, rescored with the same binary and corpus as the rows below | reported 17, pinned 17, caught by a test 24 | reported 0.63 · caught 0.89 | best catching so far and the worst reporting since 3.0: g03, n03 and n11 wrote their findings as prose sections instead of the template table, so nothing in those plans can be located; n02 named the symbol and its test, never the source file | 3 |

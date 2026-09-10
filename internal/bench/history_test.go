@@ -11,7 +11,7 @@ import (
 func TestAppendHistoryIsAdditive(t *testing.T) {
 	dir := t.TempDir()
 	for i, r := range []float64{0.5, 0.8} {
-		if err := AppendHistory(dir, HistoryEntry{TS: "t" + string(rune('0'+i)), Out: "o", Model: "m", Cases: 1, Defects: 4, Found: 2, Recall: r, SkillVersion: "3.0"}); err != nil {
+		if err := AppendHistory(dir, HistoryEntry{TS: "t" + string(rune('0'+i)), Out: "o", Model: "m", Cases: 1, Defects: 4, Found: 2, Recall: r, SkillVersion: "0.3.0"}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -34,10 +34,10 @@ func TestAppendHistoryIsAdditive(t *testing.T) {
 func TestSkillVersion(t *testing.T) {
 	dir := t.TempDir()
 	f := filepath.Join(dir, "SKILL.md")
-	if err := os.WriteFile(f, []byte("---\nname: test-strategy\nmetadata:\n  author: x\n  version: \"3.0\"\n---\n"), 0o644); err != nil {
+	if err := os.WriteFile(f, []byte("---\nname: test-strategy\nmetadata:\n  author: x\n  version: \"0.3.0\"\n---\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if got := SkillVersion(f); got != "3.0" {
+	if got := SkillVersion(f); got != "0.3.0" {
 		t.Fatalf("version = %q", got)
 	}
 	if got := SkillVersion(filepath.Join(dir, "missing.md")); got != "unknown" {
@@ -55,11 +55,11 @@ func TestSkillVersion(t *testing.T) {
 // Its row must say so, or a reader summing the cost column counts the same money twice.
 func TestRescoreRowIsMarkedAndCostsNothing(t *testing.T) {
 	dir := t.TempDir()
-	run := HistoryEntry{TS: "2026-01-01T00:00:00Z", Out: "r1", Model: "m", Cases: 2, Defects: 4, Found: 2, Recall: 0.5, Caught: 1, CostUSD: 3.5, SkillVersion: "3.0"}
+	run := HistoryEntry{TS: "2026-01-01T00:00:00Z", Out: "r1", Model: "m", Cases: 2, Defects: 4, Found: 2, Recall: 0.5, Caught: 1, CostUSD: 3.5, SkillVersion: "0.3.0"}
 	if err := AppendHistory(dir, run); err != nil {
 		t.Fatal(err)
 	}
-	rescore := HistoryEntry{TS: "2026-01-02T00:00:00Z", Out: "r1/rescored", Model: "m", Cases: 2, Defects: 4, Found: 2, Recall: 0.5, Caught: 3, RecallCaught: 0.75, CostUSD: 3.5, SkillVersion: "3.0", Kind: KindRescore, RunTS: run.TS, SourceRun: "r1"}
+	rescore := HistoryEntry{TS: "2026-01-02T00:00:00Z", Out: "r1/rescored", Model: "m", Cases: 2, Defects: 4, Found: 2, Recall: 0.5, Caught: 3, RecallCaught: 0.75, CostUSD: 3.5, SkillVersion: "0.3.0", Kind: KindRescore, RunTS: run.TS, SourceRun: "r1"}
 	if err := AppendHistory(dir, rescore); err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +81,7 @@ func TestRescoreRowIsMarkedAndCostsNothing(t *testing.T) {
 	if rows[1].CostUSD != 0 {
 		t.Fatalf("a rescore spends nothing, got $%.2f", rows[1].CostUSD)
 	}
-	if rows[1].SkillVersion != "3.0" {
+	if rows[1].SkillVersion != "0.3.0" {
 		t.Fatalf("a rescore keeps the skill version of the run it re-reads: %q", rows[1].SkillVersion)
 	}
 	md, _ := os.ReadFile(filepath.Join(dir, "history.md"))
@@ -97,11 +97,11 @@ func TestRescoreRowIsMarkedAndCostsNothing(t *testing.T) {
 // does not say which build produced it turns that into a contradiction nobody can resolve.
 func TestEveryRowRecordsTheScorerThatProducedIt(t *testing.T) {
 	dir := t.TempDir()
-	run := HistoryEntry{TS: "t0", Out: "r1", Model: "m", Cases: 1, Defects: 4, Found: 2, Caught: 2, SkillVersion: "3.1"}
+	run := HistoryEntry{TS: "t0", Out: "r1", Model: "m", Cases: 1, Defects: 4, Found: 2, Caught: 2, SkillVersion: "0.3.1"}
 	if err := AppendHistory(dir, run); err != nil {
 		t.Fatal(err)
 	}
-	rescore := HistoryEntry{TS: "t1", Out: "r1/rescored", Model: "m", Cases: 1, Defects: 4, Found: 2, Caught: 3, SkillVersion: "3.1", Kind: KindRescore, RunTS: "t0", SourceRun: "r1"}
+	rescore := HistoryEntry{TS: "t1", Out: "r1/rescored", Model: "m", Cases: 1, Defects: 4, Found: 2, Caught: 3, SkillVersion: "0.3.1", Kind: KindRescore, RunTS: "t0", SourceRun: "r1"}
 	if err := AppendHistory(dir, rescore); err != nil {
 		t.Fatal(err)
 	}

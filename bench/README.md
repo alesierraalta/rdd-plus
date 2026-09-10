@@ -132,6 +132,29 @@ A valid run that never wrote `docs/testing/test-plan.md` scores zero and is repo
 deliverable, which is a different failure from missing the defect. Runs where the agent did not
 complete are `FAILED`, excluded from recall, and make the command exit 3.
 
+### Skill versions in the history
+
+The history's `skill version` column records the `version` field of the installed `test-strategy`
+skill. Releases up to 3.4 were labelled `3.N`; the same lineage is written `0.3.N` from 2026-09-10
+onward (`3.0`…`3.4` ≡ `0.3.0`…`0.3.4`). Rows recorded under the old labels stay as they were
+written: the history is append-only, so a rename would rewrite evidence instead of adding to it.
+
+### The baseline
+
+A number is citable only together with its instrument: the corpus commit, the scorer build, the
+skill version, the model, and at least two runs per configuration. One run of a `+dirty` build is a
+reading, not a baseline, and `bench compare` refuses two runs whose case sets differ, so extending
+the corpus starts a new series instead of a delta.
+
+```
+git commit                      # a build from a dirty tree prints a warning and cannot be re-derived
+make build
+bin/rdd-plus bench run --cases '*' --runs 2 --model sonnet --agent-config bench --max-cost-usd 40
+```
+
+Eighteen cases at two runs each is roughly 36 agent runs; the last fifteen-case run cost $12.83, so
+the ceiling above stops the run just past where it would have spent what the corpus is worth.
+
 ## Rules
 
 - The key never travels into the workspace the agent sees. Only `fixture/` is copied.
