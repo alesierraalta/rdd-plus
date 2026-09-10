@@ -77,6 +77,7 @@ Rows are never removed by budget; budget changes order and status only.
 | 2026-09-09 | 5. CLI contract | L1 (manual) | none | none yet | E6 | automated test pending |
 | 2026-09-09 | 9. benchmark dataset | L2 | none | fixture suites (72 tests across 15 cases) | E8 | six triggers re-executed by me reproduce the keyed wrong output verbatim |
 | 2026-09-09 | 10. bench runner | L2 | UX: a bare `--cases "*"` matched nothing (pattern resolved against cwd); fixed to resolve bare names under `bench/cases` with a unit test | `internal/bench/*_test.go` (20) + `glob_test.go` (4) | E9 | |
+| 2026-09-10 | 9. benchmark dataset (18 cases, guarded-defect family added) | L2 | none | fixture suites green in all 18 cases (77 counted outcomes: one per Node test case, one package line per Go case) | E8, E22 | `bench run --cases '*' --dry-run --agent-config bench`: all 18 scaffold, every fixture suite green, $0; `TestCorpusShipsFixedVersions` and `TestCorpusSuitesAreGreenOnEveryVariant` pass on the 18. Triggers of the three new cases re-executed by me: n13 `clamp(15,0,10)` is 15 on the fixture and 10 on `fix/all`; n14 is 299/false on the fixture, 300/true on `fix/all`, and each `keep-D` retains exactly its own defect with its suite green; g04 `Expired(exactly ttl)` is true on the fixture, and `RUN_BOUNDARY_TESTS=1 go test ./...` is RED there and green on `fixture + fix/all` |
 
 ## Findings
 

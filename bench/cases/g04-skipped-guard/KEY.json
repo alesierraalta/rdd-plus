@@ -1,0 +1,7 @@
+{"id":"g04-skipped-guard","language":"go","suite":"go test ./...","surface":"library",
+ "defects":[
+  {"id":"D1","file":"session.go","line":7,"class":"inclusive-boundary","keywords":["expired","ttl","boundary","skip","guard"],
+   "description":"Expired compares elapsed time with >= instead of >, so a session exactly ttl old is reported expired though the contract says it is still valid for one more instant.",
+   "trigger":{"input":"Expired(t0, t0.Add(30*time.Minute), 30*time.Minute)","expected":"false","actual":"true"},
+   "why_missed":"The only test for this exact boundary calls t.Skip behind RUN_BOUNDARY_TESTS, an environment variable this suite never sets, so go test reports ok and the guard never actually runs."}
+ ]}

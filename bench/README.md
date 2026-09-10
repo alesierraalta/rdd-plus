@@ -166,8 +166,26 @@ complete are `FAILED`, excluded from recall, and make the command exit 3.
 | n10-order-state | node | state-machine | 2 | unreachable-state, state-machine |
 | n11-html-escape | node | library | 2 | injection, idempotence |
 | n12-path-normalize | node | http | 1 | path-traversal |
+| n13-vacuous-assert | node | library | 1 | boundary-clamp |
+| n14-protected-bug | node | library | 2 | rounding, off-by-one |
 | g01-inventory-reserve | go | library | 2 | data-race, off-by-one |
 | g02-config-merge | go | library | 2 | config-merge |
 | g03-batch-writer | go | worker | 2 | data-loss, error-reporting |
+| g04-skipped-guard | go | library | 1 | inclusive-boundary |
 
-Twenty-seven defects across fifteen cases.
+Thirty-one defects across eighteen cases.
+
+### The guarded-defect family
+
+`n01` through `g03` all plant defects an unguarded happy path never reaches: the collision sits
+where no test looks. `n13-vacuous-assert`, `n14-protected-bug`, and `g04-skipped-guard` plant a
+different failure: a test does look, and is green anyway, for a reason that has nothing to do with
+correctness. `n13` names the exact behaviour in a test that asserts a property true of every
+return value. `n14` goes further: its first defect's test asserts the *defective* output as the
+expected value, so the green suite is not merely blind but actively pins the bug — a correct fix
+turns that test red, which is why `fix/all` and `fix/keep-D2` (D1's function is corrected in both)
+also carry a corrected assertion, never just the source. `g04` gates its boundary test behind an
+environment variable this fixture never sets, so `go test` reports `ok` while the guard never runs.
+Finding these needs no new scoring machinery — the defect still lives in production code the
+scorer already locates by file and line — but it does mean an agent has to read what a green test
+actually proves instead of trusting that it was written to prove something.

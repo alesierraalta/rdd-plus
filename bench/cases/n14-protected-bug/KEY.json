@@ -1,0 +1,11 @@
+{"id":"n14-protected-bug","language":"node","suite":"node --test","surface":"library",
+ "defects":[
+  {"id":"D1","file":"src/pricing.js","line":4,"class":"rounding","keywords":["round","floor","discount","cent","half-up"],
+   "description":"applyPercentDiscount floors the discounted price instead of rounding it to the nearest cent, so a fractional cent of .5 or more is always dropped.",
+   "trigger":{"input":"applyPercentDiscount(333, 10)","expected":"300","actual":"299"},
+   "why_missed":"A test named for exactly this rounding behaviour hardcodes the floored result as the expected value, so the suite is green with the bug in place; only rewriting that assertion against the stated half-up contract turns it red."},
+  {"id":"D2","file":"src/pricing.js","line":9,"class":"off-by-one","keywords":["threshold","boundary","inclusive","shipping","equal"],
+   "description":"qualifiesForFreeShipping uses a strict greater-than comparison, so an order totaling exactly the threshold is denied free shipping though the contract promises it ships free.",
+   "trigger":{"input":"qualifiesForFreeShipping(5000, 5000)","expected":"true","actual":"false"},
+   "why_missed":"The suite checks an order clearly above and clearly below the threshold but never one exactly at it, so the boundary the contract calls out by name is never exercised."}
+ ]}
