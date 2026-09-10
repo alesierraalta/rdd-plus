@@ -47,6 +47,7 @@ func TestCLIContract(t *testing.T) {
 		{name: "plan with no subcommand exits 2", args: []string{"plan"}, wantExit: 2, wantOut: "usage: rdd-plus"},
 		{name: "plan with an unknown subcommand exits 2", args: []string{"plan", "bogus"}, wantExit: 2, wantOut: "usage: rdd-plus"},
 		{name: "plan check on a missing file exits 1", args: []string{"plan", "check", "--path", "/nonexistent/plan.md"}, wantExit: 1, wantOut: "plan check:"},
+		{name: "plan gaps on a missing file exits 1", args: []string{"plan", "gaps", "--path", "/nonexistent/plan.md"}, wantExit: 1, wantOut: "plan gaps:"},
 		// The gate is a hook: whatever it receives, it must not break the turn.
 		{name: "gate on empty stdin exits 0", args: []string{"gate"}, stdin: "", wantExit: 0},
 		{name: "gate on malformed stdin exits 0", args: []string{"gate"}, stdin: "{not json", wantExit: 0},
@@ -86,7 +87,7 @@ func asExit(err error, target *exec.ExitError) bool {
 
 // A usage text that does not list a command it accepts sends users to the wrong place.
 func TestUsageListsEveryBenchSubcommand(t *testing.T) {
-	for _, sub := range []string{"bench run", "bench score", "bench history", "bench compare", "bench rescore", "plan init", "plan check"} {
+	for _, sub := range []string{"bench run", "bench score", "bench history", "bench compare", "bench rescore", "plan init", "plan check", "plan gaps"} {
 		if !strings.Contains(usage, sub) {
 			t.Errorf("usage does not document %q", sub)
 		}

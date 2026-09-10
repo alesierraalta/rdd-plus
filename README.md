@@ -100,6 +100,27 @@ finding citing an evidence id that is not in the ledger, a settled finding that 
 test, and a `razonado` row sitting in the evidence ledger. It says nothing about whether the
 testing was good; it says the plan can be located, honoured, and re-scored.
 
+## The two questions at the Stop
+
+The gate asks one question when a session changed production source and never loaded the
+discipline: run it. It asks a different one when the discipline ran and stopped halfway.
+
+Covering a diff and reporting as though the surface were covered is the failure that survives
+every green check: the depth work succeeds, the breadth work is never started, and the summary
+reads as complete. The plan makes it detectable, because a layer the plan assigned carries an
+owner and a status: `Security | appsec-adversarial-auditor | ... | pending` after the run means
+assigned and never invoked.
+
+```
+rdd-plus plan gaps                # exit 1 and name every layer still owed, with its owner
+```
+
+At the Stop the same check runs by itself. The model is told which surfaces went unexamined and
+asked to say so plainly in its final message rather than let depth read as coverage, and the
+operator gets one line in their own terminal offering feedback on the run, so the offer does not
+depend on the model remembering to make it. It is a reminder, not an approval gate, and a
+`.no-testing-gate` file silences it.
+
 ## Benchmark
 
 `rdd-plus bench` measures whether the testing skill finds defects it was never told about. Each

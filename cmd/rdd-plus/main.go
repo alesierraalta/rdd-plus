@@ -28,7 +28,8 @@ commands:
   sync     install the embedded skills and wire the gate into settings.json
   doctor   report installed skills, the hook wiring, and optional capabilities
   bench    run the testing skill against sealed-key fixtures and score it (run | score | history)
-  plan     write the test-plan skeleton and check a plan against the contract (init | check)
+  plan     write the skeleton, check the contract, and name what breadth is still owed
+           (init | check | gaps)
   version  print the version
 
 flags shared by gate, sync, doctor:
@@ -44,6 +45,7 @@ bench compare <before-results> <after-results>
 bench rescore <results> [--bench-dir <dir>]
 plan init [--path docs/testing/test-plan.md] [--force]
 plan check [--path docs/testing/test-plan.md]
+plan gaps  [--path docs/testing/test-plan.md]
 `
 
 func defaultConfigDir() string {
@@ -154,6 +156,17 @@ func runPlan(args []string) int {
 		return 2
 	}
 	switch args[0] {
+	case "gaps":
+		g, err := plan.GapsInFile(*path)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "plan gaps:", err)
+			return 1
+		}
+		fmt.Print(g.Report())
+		if g.Any() {
+			return 1
+		}
+		return 0
 	case "init":
 		if err := plan.Init(*path, *force); err != nil {
 			fmt.Fprintln(os.Stderr, "plan init:", err)

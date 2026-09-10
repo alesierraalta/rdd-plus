@@ -3,6 +3,7 @@ package gate
 import (
 	"bufio"
 	"encoding/json"
+	"github.com/alesierraalta/rdd-plus/internal/plan"
 	"io"
 	"os"
 	"path/filepath"
@@ -55,6 +56,7 @@ type Deps struct {
 	Git            func(dir string, args ...string) (string, error)
 	Stat           func(path string) (os.FileInfo, error)
 	OpenTranscript func(path string) (io.ReadCloser, error)
+	ReadPlan       func(path string) (string, error)
 	Now            time.Time
 	WorkDir        string
 }
@@ -66,6 +68,7 @@ type Entry struct {
 	Repo          string   `json:"repo"`
 	ChangedSource int      `json:"changed_source"`
 	SkillsLoaded  []string `json:"skills_loaded"`
+	Audited       bool     `json:"audited,omitempty"`
 	Fired         bool     `json:"fired"`
 	Skipped       string   `json:"skipped,omitempty"`
 	OptedOut      bool     `json:"opted_out,omitempty"`
@@ -73,6 +76,7 @@ type Entry struct {
 
 type Result struct {
 	Fire   bool
+	Audit  bool // the discipline ran and left breadth owed; a different question, same Stop
 	Reason string
 	Files  []string
 	Entry  *Entry
@@ -323,6 +327,27 @@ func Decide(in Input, d Deps) Result {
 	res := Result{Fire: fire, Files: files, Entry: entry}
 	if fire {
 		res.Reason = BuildReason(files)
+		return res
+	}
+	// The discipline ran. The second question is whether it ran all the way: a layer assigned
+	// and never invoked leaves the report reading as coverage of a surface nobody examined.
+	if len(files) > 0 && !entry.OptedOut && isAdversarial(entry.SkillsLoaded) {
+		planPath := filepath.Join(root, plan.DefaultPath)
+		if body, err := readPlan(d, planPath); err == nil {
+			if gaps, err := plan.GapsIn(body); err == nil && gaps.Any() {
+				res.Audit = true
+				res.Reason = BuildAuditReason(plan.DefaultPath, gaps.Report())
+				entry.Audited = true
+			}
+		}
 	}
 	return res
+}
+
+func readPlan(d Deps, path string) (string, error) {
+	if d.ReadPlan != nil {
+		return d.ReadPlan(path)
+	}
+	body, err := os.ReadFile(path)
+	return string(body), err
 }

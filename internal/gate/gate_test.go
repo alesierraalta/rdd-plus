@@ -34,6 +34,8 @@ type fakeRepo struct {
 	optOut            bool
 	transcript        string
 	transcriptMissing bool
+	plan              string
+	planMissing       bool
 }
 
 func (f *fakeRepo) deps(now time.Time) Deps {
@@ -68,6 +70,12 @@ func (f *fakeRepo) deps(now time.Time) Deps {
 				return fakeInfo{name: filepath.Base(p), mod: mt}, nil
 			}
 			return nil, os.ErrNotExist
+		},
+		ReadPlan: func(string) (string, error) {
+			if f.planMissing || f.plan == "" {
+				return "", os.ErrNotExist
+			}
+			return f.plan, nil
 		},
 		OpenTranscript: func(string) (io.ReadCloser, error) {
 			if f.transcriptMissing {

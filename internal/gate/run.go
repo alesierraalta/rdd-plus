@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -73,16 +74,24 @@ func appendEntry(path string, e *Entry) {
 	_, _ = f.Write(append(line, '\n'))
 }
 
-func emit(w io.Writer, reason string) {
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	_ = enc.Encode(map[string]any{
+func emit(w io.Writer, reason string) { emitWith(w, reason, "") }
+
+// emitWith sends the reason to the model as context and, when there is one, a line the operator
+// reads in their own terminal: the offer of feedback must not depend on the model relaying it.
+func emitWith(w io.Writer, reason, userLine string) {
+	payload := map[string]any{
 		"hookSpecificOutput": map[string]string{
 			"hookEventName":     "Stop",
 			"additionalContext": reason,
 		},
-	})
+	}
+	if userLine != "" {
+		payload["systemMessage"] = userLine
+	}
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(payload)
 	_, _ = w.Write(bytes.TrimRight(buf.Bytes(), "\n"))
 }
 
@@ -108,8 +117,20 @@ func Run(stdin io.Reader, stdout io.Writer, logPath string, now time.Time) (code
 	if res.Entry != nil {
 		appendEntry(logPath, res.Entry)
 	}
-	if res.Fire {
+	switch {
+	case res.Fire:
 		emit(stdout, res.Reason)
+	case res.Audit:
+		emitWith(stdout, res.Reason, auditLine(res))
 	}
 	return 0
+}
+
+// auditLine is what the operator sees without the model saying anything.
+func auditLine(res Result) string {
+	n := strings.Count(res.Reason, "assigned and never invoked:")
+	if n == 0 {
+		return "rdd-plus: the testing plan still owes work. Want feedback on this run?"
+	}
+	return fmt.Sprintf("rdd-plus: %d layer(s) assigned and never invoked. Want feedback on this run?", n)
 }
