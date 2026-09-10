@@ -1,0 +1,1 @@
+{"ts":"2026-09-09T23:12:58Z","out":"bench/results/20260909-231258","model":"sonnet","cases":15,"defects":27,"found":10,"recall":0.37037037037037035,"false_positives":0,"cost_usd":4.7498249,"skill_version":"3.0"}

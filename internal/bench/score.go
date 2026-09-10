@@ -42,6 +42,8 @@ type Result struct {
 	Seconds              float64        `json:"seconds"`
 	Invalid              bool           `json:"invalid"`
 	InvalidReason        string         `json:"invalid_reason,omitempty"`
+	Failed               bool           `json:"failed"`
+	FailReason           string         `json:"fail_reason,omitempty"`
 	Suite                SuiteResult    `json:"suite"`
 	Workspace            string         `json:"workspace,omitempty"`
 }

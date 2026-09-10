@@ -6,3 +6,5 @@ __pycache__/
 .codegraph/
 bench/results/
 bench/**/ws/
+# Local Pi runtime state
+.atl/

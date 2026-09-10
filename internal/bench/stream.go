@@ -16,6 +16,9 @@ type AgentResult struct {
 	SessionID  string  `json:"session_id"`
 	ExitCode   int     `json:"exit_code"`
 	TimedOut   bool    `json:"timed_out"`
+	IsError    bool    `json:"is_error"`
+	ErrorText  string  `json:"error_text,omitempty"`
+	Raw        string  `json:"-"` // tail of the raw stream, written to agent.log for diagnosis
 }
 
 // ParseStream keeps the last "result" event of a stream-json transcript; every other line is
@@ -36,6 +39,8 @@ func ParseStream(r io.Reader) AgentResult {
 			Turns      int     `json:"num_turns"`
 			DurationMS int64   `json:"duration_ms"`
 			SessionID  string  `json:"session_id"`
+			IsError    bool    `json:"is_error"`
+			Subtype    string  `json:"subtype"`
 		}
 		if err := json.Unmarshal([]byte(line), &ev); err != nil {
 			continue
@@ -45,6 +50,11 @@ func ParseStream(r io.Reader) AgentResult {
 		}
 		if ev.Type == "result" {
 			out.Result, out.CostUSD, out.Turns, out.DurationMS = ev.Result, ev.CostUSD, ev.Turns, ev.DurationMS
+			// A result event can carry an error instead of an answer; the exit code alone does not say so.
+			if ev.IsError || strings.HasPrefix(ev.Subtype, "error") {
+				out.IsError = true
+				out.ErrorText = strings.TrimSpace(ev.Subtype + " " + ev.Result)
+			}
 			if ev.SessionID != "" {
 				out.SessionID = ev.SessionID
 			}

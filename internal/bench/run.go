@@ -32,7 +32,9 @@ type Options struct {
 	SkillFile    string // for the history's skill_version
 	DryRun       bool
 	Keep         bool
-	Agent        Agent // nil means the real claude CLI
+	Retries      int           // agent retries on infrastructure failures (exit status, error result)
+	RetryDelay   time.Duration // pause before a retry, so a rate limit has time to lift
+	Agent        Agent         // nil means the real claude CLI
 	Log          io.Writer
 }
 
@@ -52,6 +54,7 @@ type Aggregate struct {
 	FalsePositives int      `json:"false_positives"`
 	CostUSD        float64  `json:"cost_usd"`
 	Invalid        int      `json:"invalid"`
+	Failed         int      `json:"failed"` // agent did not run to completion; excluded from recall
 	CostCeilingHit bool     `json:"cost_ceiling_hit"`
 }
 
@@ -71,7 +74,11 @@ func Run(opts Options) (Aggregate, int) {
 	}
 	now := time.Now()
 	agg := Aggregate{TS: now.UTC().Format(time.RFC3339), Out: opts.Out, Model: opts.Model, DryRun: opts.DryRun}
-	caseDirs, err := listCases(resolveCasesGlob(opts.BenchDir, opts.CasesGlob))
+	var patterns []string
+	for _, g := range strings.Split(opts.CasesGlob, ",") {
+		patterns = append(patterns, resolveCasesGlob(opts.BenchDir, strings.TrimSpace(g)))
+	}
+	caseDirs, err := listCases(strings.Join(patterns, ","))
 	if err != nil || len(caseDirs) == 0 {
 		fmt.Fprintf(opts.Log, "no cases match %q\n", opts.CasesGlob)
 		return agg, 1
@@ -97,6 +104,8 @@ loop:
 			agg.CostUSD += res.CostUSD
 			if res.Invalid {
 				agg.Invalid++
+			} else if res.Failed {
+				agg.Failed++
 			} else {
 				agg.Defects += res.Total
 				agg.Found += res.Found
@@ -121,6 +130,7 @@ loop:
 		_ = AppendHistory(opts.BenchDir, HistoryEntry{
 			TS: agg.TS, Out: opts.Out, Model: opts.Model, Cases: len(caseDirs), Defects: agg.Defects,
 			Found: agg.Found, Recall: agg.Recall, FalsePositives: agg.FalsePositives, CostUSD: agg.CostUSD,
+			Failed: agg.Failed, Invalid: agg.Invalid,
 			SkillVersion: SkillVersion(opts.SkillFile),
 		})
 	}
@@ -147,21 +157,51 @@ func runOnce(caseDir string, key Key, run int, opts Options) Result {
 		res = merge(res, scored)
 		return finish(res, opts, false)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), opts.Timeout)
-	defer cancel()
 	started := time.Now()
-	ar, err := opts.Agent(ctx, ws, opts)
-	res.Seconds = time.Since(started).Seconds()
-	res.CostUSD, res.Turns = ar.CostUSD, ar.Turns
-	if ar.TimedOut {
-		res.Notes = append(res.Notes, "agent timed out")
+	var ar AgentResult
+	for attempt := 0; ; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), opts.Timeout)
+		ar, err = opts.Agent(ctx, ws, opts)
+		cancel()
+		res.CostUSD += ar.CostUSD
+		res.Turns += ar.Turns
+		writeAgentLog(filepath.Dir(ws), attempt, ar, err)
+		infra := err != nil || ar.IsError
+		if !infra || ar.TimedOut || attempt >= opts.Retries {
+			break
+		}
+		res.Notes = append(res.Notes, fmt.Sprintf("attempt %d failed, retrying after %s", attempt+1, opts.RetryDelay))
+		time.Sleep(opts.RetryDelay)
 	}
-	if err != nil {
-		res.Notes = append(res.Notes, "agent error: "+err.Error())
+	res.Seconds = time.Since(started).Seconds()
+	switch {
+	case ar.TimedOut:
+		res.Failed, res.FailReason = true, "agent timed out"
+	case err != nil:
+		res.Failed, res.FailReason = true, "agent error: "+err.Error()
+	case ar.IsError:
+		res.Failed, res.FailReason = true, "agent result is an error: "+tail(ar.ErrorText, 200)
+	}
+	if res.Failed {
+		// An agent that never ran is not a detection result; scoring it would read as recall 0.
+		res.Notes = append(res.Notes, res.FailReason)
+		return finish(res, opts, true)
 	}
 	res = merge(res, ScoreWorkspace(ws, key))
-	failed := err != nil || ar.TimedOut
-	return finish(res, opts, failed)
+	return finish(res, opts, res.Recall < 1) // misses keep their workspace so they can be classified
+}
+
+// writeAgentLog keeps the tail of each attempt's raw stream beside result.json.
+func writeAgentLog(dir string, attempt int, ar AgentResult, err error) {
+	var b strings.Builder
+	fmt.Fprintf(&b, "attempt %d exit_code=%d is_error=%v timed_out=%v err=%v\n", attempt+1, ar.ExitCode, ar.IsError, ar.TimedOut, err)
+	b.WriteString(ar.Raw)
+	b.WriteString("\n")
+	f, e := os.OpenFile(filepath.Join(dir, "agent.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if e == nil {
+		_, _ = f.WriteString(b.String())
+		_ = f.Close()
+	}
 }
 
 // merge keeps the run's bookkeeping fields and takes the scorer's fields.
@@ -169,6 +209,7 @@ func merge(res, scored Result) Result {
 	scored.Case, scored.Run, scored.Workspace = res.Case, res.Run, res.Workspace
 	scored.CostUSD, scored.Turns, scored.Seconds = res.CostUSD, res.Turns, res.Seconds
 	scored.Suite, scored.Invalid, scored.InvalidReason = res.Suite, res.Invalid, res.InvalidReason
+	scored.Failed, scored.FailReason = res.Failed, res.FailReason
 	scored.Notes = append(res.Notes, scored.Notes...)
 	return scored
 }
@@ -176,7 +217,7 @@ func merge(res, scored Result) Result {
 func finish(res Result, opts Options, keepWS bool) Result {
 	dir := filepath.Dir(res.Workspace)
 	writeJSON(filepath.Join(dir, "result.json"), res)
-	if !opts.Keep && !keepWS && !res.Invalid {
+	if !opts.Keep && !keepWS && !res.Invalid && !res.Failed {
 		_ = os.RemoveAll(res.Workspace)
 		res.Workspace = ""
 	}
@@ -186,6 +227,9 @@ func finish(res Result, opts Options, keepWS bool) Result {
 func invalidTag(r Result) string {
 	if r.Invalid {
 		return " INVALID: " + r.InvalidReason
+	}
+	if r.Failed {
+		return " FAILED: " + r.FailReason
 	}
 	return ""
 }
@@ -200,9 +244,13 @@ func resolveCasesGlob(benchDir, glob string) string {
 }
 
 func listCases(glob string) ([]string, error) {
-	matches, err := filepath.Glob(glob)
-	if err != nil {
-		return nil, err
+	var matches []string
+	for _, g := range strings.Split(glob, ",") {
+		m, err := filepath.Glob(strings.TrimSpace(g))
+		if err != nil {
+			return nil, err
+		}
+		matches = append(matches, m...)
 	}
 	var dirs []string
 	for _, m := range matches {
@@ -228,8 +276,8 @@ func writeJSON(path string, v any) {
 // Summary renders the aggregate as the markdown table written to summary.md.
 func Summary(agg Aggregate) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "# Bench %s\n\nModel: %s · cases: %d · defects: %d · found: %d · recall: %.2f · false positives: %d · cost: $%.3f",
-		agg.TS, agg.Model, len(agg.Cases), agg.Defects, agg.Found, agg.Recall, agg.FalsePositives, agg.CostUSD)
+	fmt.Fprintf(&b, "# Bench %s\n\nModel: %s · cases: %d · defects: %d · found: %d · recall: %.2f · false positives: %d · failed: %d · invalid: %d · cost: $%.3f",
+		agg.TS, agg.Model, len(agg.Cases), agg.Defects, agg.Found, agg.Recall, agg.FalsePositives, agg.Failed, agg.Invalid, agg.CostUSD)
 	if agg.DryRun {
 		b.WriteString(" · dry-run")
 	}
@@ -261,7 +309,8 @@ func claudeAgent(ctx context.Context, ws string, opts Options) (AgentResult, err
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	err := cmd.Run()
-	ar := ParseStream(&out)
+	ar := ParseStream(bytes.NewReader(out.Bytes()))
+	ar.Raw = tail(out.String(), 64*1024) + "\n--- stderr ---\n" + tail(errb.String(), 4*1024)
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		ar.TimedOut = true
 	}

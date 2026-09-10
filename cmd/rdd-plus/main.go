@@ -34,6 +34,7 @@ flags shared by gate, sync, doctor:
 
 bench run [--cases <glob>] [--model <m>] [--runs N] [--max-turns N] [--timeout 30m]
           [--max-cost-usd N] [--out <dir>] [--bench-dir <dir>] [--dry-run] [--keep]
+          [--retries N] [--retry-delay 60s]   (--cases accepts comma-separated patterns)
 bench score --case <dir> --workspace <ws>
 bench history [--bench-dir <dir>]
 `
@@ -150,6 +151,8 @@ func runBenchRun(args []string) int {
 	benchDir := fs.String("bench-dir", "bench", "benchmark directory holding history.jsonl and history.md")
 	dryRun := fs.Bool("dry-run", false, "scaffold and check fixtures, spawn no agent, write no history")
 	keep := fs.Bool("keep", false, "keep workspaces after scoring")
+	retries := fs.Int("retries", 1, "retries per case on infrastructure failures (exit status, error result)")
+	retryDelay := fs.Duration("retry-delay", 60*time.Second, "pause before a retry")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -160,7 +163,7 @@ func runBenchRun(args []string) int {
 		CasesGlob: *cases, Model: *model, Runs: *runs, MaxTurns: *maxTurns, Timeout: *timeout,
 		SuiteTimeout: *suiteTimeout, MaxCostUSD: *maxCost, Out: *out, BenchDir: *benchDir,
 		SkillFile: filepath.Join(defaultConfigDir(), "skills", "test-strategy", "SKILL.md"),
-		DryRun:    *dryRun, Keep: *keep, Log: os.Stdout,
+		DryRun:    *dryRun, Keep: *keep, Retries: *retries, RetryDelay: *retryDelay, Log: os.Stdout,
 	})
 	fmt.Printf("results: %s\n", filepath.Join(*out, "summary.md"))
 	return code
