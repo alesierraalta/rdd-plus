@@ -14,6 +14,7 @@ import (
 	"github.com/alesierraalta/rdd-plus/internal/bench"
 	"github.com/alesierraalta/rdd-plus/internal/doctor"
 	"github.com/alesierraalta/rdd-plus/internal/gate"
+	"github.com/alesierraalta/rdd-plus/internal/plan"
 	"github.com/alesierraalta/rdd-plus/internal/sync"
 )
 
@@ -27,6 +28,7 @@ commands:
   sync     install the embedded skills and wire the gate into settings.json
   doctor   report installed skills, the hook wiring, and optional capabilities
   bench    run the testing skill against sealed-key fixtures and score it (run | score | history)
+  plan     write the test-plan skeleton and check a plan against the contract (init | check)
   version  print the version
 
 flags shared by gate, sync, doctor:
@@ -39,6 +41,8 @@ bench score --case <dir> --workspace <ws>
 bench history [--bench-dir <dir>]
 bench compare <before-results> <after-results>
 bench rescore <results> [--bench-dir <dir>]
+plan init [--path docs/testing/test-plan.md] [--force]
+plan check [--path docs/testing/test-plan.md]
 `
 
 func defaultConfigDir() string {
@@ -63,6 +67,8 @@ func main() {
 		os.Exit(runDoctor(os.Args[2:]))
 	case "bench":
 		os.Exit(runBench(os.Args[2:]))
+	case "plan":
+		os.Exit(runPlan(os.Args[2:]))
 	case "version":
 		fmt.Println(Version)
 		os.Exit(0)
@@ -120,6 +126,45 @@ func runDoctor(args []string) int {
 		return 0
 	}
 	return 1
+}
+
+func runPlan(args []string) int {
+	if len(args) == 0 {
+		fmt.Fprint(os.Stderr, usage)
+		return 2
+	}
+	fs := flag.NewFlagSet("plan", flag.ContinueOnError)
+	path := fs.String("path", plan.DefaultPath, "plan file")
+	force := fs.Bool("force", false, "replace an existing plan (init only)")
+	if err := fs.Parse(args[1:]); err != nil {
+		return 2
+	}
+	switch args[0] {
+	case "init":
+		if err := plan.Init(*path, *force); err != nil {
+			fmt.Fprintln(os.Stderr, "plan init:", err)
+			return 1
+		}
+		fmt.Printf("wrote %s\n", *path)
+		return 0
+	case "check":
+		problems, err := plan.Check(*path)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "plan check:", err)
+			return 1
+		}
+		if len(problems) == 0 {
+			fmt.Printf("%s: well formed\n", *path)
+			return 0
+		}
+		for _, p := range problems {
+			fmt.Fprintf(os.Stderr, "%s: %s\n", *path, p)
+		}
+		return 1
+	default:
+		fmt.Fprint(os.Stderr, usage)
+		return 2
+	}
 }
 
 func runBench(args []string) int {

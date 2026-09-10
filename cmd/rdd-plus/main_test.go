@@ -44,6 +44,9 @@ func TestCLIContract(t *testing.T) {
 		{name: "bench rescore without a directory exits 2", args: []string{"bench", "rescore"}, wantExit: 2, wantOut: "one results directory"},
 		{name: "bench rescore on a missing directory exits 1", args: []string{"bench", "rescore", "/nonexistent"}, wantExit: 1, wantOut: "rescore:"},
 		{name: "an unknown flag on a subcommand exits 2", args: []string{"doctor", "--nope"}, wantExit: 2, wantOut: "flag provided but not defined"},
+		{name: "plan with no subcommand exits 2", args: []string{"plan"}, wantExit: 2, wantOut: "usage: rdd-plus"},
+		{name: "plan with an unknown subcommand exits 2", args: []string{"plan", "bogus"}, wantExit: 2, wantOut: "usage: rdd-plus"},
+		{name: "plan check on a missing file exits 1", args: []string{"plan", "check", "--path", "/nonexistent/plan.md"}, wantExit: 1, wantOut: "plan check:"},
 		// The gate is a hook: whatever it receives, it must not break the turn.
 		{name: "gate on empty stdin exits 0", args: []string{"gate"}, stdin: "", wantExit: 0},
 		{name: "gate on malformed stdin exits 0", args: []string{"gate"}, stdin: "{not json", wantExit: 0},
@@ -83,12 +86,12 @@ func asExit(err error, target *exec.ExitError) bool {
 
 // A usage text that does not list a command it accepts sends users to the wrong place.
 func TestUsageListsEveryBenchSubcommand(t *testing.T) {
-	for _, sub := range []string{"bench run", "bench score", "bench history", "bench compare", "bench rescore"} {
+	for _, sub := range []string{"bench run", "bench score", "bench history", "bench compare", "bench rescore", "plan init", "plan check"} {
 		if !strings.Contains(usage, sub) {
 			t.Errorf("usage does not document %q", sub)
 		}
 	}
-	for _, cmd := range []string{"gate", "sync", "doctor", "bench", "version"} {
+	for _, cmd := range []string{"gate", "sync", "doctor", "bench", "plan", "version"} {
 		if !strings.Contains(usage, "  "+cmd+" ") {
 			t.Errorf("usage does not document the %q command", cmd)
 		}

@@ -83,6 +83,23 @@ original Node hook when `node` and `~/.claude/hooks/testing-gate.mjs` are presen
   mutation before a finding is accepted), plan validation, and `status --next-transition` are the
   next binaries.
 
+## Plan
+
+The structure of `docs/testing/test-plan.md` is a contract, and deriving it from prose every
+session is where compliance goes wrong: in one 15-case benchmark, three runs wrote their findings
+as prose sections instead of the template's tables, and every one of those had never opened the
+template.
+
+```
+rdd-plus plan init                # write the skeleton, tables and all; never overwrites silently
+rdd-plus plan check               # exit 1 and name every breach of the contract
+```
+
+`check` reports a Findings section that is not a table, a finding that cites no `path:line`, a
+finding citing an evidence id that is not in the ledger, a settled finding that names no pinning
+test, and a `razonado` row sitting in the evidence ledger. It says nothing about whether the
+testing was good; it says the plan can be located, honoured, and re-scored.
+
 ## Benchmark
 
 `rdd-plus bench` measures whether the testing skill finds defects it was never told about. Each
