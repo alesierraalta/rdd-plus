@@ -60,6 +60,8 @@ type Aggregate struct {
 	NoPlan         int      `json:"no_plan"` // valid runs that never wrote docs/testing/test-plan.md; scored zero
 	CostCeilingHit bool     `json:"cost_ceiling_hit"`
 	RescoredFrom   string   `json:"rescored_from,omitempty"` // set when this aggregate re-reads another run with newer rules
+	RunTS          string   `json:"run_ts,omitempty"`        // rescore: when the run it re-reads happened
+	SkillVersion   string   `json:"skill_version,omitempty"` // rescore: the version that produced the run
 }
 
 // ExitCostCeiling is returned when the run stopped early because the cost ceiling was reached.
@@ -148,7 +150,7 @@ loop:
 			TS: agg.TS, Out: opts.Out, Model: opts.Model, Cases: len(caseDirs), Defects: agg.Defects,
 			Found: agg.Found, Recall: agg.Recall, Caught: agg.Caught, RecallCaught: agg.RecallCaught,
 			FalsePositives: agg.FalsePositives, CostUSD: agg.CostUSD,
-			Failed: agg.Failed, Invalid: agg.Invalid, NoPlan: agg.NoPlan,
+			Failed: agg.Failed, Invalid: agg.Invalid, NoPlan: agg.NoPlan, Kind: KindRun,
 			SkillVersion: SkillVersion(opts.SkillFile),
 		})
 	}

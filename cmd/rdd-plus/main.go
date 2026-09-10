@@ -226,8 +226,8 @@ func runBenchRescore(args []string) int {
 	_ = bench.AppendHistory(*benchDir, bench.HistoryEntry{
 		TS: agg.TS, Out: agg.Out, Model: agg.Model, Cases: len(agg.Cases), Defects: agg.Defects,
 		Found: agg.Found, Recall: agg.Recall, Caught: agg.Caught, RecallCaught: agg.RecallCaught,
-		FalsePositives: agg.FalsePositives, CostUSD: agg.CostUSD, Failed: agg.Failed, Invalid: agg.Invalid, NoPlan: agg.NoPlan,
-		SkillVersion: "rescore of " + results,
+		FalsePositives: agg.FalsePositives, Failed: agg.Failed, Invalid: agg.Invalid, NoPlan: agg.NoPlan,
+		Kind: bench.KindRescore, RunTS: agg.RunTS, SourceRun: results, SkillVersion: agg.SkillVersion,
 	})
 	fmt.Print(bench.Summary(agg))
 	return 0

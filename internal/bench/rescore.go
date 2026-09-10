@@ -1,9 +1,11 @@
 package bench
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -17,7 +19,8 @@ func Rescore(results string, lookup func(caseName string) (string, error), suite
 	if err != nil {
 		return orig, err
 	}
-	agg := Aggregate{TS: time.Now().UTC().Format(time.RFC3339), Out: filepath.Join(results, "rescored"), Model: orig.Model, RescoredFrom: results}
+	agg := Aggregate{TS: time.Now().UTC().Format(time.RFC3339), Out: filepath.Join(results, "rescored"), Model: orig.Model,
+		RescoredFrom: results, RunTS: orig.TS, SkillVersion: skillVersionOf(results)}
 	for _, old := range orig.Cases {
 		res := old
 		agg.CostUSD += old.CostUSD
@@ -67,4 +70,22 @@ func Rescore(results string, lookup func(caseName string) (string, error), suite
 	writeJSON(filepath.Join(agg.Out, "aggregate.json"), agg)
 	_ = os.WriteFile(filepath.Join(agg.Out, "summary.md"), []byte(Summary(agg)), 0o644)
 	return agg, nil
+}
+
+// skillVersionOf reads the skill version the history recorded for a results directory, so a
+// rescore row stays attributed to the version that produced the run.
+func skillVersionOf(results string) string {
+	for _, dir := range []string{filepath.Dir(filepath.Dir(results)), "bench"} {
+		data, err := os.ReadFile(filepath.Join(dir, "history.jsonl"))
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+			var e HistoryEntry
+			if json.Unmarshal([]byte(line), &e) == nil && e.Out == results && e.Kind != KindRescore {
+				return e.SkillVersion
+			}
+		}
+	}
+	return ""
 }
