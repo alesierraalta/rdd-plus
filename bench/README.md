@@ -90,6 +90,11 @@ are carried onto `fixture/` + `fix/all/` (they must be green there) and onto `fi
 in the summary, the aggregate, and the history. A run that reports a defect without a test that
 catches it, or catches it without reporting it, shows up as a gap between the two columns.
 
+A defect whose class names nondeterminism (`race`, `concurrency`, `timing`, `flaky`) has its
+variant run three times instead of once: one red attempt proves the test distinguishes it, while
+a green run proves nothing. Without that, g01's race scored 1 of 2 or 2 of 2 from the same
+workspace depending on the interleaving, even under `-race`.
+
 A test red on `fix/all` but green on `fix/keep-D` asserts the defective behaviour: it locks the
 bug in and goes red the moment someone fixes it. Those are counted as **inverted** and named in
 the run's notes, apart from tests that are simply red everywhere.

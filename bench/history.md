@@ -21,3 +21,6 @@ One row per `rdd-plus bench run`; never rewritten.
 | 2026-09-10T02:32:51Z | rescore of bench/results/20260910-023251 | bench/results/20260910-023251/rescored | sonnet | 15 | 27 | 15 | 0.56 | 20 | 0.74 | 1 | 0 | 0 | 6 | 0.000 | 3.0 |
 | 2026-09-10T09:56:29Z | rescore of bench/results/20260910-095629 | bench/results/20260910-095629/rescored | sonnet | 15 | 27 | 24 | 0.89 | 20 | 0.74 | 0 | 0 | 0 | 0 | 0.000 | 3.1 |
 | 2026-09-10T10:26:59Z | rescore of bench/results/20260910-102659 | bench/results/20260910-102659/rescored | sonnet | 15 | 27 | 26 | 0.96 | 22 | 0.81 | 0 | 0 | 0 | 0 | 0.000 | 3.2 |
+| 2026-09-10T02:32:51Z | rescore of bench/results/20260910-023251 | bench/results/20260910-023251/rescored | sonnet | 15 | 27 | 14 | 0.52 | 20 | 0.74 | 1 | 0 | 0 | 6 | 0.000 | 3.0 |
+| 2026-09-10T09:56:29Z | rescore of bench/results/20260910-095629 | bench/results/20260910-095629/rescored | sonnet | 15 | 27 | 22 | 0.81 | 19 | 0.70 | 0 | 0 | 0 | 0 | 0.000 | 3.1 |
+| 2026-09-10T10:26:59Z | rescore of bench/results/20260910-102659 | bench/results/20260910-102659/rescored | sonnet | 15 | 27 | 25 | 0.93 | 22 | 0.81 | 0 | 0 | 0 | 0 | 0.000 | 3.2 |

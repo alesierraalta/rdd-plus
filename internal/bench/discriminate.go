@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -26,6 +27,7 @@ type CatchResult struct {
 	InvertedBy    map[string][]string `json:"inverted_by,omitempty"` // defect id -> tests that assert its defective behaviour
 	Caught        map[string]bool     `json:"caught"`                // defect id -> caught
 	CaughtBy      map[string][]string `json:"caught_by,omitempty"`   // defect id -> tests green on fix/all and red on keep-<id>
+	Attempts      map[string]int      `json:"attempts,omitempty"`    // defect id -> how many times its variant was run
 	Notes         []string            `json:"notes,omitempty"`
 }
 
@@ -101,10 +103,37 @@ func Discriminate(caseDir, ws string, key Key, timeout time.Duration) CatchResul
 			res.Notes = append(res.Notes, fmt.Sprintf("%s: no fix/keep-%s directory; not checkable", d.ID, d.ID))
 			continue
 		}
-		onKeep, _, _, err := testsOn(fixture, overlay, ws, tests, key.Suite, timeout)
-		if err != nil {
-			res.Notes = append(res.Notes, d.ID+": "+err.Error())
+		// A defect that only manifests on an unlucky interleaving is not observed on every run:
+		// one red attempt proves the test can distinguish it, while a green run proves nothing.
+		attempts := attemptsForDefect(d)
+		if res.Attempts == nil {
+			res.Attempts = map[string]int{}
+		}
+		res.Attempts[d.ID] = attempts
+		redOnKeep, ranOnKeep := map[string]bool{}, map[string]bool{}
+		var lastErr error
+		for a := 0; a < attempts; a++ {
+			outcomes, _, _, err := testsOn(fixture, overlay, ws, tests, key.Suite, timeout)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			for name, passed := range outcomes {
+				ranOnKeep[name] = true
+				if !passed {
+					redOnKeep[name] = true
+				}
+			}
+		}
+		if len(ranOnKeep) == 0 {
+			if lastErr != nil {
+				res.Notes = append(res.Notes, d.ID+": "+lastErr.Error())
+			}
 			continue
+		}
+		onKeep := map[string]bool{}
+		for name := range ranOnKeep {
+			onKeep[name] = !redOnKeep[name]
 		}
 		for _, name := range trusted {
 			if passed, ran := onKeep[name]; ran && !passed {
@@ -229,4 +258,16 @@ func stage(fixture, overlay, ws string, tests []string) (string, error) {
 		}
 	}
 	return dir, nil
+}
+
+// attemptsForDefect says how many times a defect's variant is run before concluding that no test
+// distinguishes it. A race or a timing defect appears only on some interleavings.
+func attemptsForDefect(d Defect) int {
+	class := strings.ToLower(d.Class)
+	for _, marker := range []string{"race", "concurren", "timing", "flak"} {
+		if strings.Contains(class, marker) {
+			return 3
+		}
+	}
+	return 1
 }
