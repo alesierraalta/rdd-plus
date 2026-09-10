@@ -28,9 +28,9 @@ func TestCompareRuns(t *testing.T) {
 	after := writeAggregate(t, filepath.Join(t.TempDir(), "after"), Aggregate{
 		TS: "t2", Defects: 5, Found: 4, Caught: 4,
 		Cases: []Result{
-			{Case: "a", Total: 2, Found: 2, Caught: 2, PlanFound: true},
-			{Case: "b", Total: 2, Found: 2, Caught: 2, PlanFound: true},
-			{Case: "c", Total: 1, Found: 0, Caught: 0, PlanFound: false},
+			{Case: "a", Total: 2, Found: 2, Caught: 2, ClaimedPinned: 2, PlanFound: true, Catch: CatchResult{Checked: true, Notes: []string{"3 test(s) pin the defective behaviour"}}},
+			{Case: "b", Total: 2, Found: 2, Caught: 2, ClaimedPinned: 2, PlanFound: true},
+			{Case: "c", Total: 1, Found: 0, Caught: 0, ClaimedPinned: 0, PlanFound: false},
 		},
 	})
 	cmp, err := Compare(before, after)
@@ -48,7 +48,7 @@ func TestCompareRuns(t *testing.T) {
 		t.Fatalf("a case failed before and valid after must be flagged: %+v", c)
 	}
 	md := cmp.Markdown()
-	for _, want := range []string{"| a | 1/2 | 2/2 | 0/2 | 2/2 |", "| c | FAILED | 0/1 | FAILED | 0/1 | before did not run to completion; NO PLAN after |", "reported 2 → 4", "caught 1 → 4"} {
+	for _, want := range []string{"| a | 1/2 | 2/2 | 0/2 | 2/2 | 0/2 | 2/2 |", "| c | FAILED | 0/1 | FAILED | 0/1 | FAILED | 0/1 | before did not run to completion; NO PLAN after |", "reported 2 → 4", "caught 1 → 4", "3 test(s) pin the defect"} {
 		if !strings.Contains(md, want) {
 			t.Fatalf("markdown missing %q:\n%s", want, md)
 		}

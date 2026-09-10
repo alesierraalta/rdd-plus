@@ -74,10 +74,10 @@ func readAggregate(dir string) (Aggregate, error) {
 func (c Comparison) Markdown() string {
 	var w strings.Builder
 	fmt.Fprintf(&w, "# Compare %s → %s\n\n", c.Before.TS, c.After.TS)
-	fmt.Fprintf(&w, "Defects %d: reported %d → %d · caught %d → %d · false positives %d → %d · cost $%.3f → $%.3f\n\n",
-		c.After.Defects, c.Before.Found, c.After.Found, c.Before.Caught, c.After.Caught,
-		c.Before.FalsePositives, c.After.FalsePositives, c.Before.CostUSD, c.After.CostUSD)
-	w.WriteString("| case | reported before | reported after | caught before | caught after | note |\n|---|---|---|---|---|---|\n")
+	fmt.Fprintf(&w, "Defects %d: reported %d → %d · pinned %d → %d · caught %d → %d · false positives %d → %d · cost $%.3f → $%.3f\n\n",
+		c.After.Defects, c.Before.Found, c.After.Found, c.Before.ClaimedPinned, c.After.ClaimedPinned,
+		c.Before.Caught, c.After.Caught, c.Before.FalsePositives, c.After.FalsePositives, c.Before.CostUSD, c.After.CostUSD)
+	w.WriteString("| case | reported before | reported after | pinned before | pinned after | caught before | caught after | note |\n|---|---|---|---|---|---|---|---|\n")
 	for _, r := range c.Rows {
 		var notes []string
 		if r.OnlyAfterValid {
@@ -86,8 +86,10 @@ func (c Comparison) Markdown() string {
 		if !r.After.Failed && !r.After.Invalid && !r.After.PlanFound {
 			notes = append(notes, "NO PLAN after")
 		}
-		fmt.Fprintf(&w, "| %s | %s | %s | %s | %s | %s |\n", r.Case,
+		notes = append(notes, r.After.Catch.Notes...)
+		fmt.Fprintf(&w, "| %s | %s | %s | %s | %s | %s | %s | %s |\n", r.Case,
 			cell(r.Before, r.Before.Found), cell(r.After, r.After.Found),
+			cell(r.Before, r.Before.ClaimedPinned), cell(r.After, r.After.ClaimedPinned),
 			cell(r.Before, r.Before.Caught), cell(r.After, r.After.Caught), strings.Join(notes, "; "))
 	}
 	return w.String()
