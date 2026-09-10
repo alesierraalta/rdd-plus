@@ -140,3 +140,62 @@ func TestDoctorJSONShape(t *testing.T) {
 		t.Fatal("problems must serialize as an array, never null")
 	}
 }
+
+// A Stop hook that runs a standalone gate binary is a wired gate under another name, not a
+// missing gate: reporting "action required" for a working setup trains people to ignore doctor.
+func TestHookWiredRecognisesAStandaloneGateBinary(t *testing.T) {
+	cases := []struct {
+		name     string
+		command  string
+		wantKind string
+	}{
+		{"rdd-plus subcommand", `"/home/u/go/bin/rdd-plus" gate`, HookRddPlus},
+		{"rdd-plus with flags", `/home/u/go/bin/rdd-plus gate --config-dir /home/u/.claude`, HookRddPlus},
+		{"standalone binary", `"/home/u/.claude/hooks/bin/testing-gate"`, HookStandalone},
+		{"standalone node script", `node /home/u/.claude/hooks/testing-gate.mjs`, HookStandalone},
+		{"an unrelated hook", `gentle-ai review stop-hook --agent claude-code`, HookNone},
+		{"a command merely mentioning the word", `echo "run the gate later"`, HookNone},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			settings := `{"hooks":{"Stop":[{"matcher":"","hooks":[{"type":"command","command":` + jsonString(tc.command) + `}]}]}}`
+			if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte(settings), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			kind, cmd := hookWired(filepath.Join(dir, "settings.json"))
+			if kind != tc.wantKind {
+				t.Fatalf("kind = %q, want %q", kind, tc.wantKind)
+			}
+			if kind != HookNone && cmd != tc.command {
+				t.Fatalf("command = %q", cmd)
+			}
+		})
+	}
+}
+
+// Only a missing gate is a problem; a gate under another name is reported, not flagged.
+func TestStandaloneGateIsHealthyAndNamed(t *testing.T) {
+	dir := t.TempDir()
+	settings := `{"hooks":{"Stop":[{"matcher":"","hooks":[{"type":"command","command":"/h/.claude/hooks/bin/testing-gate"}]}]}}`
+	if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte(settings), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := Run(dir, func(string) (string, error) { return "/usr/bin/x", nil })
+	for _, p := range r.Problems {
+		if strings.Contains(p, "gate hook not wired") {
+			t.Fatalf("a wired standalone gate must not be a problem: %v", r.Problems)
+		}
+	}
+	if !r.HookWired || r.HookKind != HookStandalone {
+		t.Fatalf("wired = %v kind = %q", r.HookWired, r.HookKind)
+	}
+	if !strings.Contains(r.String(), "standalone gate binary") {
+		t.Fatalf("the report must name what is wired:\n%s", r.String())
+	}
+}
+
+func jsonString(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}

@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/alesierraalta/rdd-plus/internal/assets"
@@ -35,6 +36,7 @@ type Report struct {
 	ConfigDir    string        `json:"config_dir"`
 	Skills       []SkillStatus `json:"skills"`
 	HookWired    bool          `json:"hook_wired"`
+	HookKind     string        `json:"hook_kind"` // HookRddPlus, HookStandalone or HookNone
 	HookCommand  string        `json:"hook_command,omitempty"`
 	Capabilities []Capability  `json:"capabilities"`
 	Problems     []string      `json:"problems"`
@@ -68,7 +70,8 @@ func Run(cfgDir string, lookPath func(string) (string, error)) Report {
 			r.Problems = append(r.Problems, "skill not installed: "+name+" (run: rdd-plus sync)")
 		}
 	}
-	r.HookWired, r.HookCommand = hookWired(filepath.Join(cfgDir, "settings.json"))
+	r.HookKind, r.HookCommand = hookWired(filepath.Join(cfgDir, "settings.json"))
+	r.HookWired = r.HookKind != HookNone
 	if !r.HookWired {
 		r.Problems = append(r.Problems, "gate hook not wired in settings.json (run: rdd-plus sync)")
 	}
@@ -99,9 +102,12 @@ func (r Report) String() string {
 		fmt.Fprintf(&b, "  %-32s %s\n", s.Name, state)
 	}
 	fmt.Fprintf(&b, "\nhook\n")
-	if r.HookWired {
+	switch r.HookKind {
+	case HookRddPlus:
 		fmt.Fprintf(&b, "  Stop gate wired: %s\n", r.HookCommand)
-	} else {
+	case HookStandalone:
+		fmt.Fprintf(&b, "  Stop gate wired to a standalone gate binary: %s\n", r.HookCommand)
+	default:
 		fmt.Fprintf(&b, "  Stop gate NOT wired\n")
 	}
 	fmt.Fprintf(&b, "\ncapabilities\n")
@@ -151,14 +157,26 @@ func matches(skills fs.FS, name, target string) bool {
 }
 
 // hookWired reports whether any Stop hook command ends with " gate" and returns it.
-func hookWired(settingsPath string) (bool, string) {
+// What a Stop hook runs: this binary's own subcommand, a separately built gate, or nothing.
+const (
+	HookRddPlus    = "rdd-plus"
+	HookStandalone = "standalone"
+	HookNone       = "none"
+)
+
+// gateBinaryRe recognises a standalone build of the gate by the name it is installed under.
+var gateBinaryRe = regexp.MustCompile(`(^|[/\\"' ])testing-gate(\.mjs|\.js)?("|'|$|\s)`)
+
+// hookWired reports what the Stop hook runs. A gate installed under its own name counts: the
+// question is whether a gate runs at the Stop, not whether this binary is the one running it.
+func hookWired(settingsPath string) (string, string) {
 	raw, err := os.ReadFile(settingsPath)
 	if err != nil {
-		return false, ""
+		return HookNone, ""
 	}
 	var s map[string]any
 	if err := json.Unmarshal(raw, &s); err != nil {
-		return false, ""
+		return HookNone, ""
 	}
 	hooks, _ := s["hooks"].(map[string]any)
 	stop, _ := hooks["Stop"].([]any)
@@ -168,10 +186,18 @@ func hookWired(settingsPath string) (bool, string) {
 		for _, h := range list {
 			hook, _ := h.(map[string]any)
 			cmd, _ := hook["command"].(string)
-			if strings.HasSuffix(strings.TrimSpace(cmd), " gate") {
-				return true, cmd
+			trimmed := strings.TrimSpace(cmd)
+			if trimmed == "" {
+				continue
+			}
+			// "gate" counts only in the subcommand position, right after the executable.
+			if fields := strings.Fields(trimmed); len(fields) > 1 && fields[1] == "gate" {
+				return HookRddPlus, cmd
+			}
+			if gateBinaryRe.MatchString(trimmed) {
+				return HookStandalone, cmd
 			}
 		}
 	}
-	return false, ""
+	return HookNone, ""
 }
