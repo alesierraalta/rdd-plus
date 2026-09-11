@@ -20,15 +20,46 @@ import (
 // Prompt is the whole instruction the agent receives: the skill must infer everything else.
 const Prompt = "haz el testing"
 
+// Runners the bench can spawn. An empty Runner is the default: claude, so a run recorded before
+// the flag existed still names the runner it used.
+const (
+	RunnerClaude = "claude"
+	RunnerPi     = "pi"
+)
+
+// KnownRunner reports whether name selects a runner the bench can spawn; empty means the default.
+func KnownRunner(name string) bool {
+	return name == "" || name == RunnerClaude || name == RunnerPi
+}
+
+// DefaultModel is the model a runner uses when the operator does not name one: the free Pi model the
+// readings run on, and the cheapest Claude model for the last-resort alternative.
+func DefaultModel(runner string) string {
+	if runner == RunnerClaude {
+		return "haiku"
+	}
+	return "opencode/muse-spark-1.3-contributor-free"
+}
+
+// runnerAgent is the constructor a runner name selects. A test that sets Options.Agent bypasses
+// this entirely, so the bench suite never spawns either CLI.
+func runnerAgent(runner string) Agent {
+	if runner == RunnerPi {
+		return piAgent
+	}
+	return claudeAgent
+}
+
 // Options configures a benchmark run.
 type Options struct {
 	CasesGlob    string
 	Model        string
+	Runner       string // which CLI spawns the agent: RunnerClaude (default) or RunnerPi
 	Runs         int
 	MaxTurns     int
 	Timeout      time.Duration
 	SuiteTimeout time.Duration
-	ConfigDir    string  // Claude config directory for the agent; empty inherits the operator's
+	ConfigDir    string  // agent config directory (Claude config dir, or Pi agent dir); empty inherits the operator's
 	BinDir       string  // put first on the agent's PATH, so `rdd-plus plan init` is the build under test
 	Workers      int     // cases run side by side; below 1 means one at a time
 	MaxCostUSD   float64 // 0 means no ceiling
@@ -39,7 +70,7 @@ type Options struct {
 	Keep         bool
 	Retries      int           // agent retries on infrastructure failures (exit status, error result)
 	RetryDelay   time.Duration // pause before a retry, so a rate limit has time to lift
-	Agent        Agent         // nil means the real claude CLI
+	Agent        Agent         // nil means the selected runner's CLI
 	Log          io.Writer
 }
 
@@ -117,7 +148,7 @@ func Run(opts Options) (Aggregate, int) {
 		opts.Runs = 1
 	}
 	if opts.Agent == nil {
-		opts.Agent = claudeAgent
+		opts.Agent = runnerAgent(opts.Runner)
 	}
 	now := time.Now()
 	agg := Aggregate{TS: now.UTC().Format(time.RFC3339), Out: opts.Out, Model: opts.Model, DryRun: opts.DryRun}

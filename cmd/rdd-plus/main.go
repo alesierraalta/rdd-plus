@@ -42,10 +42,12 @@ commands:
 flags shared by gate, sync, doctor, feedback:
   --config-dir <dir>   Claude config directory (default: ~/.claude)
 
-bench run [--cases <glob>] [--model <m>] [--runs N] [--max-turns N] [--timeout 30m]
+bench run [--cases <glob>] [--runner pi|claude] [--model <m>] [--runs N] [--max-turns N] [--timeout 30m]
           [--max-cost-usd N] [--out <dir>] [--bench-dir <dir>] [--dry-run] [--keep]
           [--retries N] [--retry-delay 60s] [--agent-config bench|<dir>] [--concurrency N]
           (--cases accepts comma-separated patterns)
+          (--model is a name for claude and <provider>/<model>[:<thinking>] for pi; --runner pi
+           builds a throwaway agent dir under --out unless --agent-config names one)
 bench score --case <dir> --workspace <ws>
 bench history [--bench-dir <dir>]
 bench compare <before-results> <after-results>
@@ -345,7 +347,9 @@ func runBench(args []string) int {
 func runBenchRun(args []string) int {
 	fs := flag.NewFlagSet("bench run", flag.ContinueOnError)
 	cases := fs.String("cases", "bench/cases/*", "glob of case directories (each with fixture/ and KEY.json)")
-	model := fs.String("model", "sonnet", "model for the agent runs")
+	runner := fs.String("runner", bench.RunnerPi, "agent runner: pi (default) or claude (last resort)")
+	model := fs.String("model", "", "model for the agent runs; empty uses the runner's default ("+
+		bench.DefaultModel(bench.RunnerPi)+" for pi, "+bench.DefaultModel(bench.RunnerClaude)+" for claude)")
 	runs := fs.Int("runs", 1, "runs per case")
 	maxTurns := fs.Int("max-turns", 70, "agent turn cap per run")
 	timeout := fs.Duration("timeout", 30*time.Minute, "agent wall-clock cap per run")
@@ -358,15 +362,42 @@ func runBenchRun(args []string) int {
 	retries := fs.Int("retries", 1, "retries per case on infrastructure failures (exit status, error result)")
 	retryDelay := fs.Duration("retry-delay", 60*time.Second, "pause before a retry")
 	workers := fs.Int("concurrency", 1, "cases to run side by side; the wall clock shortens, the cost does not")
-	agentConfig := fs.String("agent-config", "", "Claude config directory for the agent; \"bench\" builds a throwaway one holding only the embedded skills")
+	agentConfig := fs.String("agent-config", "", "agent config directory; \"bench\" builds a throwaway one holding only the embedded skills (the default for --runner pi)")
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+	if !bench.KnownRunner(*runner) {
+		fmt.Fprintf(os.Stderr, "bench run: unknown runner %q: use %s or %s\n", *runner, bench.RunnerPi, bench.RunnerClaude)
+		return 2
+	}
+	if *model == "" {
+		*model = bench.DefaultModel(*runner)
 	}
 	if *out == "" {
 		*out = filepath.Join(*benchDir, "results", bench.Stamp(time.Now()))
 	}
 	cfgDir, skillFile := *agentConfig, filepath.Join(defaultConfigDir(), "skills", "test-strategy", "SKILL.md")
-	if cfgDir == "bench" {
+	switch {
+	case *runner == bench.RunnerPi && (cfgDir == "" || cfgDir == "bench"):
+		// A Pi run always gets a throwaway config: the runner exists so a reading is not shaped by
+		// the operator's packages, extensions, memory protocol, or MCP servers, and so no credential
+		// is shared by link. It is built under the results directory, which the run owns and git
+		// ignores, rather than beside the Claude one in bench/.
+		cfgDir = filepath.Join(*out, ".pi-agent-config")
+		from := bench.DefaultPiConfigDir()
+		if err := bench.WriteBenchPiConfig(cfgDir, from); err != nil {
+			fmt.Fprintln(os.Stderr, "bench config:", err)
+			return 1
+		}
+		if _, err := os.Stat(filepath.Join(from, bench.PiAuthFile)); err != nil {
+			// Nothing to copy and nothing to link: the run stays alive and reports the authentication
+			// failure itself, with the CLI's own message, instead of failing here for a wrong reason.
+			fmt.Fprintf(os.Stderr, "bench config: no %s in %s; the run will report the authentication error itself\n", bench.PiAuthFile, from)
+		}
+		if abs, err := filepath.Abs(cfgDir); err == nil {
+			cfgDir = abs
+		}
+	case cfgDir == "bench":
 		// A throwaway configuration holding only the embedded skills, so the run measures them
 		// and not the operator's global instructions, memory protocol, or MCP servers.
 		cfgDir = filepath.Join(*benchDir, ".agent-config")
@@ -382,7 +413,8 @@ func runBenchRun(args []string) int {
 		skillFile = filepath.Join(cfgDir, "skills", "test-strategy", "SKILL.md")
 	}
 	_, code := bench.Run(bench.Options{
-		CasesGlob: *cases, Model: *model, Runs: *runs, MaxTurns: *maxTurns, Timeout: *timeout,
+		CasesGlob: *cases, Model: *model, Runner: *runner, Runs: *runs, MaxTurns: *maxTurns,
+		Timeout:      *timeout,
 		SuiteTimeout: *suiteTimeout, MaxCostUSD: *maxCost, Out: *out, BenchDir: *benchDir,
 		SkillFile: skillFile,
 		ConfigDir: cfgDir, BinDir: selfDir(), Workers: *workers,

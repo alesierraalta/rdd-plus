@@ -236,6 +236,24 @@ identical fixtures. `--dry-run` scaffolds and checks fixtures without spawning o
 `--max-cost-usd` stops early with exit code 2; a run with any failed or invalid case exits 3, so a
 partial number is never read as a corpus result.
 
+The Pi runner (`--runner pi`, the default) measures the same cases with Pi itself:
+`pi -p "haz el testing" --mode json --model <provider>/<model>[:<thinking>] --no-session`, spawned in
+the workspace with `PI_CODING_AGENT_DIR` pointed at a throwaway agent directory. That directory holds
+the same embedded skills and a `settings.json` that loads no packages, so the operator's extensions,
+memory protocol, and MCP servers stay out of the reading. `--model` is optional: Pi defaults to
+`opencode/muse-spark-1.3-contributor-free`, while the `claude` runner takes a bare name and defaults
+to `haiku`. Pi has no turn cap, so `--timeout` is its only wall-clock limit. `--runner` defaults to
+`pi`; `claude` stays as the last-resort alternative for when Pi's providers are unavailable, and every
+reading already in the history still names the runner and the model it used.
+
+The Pi agent directory copies `auth.json` and `models-store.json`; it never links them. The Claude
+throwaway config linked the operator's credentials, and a refresh that failed wrote the empty token
+state straight through the link, logging the operator out of Claude Code everywhere (F25 in
+`docs/testing/test-plan.md`). A copy confines that failure to a file the run throws away, and a test
+holds the line: the copy is a regular file, not a link, and the source still holds its token
+afterwards. When the operator has no `auth.json`, the run is not stopped: it says so and lets the CLI
+report the authentication error itself, as a failed case.
+
 ## License
 
 Apache-2.0. See `LICENSE` and `NOTICE` for the attribution of the skills derived from the
