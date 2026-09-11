@@ -39,7 +39,8 @@ How each critical journey is driven for real (`real-run-validation`), so EXECUTE
 
 Statuses: pending · in progress · done · blocked · n/a. `plan gaps` counts a row as swept when its
 status cell reads `done`, `fixed` or `closed`, and drops `n/a`, `na`, `none` and `skipped` from the
-denominator entirely; the `Skill` cell only labels the rows still owed.
+denominator entirely; the `Skill` cell only labels the rows still owed. In a plan that declares
+`Light:`, every `n/a` row also states its reason in the `Scope` cell.
 
 ## Not testing, on purpose
 

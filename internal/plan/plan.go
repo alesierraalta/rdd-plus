@@ -50,6 +50,10 @@ var (
 	placeholder = regexp.MustCompile(`^(?i)(|-|—|n/?a|none|\(none\)|tbd)$`)
 	// A finding whose verdict asserts the defect is real owes a test that holds it.
 	settledStatus = regexp.MustCompile(`(?i)\b(confirmed|fixed)\b`)
+	// A scoped run declares itself in one plan-header line, `Light: <blast radius> · touches
+	// <classes>`. The declaration is the cheap half of the decision: a binary can read that the run
+	// said so, never that the change was really bounded.
+	lightHeader = regexp.MustCompile(`(?m)^\s*Light:`)
 )
 
 // Check reads a plan and returns everything that breaks the contract, most structural first.
@@ -111,7 +115,29 @@ func Check(path string) ([]string, error) {
 			problems = append(problems, fmt.Sprintf("finding %s is settled but names no pinning test", id))
 		}
 	}
+	if lightHeader.MatchString(doc) {
+		problems = append(problems, unscopedLayers(doc)...)
+	}
 	return problems, nil
+}
+
+// unscopedLayers enforces the one rule a `Light:` plan owes beyond the ordinary contract: a layer
+// the run left out states why in its `Scope` cell, in a sentence rather than a keyword. Without it
+// `Light:` is a label anyone can type, and the layer sweep's blind spot comes back unrecorded.
+func unscopedLayers(doc string) []string {
+	rows, header := table(section(doc, "Layer matrix"))
+	iStatus := columnIndex(header, "status")
+	iScope := columnIndex(header, "scope")
+	var problems []string
+	for _, row := range rows {
+		if !naStatus.MatchString(cell(row, iStatus)) {
+			continue
+		}
+		if cell(row, iScope) == "" {
+			problems = append(problems, fmt.Sprintf("layer %s is out of scope in a Light plan and its Scope cell is empty, so nothing records why it was left out", cell(row, 0)))
+		}
+	}
+	return problems
 }
 
 // section returns the body under "## <name>" up to the next level-2 heading.

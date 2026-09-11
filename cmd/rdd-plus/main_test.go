@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/alesierraalta/rdd-plus/internal/buildinfo"
 )
 
 // buildCLI compiles the command once per test binary; the contract under test is the process's,
@@ -198,7 +200,9 @@ func TestUsageListsEveryBenchSubcommand(t *testing.T) {
 }
 
 // The version command names the build: the release and the commit behind it. A bare literal
-// would say nothing about which build is installed, so the shape is the contract.
+// would say nothing about which build is installed, so the shape is the contract. The release is
+// derived from buildinfo.Version rather than repeated here: a version bump moves the binary and
+// the expectation together, so the suite documents the shape without pinning a number to bump.
 func TestVersionNamesTheBuild(t *testing.T) {
 	bin := buildCLI(t)
 	out, err := exec.Command(bin, "version").CombinedOutput()
@@ -206,7 +210,7 @@ func TestVersionNamesTheBuild(t *testing.T) {
 		t.Fatalf("version: %v\n%s", err, out)
 	}
 	got := strings.TrimSpace(string(out))
-	want := regexp.MustCompile(`^0\.3\.6 \(([0-9a-f]{7}(\+dirty)?|unknown)\)$`)
+	want := regexp.MustCompile("^" + regexp.QuoteMeta(buildinfo.Version) + ` \(([0-9a-f]{7}(\+dirty)?|unknown)\)$`)
 	if !want.MatchString(got) {
 		t.Fatalf("version printed %q, want %s", got, want)
 	}

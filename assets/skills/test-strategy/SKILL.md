@@ -4,8 +4,8 @@ description: "Trigger: haz el testing, testea esto, prueba esto, test this, test
 license: Apache-2.0
 metadata:
   author: gentleman-programming
-  version: "0.3.6"
-  requires_rdd_plus: "0.3.6"
+  version: "0.3.7"
+  requires_rdd_plus: "0.3.7"
   scope: [common]
   auto_invoke: "Any request to test something: infer scope and mode from repo state, build or resume the persisted plan, execute it through specialized testing skills"
 ---
@@ -23,7 +23,7 @@ This skill decides WHICH targets and routes; siblings do the work.
 
 ## Tooling
 
-This skill is written for `rdd-plus 0.3.6`, and `rdd-plus version` prints the build present.
+This skill is written for `rdd-plus 0.3.7`, and `rdd-plus version` prints the build present.
 Install it from the repository with `make build`, which writes `bin/rdd-plus`; put that on `PATH`,
 or use `go install github.com/alesierraalta/rdd-plus/cmd/rdd-plus@latest` once the module is
 published. Without the binary the run continues on documented fallbacks: `plan init` is replaced
@@ -92,7 +92,7 @@ reverse-engineered, and whether the method earned its keep — is recorded with
 
 | State found | Action |
 |---|---|
-| No `docs/testing/test-plan.md` | PLAN the whole app, then EXECUTE the first rows, same run |
+| No `docs/testing/test-plan.md` | PLAN the blast radius when the change is bounded (a scoped run), the whole app when it is not, then EXECUTE the first rows, same run |
 | Plan exists but predates the template (missing sections or `Baseline:`) | Migrate it: add the missing sections empty, record the baseline (`assets/fingerprint.sh`), treat the tree as changed, then EXECUTE |
 | Plan exists, fingerprint unchanged | EXECUTE from the first `pending` row |
 | Plan exists, files differ from the plan baseline | Refresh rows in that diff's blast radius, rank first, EXECUTE |
@@ -100,6 +100,21 @@ reverse-engineered, and whether the method earned its keep — is recorded with
 | User says "plan only" / "solo el plan" | PLAN, stop |
 | User says "calibra el testing" | CALIBRATE ([references/calibration.md](references/calibration.md)) |
 | Monorepo with several apps, none named | Ask one question: which app |
+
+**A bounded change runs scoped.** When the change is one target inside one or two files and touches
+none of the classes below, the first run may plan the blast radius instead of the whole app, and
+says so in the plan header: `Light: <blast radius> · touches <classes>`. Every layer the run did
+not touch keeps its row with status `n/a` and a reason in the `Scope` cell — `no persistence in the
+touched diff`, not `n/a` — and the "Not testing, on purpose" table names what a full run would
+have added. A scoped run executes exactly like any other: the target climbs to its target rung
+through its sibling, every confirmed finding leaves a pinning test and an evidence row, and the
+run closes on `rdd-plus plan check`.
+
+A scoped run is refused, and the change is planned in full, when it touches any of: authentication
+or authorization; secrets, credentials or PII; persistence, schema or migrations; money, rounding
+or totals; an existing public behaviour unless the change is additive. It is refused too when the
+diff is structural — renames, a moved package, a changed interface — or when a plan already covers
+that scope, in which case that plan is resumed.
 
 Scope: a diff means its blast radius first, closed by the regression gate (rule 9); a clean
 tree on main means the whole app. A scope may keep its own plan beside another scope's — for

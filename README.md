@@ -98,8 +98,18 @@ rdd-plus plan check               # exit 1 and name every breach of the contract
 
 `check` reports a Findings section that is not a table, a finding that cites no `path:line`, a
 finding citing an evidence id that is not in the ledger, a settled finding that names no pinning
-test, and a `razonado` row sitting in the evidence ledger. It says nothing about whether the
-testing was good; it says the plan can be located, honoured, and re-scored.
+test, a `razonado` row sitting in the evidence ledger, and an `n/a` layer row without a reason in
+its `Scope` cell when the plan declares `Light:`. It says nothing about whether the testing was
+good; it says the plan can be located, honoured, and re-scored.
+
+A plan may declare itself scoped. A bounded change — one target inside one or two files, touching
+none of the classes the skill's boundary list forbids — plans its blast radius instead of the whole
+app, and says so in one header line: `Light: <blast radius> · touches <classes>`. Every layer the
+run did not touch keeps its row with status `n/a` and states why in the `Scope` cell, and the "Not
+testing, on purpose" table names what a full run would have added. Execution is unchanged: the
+target climbs to its target rung through its sibling, every confirmed finding leaves a pinning test
+and an evidence row, and the run closes on `plan check`. The declaration is the half a binary can
+check; whether the change was really bounded stays with the run and the plan's reader.
 
 ## Hosts
 

@@ -125,6 +125,99 @@ func TestCheckNamesEveryContractBreach(t *testing.T) {
 	}
 }
 
+// scopedPlan is the smallest compliant plan with a layer matrix, so a test varies only the two
+// things the scoped-run rule reads: the `Light:` declaration and the reason a skipped layer carries.
+func scopedPlan(light, scope string) string {
+	return light +
+		"## Findings\n\n" +
+		"| Id | Finding | Severity | Data safe? | Evidence id | Pinning test | Status | Verdict by / date | Reason | Fingerprint |\n" +
+		"|---|---|---|---|---|---|---|---|---|---|\n\n" +
+		"## Layer matrix\n\n" +
+		"| Layer | Skill | Scope | Status |\n|---|---|---|---|\n" +
+		"| Persistence and migrations | `database-persistence-testing` | " + scope + " | n/a |\n"
+}
+
+const lightLine = "Light: cli flags · touches cli\n\n"
+
+// The cheap half of the scoped-run decision is the declaration, and this is the one breach it adds:
+// an `n/a` row in a plan that declares `Light:` has to say why the layer was left out. Whether the
+// change was really bounded stays with the operator and the plan's reader.
+func TestCheckLightPlanOwesAReasonForEverySkippedLayer(t *testing.T) {
+	cases := []struct {
+		name  string
+		light string
+		scope string
+		want  string // the layer the breach must name; empty means the plan passes
+	}{
+		{
+			name:  "a Light plan that skips a layer without a reason",
+			light: lightLine,
+			scope: "",
+			want:  "Persistence and migrations",
+		},
+		{
+			name:  "the same plan with a reason",
+			light: lightLine,
+			scope: "no persistence in the touched diff",
+		},
+		{
+			name:  "a plan with no Light line is checked as it always was",
+			light: "",
+			scope: "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := write(t, t.TempDir(), "plan.md", scopedPlan(tc.light, tc.scope))
+			problems, err := Check(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			joined := strings.Join(problems, "\n")
+			if tc.want == "" {
+				if len(problems) != 0 {
+					t.Fatalf("compliant plan rejected: %v", problems)
+				}
+				return
+			}
+			if !strings.Contains(joined, tc.want) {
+				t.Fatalf("problems = %v, want one naming %q", problems, tc.want)
+			}
+			if !strings.Contains(joined, "Scope") {
+				t.Fatalf("the breach must point at the Scope cell: %v", problems)
+			}
+		})
+	}
+}
+
+// `Light:` is a header line the plan owns, not a breach in itself: the shipped skeleton with the
+// line added is still compliant.
+func TestCheckAcceptsALightHeaderOnACompliantPlan(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "plan.md")
+	if err := Init(p, false); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scoped := strings.Replace(string(body), "Baseline:", lightLine+"Baseline:", 1)
+	if scoped == string(body) {
+		t.Fatal("the template header moved: the Light line was never placed")
+	}
+	if err := os.WriteFile(p, []byte(scoped), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	problems, err := Check(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(problems) != 0 {
+		t.Fatalf("a Light header broke a compliant plan: %v", problems)
+	}
+}
+
 func TestCheckOnAMissingFile(t *testing.T) {
 	if _, err := Check(filepath.Join(t.TempDir(), "nope.md")); err == nil {
 		t.Fatal("a missing plan must be an error, not a clean report")
