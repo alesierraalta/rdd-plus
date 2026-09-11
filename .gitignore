@@ -11,3 +11,6 @@ bench/**/ws/
 
 # Throwaway Claude config the benchmark builds; holds a symlink to the operator credentials.
 bench/.agent-config/
+
+# Harness state the gentle-ai sync writes into a project
+.pi/
