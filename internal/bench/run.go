@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -168,47 +169,101 @@ func Run(opts Options) (Aggregate, int) {
 		fmt.Fprintln(opts.Log, "out:", err)
 		return agg, 1
 	}
-	code := 0
-	var corpus []CorpusCase
-loop:
+	// Each case and each run of it is one unit. The pool runs them side by side and the pass below
+	// stays in unit order, so the report does not depend on which unit happened to finish first.
+	type unit struct {
+		caseDir string
+		key     Key
+		run     int
+		invalid bool
+		reason  string
+	}
+	var units []unit
 	for _, caseDir := range caseDirs {
 		key, err := LoadKey(caseDir)
-		name := filepath.Base(caseDir)
-		// A case whose run later fails or is invalid is still part of the corpus.
-		corpus = append(corpus, CorpusCase{Name: name, Defects: defectIDs(key)})
 		if err != nil {
-			fmt.Fprintf(opts.Log, "[%s] skipped: %v\n", name, err)
-			agg.Cases = append(agg.Cases, Result{Case: name, Invalid: true, InvalidReason: err.Error()})
-			agg.Invalid++
+			units = append(units, unit{caseDir: caseDir, invalid: true, reason: err.Error()})
 			continue
 		}
 		for run := 1; run <= opts.Runs; run++ {
-			res := runOnce(caseDir, key, run, opts)
+			units = append(units, unit{caseDir: caseDir, key: key, run: run})
+		}
+	}
+
+	// The ceiling is checked before a unit starts, so it stops launching work once it has been
+	// crossed while the units already in flight finish: a run can land just past it. A unit that
+	// never started leaves no hole, it is simply not part of the run.
+	var spentMu sync.Mutex
+	spent := 0.0
+	underCeiling := func() bool {
+		if opts.MaxCostUSD <= 0 {
+			return true
+		}
+		spentMu.Lock()
+		defer spentMu.Unlock()
+		return spent < opts.MaxCostUSD
+	}
+	skipped := make([]bool, len(units))
+	results := schedule(units, opts.Workers, func(i int, u unit) Result {
+		if u.invalid {
+			return Result{Case: filepath.Base(u.caseDir), Invalid: true, InvalidReason: u.reason}
+		}
+		if !underCeiling() {
+			skipped[i] = true
+			return Result{}
+		}
+		res := runOnce(u.caseDir, u.key, u.run, opts)
+		spentMu.Lock()
+		spent += res.CostUSD
+		spentMu.Unlock()
+		return res
+	})
+
+	code := 0
+	var corpus []CorpusCase
+	inCorpus := map[string]bool{}
+	for i, u := range units {
+		if skipped[i] {
+			continue
+		}
+		name := filepath.Base(u.caseDir)
+		// A case whose run later fails or is invalid is still part of the corpus.
+		if !inCorpus[name] {
+			inCorpus[name] = true
+			corpus = append(corpus, CorpusCase{Name: name, Defects: defectIDs(u.key)})
+		}
+		res := results[i]
+		if u.invalid {
+			fmt.Fprintf(opts.Log, "[%s] skipped: %v\n", name, u.reason)
 			agg.Cases = append(agg.Cases, res)
-			agg.CostUSD += res.CostUSD
-			if res.Invalid {
-				agg.Invalid++
-			} else if res.Failed {
-				agg.Failed++
-			} else {
-				agg.Defects += res.Total
-				agg.Found += res.Found
-				agg.Caught += res.Caught
-				agg.ClaimedPinned += res.ClaimedPinned
-				agg.FalsePositives += res.FalsePositives
-				if !res.PlanFound {
-					agg.NoPlan++
-				}
-			}
-			fmt.Fprintf(opts.Log, "[%s #%d] reported %d/%d pinned %d caught %d/%d fp %d cost $%.3f turns %d%s%s\n",
-				name, run, res.Found, res.Total, res.ClaimedPinned, res.Caught, res.Total, res.FalsePositives, res.CostUSD, res.Turns, invalidTag(res), noPlanTag(res))
-			if opts.MaxCostUSD > 0 && agg.CostUSD >= opts.MaxCostUSD {
-				agg.CostCeilingHit = true
-				code = ExitCostCeiling
-				fmt.Fprintf(opts.Log, "cost ceiling $%.2f reached; stopping\n", opts.MaxCostUSD)
-				break loop
+			agg.Invalid++
+			continue
+		}
+		agg.Cases = append(agg.Cases, res)
+		agg.CostUSD += res.CostUSD
+		if res.Invalid {
+			agg.Invalid++
+		} else if res.Failed {
+			agg.Failed++
+		} else {
+			agg.Defects += res.Total
+			agg.Found += res.Found
+			agg.Caught += res.Caught
+			agg.ClaimedPinned += res.ClaimedPinned
+			agg.FalsePositives += res.FalsePositives
+			if !res.PlanFound {
+				agg.NoPlan++
 			}
 		}
+		fmt.Fprintf(opts.Log, "[%s #%d] reported %d/%d pinned %d caught %d/%d fp %d cost $%.3f turns %d%s%s\n",
+			name, u.run, res.Found, res.Total, res.ClaimedPinned, res.Caught, res.Total, res.FalsePositives, res.CostUSD, res.Turns, invalidTag(res), noPlanTag(res))
+		if opts.MaxCostUSD > 0 && agg.CostUSD >= opts.MaxCostUSD {
+			agg.CostCeilingHit = true
+			code = ExitCostCeiling
+		}
+	}
+	if agg.CostCeilingHit {
+		fmt.Fprintf(opts.Log, "cost ceiling $%.2f reached; stopping\n", opts.MaxCostUSD)
 	}
 	if agg.Defects > 0 {
 		agg.Recall = float64(agg.Found) / float64(agg.Defects)
