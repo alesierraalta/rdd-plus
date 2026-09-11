@@ -1,6 +1,7 @@
 package bench
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -174,6 +175,67 @@ func TestRunCostCeilingStopsLaunchingMoreCases(t *testing.T) {
 	}
 	if agg.CostUSD < 1.00 {
 		t.Fatalf("cost %v, want the in-flight units counted past the ceiling", agg.CostUSD)
+	}
+}
+
+// syncBuffer is a log sink safe to read while the run is still writing to it.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
+// A run must say what finished while it is still running: the aggregate is ordered by case, but the
+// log is progress, and silence until the end hides a corpus that stalled on its first case.
+func TestRunLogsEachCaseAsItFinishes(t *testing.T) {
+	requireNodeAndGit(t)
+	root := t.TempDir()
+	var globs []string
+	for _, name := range []string{"case-a", "case-b", "case-c"} {
+		globs = append(globs, fakeCaseNamed(t, root, name))
+	}
+	release := make(chan struct{})
+	agent := func(ctx context.Context, ws string, opts Options) (AgentResult, error) {
+		if strings.Contains(ws, "case-c") {
+			// Hold the last case open until the test has seen the other two lines.
+			<-release
+		}
+		return AgentResult{Result: "nothing found", CostUSD: 0.01, Turns: 2}, nil
+	}
+	log := &syncBuffer{}
+	done := make(chan Aggregate, 1)
+	go func() {
+		agg, _ := Run(Options{CasesGlob: strings.Join(globs, ","), Runs: 1, Workers: 3, Timeout: time.Minute, SuiteTimeout: time.Minute, Out: t.TempDir(), BenchDir: t.TempDir(), Agent: agent, Log: log})
+		done <- agg
+	}()
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		if seen := log.String(); strings.Contains(seen, "case-a") && strings.Contains(seen, "case-b") {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	seen := log.String()
+	close(release)
+	agg := <-done
+	for _, name := range []string{"case-a", "case-b"} {
+		if !strings.Contains(seen, name) {
+			t.Fatalf("the log said nothing about %s while it had already finished; it was:\n%s", name, seen)
+		}
+	}
+	if len(agg.Cases) != 3 {
+		t.Fatalf("%d cases in the aggregate, want 3", len(agg.Cases))
 	}
 }
 

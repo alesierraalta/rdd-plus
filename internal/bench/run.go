@@ -204,15 +204,28 @@ func Run(opts Options) (Aggregate, int) {
 		return spent < opts.MaxCostUSD
 	}
 	skipped := make([]bool, len(units))
+	// The log is progress: a unit says what it found the moment it finishes, in completion order. The
+	// pass below is the opposite and stays in unit order, so the report cannot depend on who was
+	// first. The mutex keeps two workers from interleaving halves of a line.
+	var logMu sync.Mutex
+	logf := func(format string, args ...any) {
+		logMu.Lock()
+		defer logMu.Unlock()
+		fmt.Fprintf(opts.Log, format, args...)
+	}
 	results := schedule(units, opts.Workers, func(i int, u unit) Result {
+		name := filepath.Base(u.caseDir)
 		if u.invalid {
-			return Result{Case: filepath.Base(u.caseDir), Invalid: true, InvalidReason: u.reason}
+			logf("[%s] skipped: %v\n", name, u.reason)
+			return Result{Case: name, Invalid: true, InvalidReason: u.reason}
 		}
 		if !underCeiling() {
 			skipped[i] = true
 			return Result{}
 		}
 		res := runOnce(u.caseDir, u.key, u.run, opts)
+		logf("[%s #%d] reported %d/%d pinned %d caught %d/%d fp %d cost $%.3f turns %d%s%s\n",
+			name, u.run, res.Found, res.Total, res.ClaimedPinned, res.Caught, res.Total, res.FalsePositives, res.CostUSD, res.Turns, invalidTag(res), noPlanTag(res))
 		spentMu.Lock()
 		spent += res.CostUSD
 		spentMu.Unlock()
@@ -233,19 +246,14 @@ func Run(opts Options) (Aggregate, int) {
 			corpus = append(corpus, CorpusCase{Name: name, Defects: defectIDs(u.key)})
 		}
 		res := results[i]
-		if u.invalid {
-			fmt.Fprintf(opts.Log, "[%s] skipped: %v\n", name, u.reason)
-			agg.Cases = append(agg.Cases, res)
-			agg.Invalid++
-			continue
-		}
 		agg.Cases = append(agg.Cases, res)
 		agg.CostUSD += res.CostUSD
-		if res.Invalid {
+		switch {
+		case u.invalid, res.Invalid:
 			agg.Invalid++
-		} else if res.Failed {
+		case res.Failed:
 			agg.Failed++
-		} else {
+		default:
 			agg.Defects += res.Total
 			agg.Found += res.Found
 			agg.Caught += res.Caught
@@ -255,8 +263,6 @@ func Run(opts Options) (Aggregate, int) {
 				agg.NoPlan++
 			}
 		}
-		fmt.Fprintf(opts.Log, "[%s #%d] reported %d/%d pinned %d caught %d/%d fp %d cost $%.3f turns %d%s%s\n",
-			name, u.run, res.Found, res.Total, res.ClaimedPinned, res.Caught, res.Total, res.FalsePositives, res.CostUSD, res.Turns, invalidTag(res), noPlanTag(res))
 		if opts.MaxCostUSD > 0 && agg.CostUSD >= opts.MaxCostUSD {
 			agg.CostCeilingHit = true
 			code = ExitCostCeiling
