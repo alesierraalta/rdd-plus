@@ -41,3 +41,4 @@ One row per `rdd-plus bench run`; never rewritten.
 | ts | kind | out | model | cases | defects | reported | recall | caught | recall caught | false positives | failed | invalid | no plan | cost USD | skill version | scorer | corpus |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | 2026-09-10T17:36:37Z | run | bench/results/20260910-173637 | sonnet | 18 | 31 | 29 | 0.94 | 29 | 0.94 | 0 | 0 | 0 | 0 | 17.884 | 0.3.4 | fcb4ce6 | sha256:cca548cb8aad9c02 |
+| 2026-09-11T21:01:10Z | run | bench/results/after-full-c6 | openai-codex/gpt-5.6-luna | 18 | 31 | 28 | 0.90 | 23 | 0.74 | 0 | 0 | 0 | 0 | 0.396 | 0.3.7 | 63de308 | sha256:cca548cb8aad9c02 |
