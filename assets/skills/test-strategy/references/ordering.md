@@ -78,6 +78,29 @@ EXECUTE mode resumes from the first `pending` row; a refreshed PLAN keeps existi
 
 ---
 
+## Scoped runs: what a bounded trigger buys
+
+A bounded trigger — the operator names one area, file or module, or the diff is confined to one or two
+files — buys a smaller campaign, never a shallower one. The plan stops inventorying surfaces the
+trigger cannot reach. The target it does reach climbs to its rung through its sibling, leaves a pinning
+test and an evidence row, and the run closes on `rdd-plus plan check` like any other. A bounded request
+and a bounded diff are the same decision reached from two sides: one names the surface, the other shows
+it.
+
+- Eligible: "test the reservation math in `src/inventory.js`"; a two-file fix to a pure function whose
+documented contract does not change.
+- Not eligible: "test the app"; a rename across packages; a change to what a public function promises,
+however few lines it takes; anything in authentication, secrets, persistence or money.
+
+`Light:` is a declaration, and what `plan check` verifies about it is deliberately narrow: the declared
+shape, a target the plan itself ranks or cites as `path:line`, and a reason for every layer the plan
+left out. It cannot tell whether the trigger was really bounded, whether the named classes are true, or
+whether the consequence classes were judged correctly; those stay with the operator and the plan's
+reader. That is the point of writing the declaration down — one half is machine-checked, and the half
+that cannot be is named where the next reader will find it.
+
+---
+
 ## Central Routing to Sibling Skills
 
 Routing means **INVOKING the skill** — calling the Skill tool with that name, or reading

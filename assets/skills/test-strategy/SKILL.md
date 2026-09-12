@@ -101,20 +101,18 @@ reverse-engineered, and whether the method earned its keep — is recorded with
 | User says "calibra el testing" | CALIBRATE ([references/calibration.md](references/calibration.md)) |
 | Monorepo with several apps, none named | Ask one question: which app |
 
-**A bounded change runs scoped.** When the change is one target inside one or two files and touches
-none of the classes below, the first run may plan the blast radius instead of the whole app, and
-says so in the plan header: `Light: <blast radius> · touches <classes>`. Every layer the run did
-not touch keeps its row with status `n/a` and a reason in the `Scope` cell — `no persistence in the
-touched diff`, not `n/a` — and the "Not testing, on purpose" table names what a full run would
-have added. A scoped run executes exactly like any other: the target climbs to its target rung
-through its sibling, every confirmed finding leaves a pinning test and an evidence row, and the
-run closes on `rdd-plus plan check`.
+**A bounded run plans scoped.** When the trigger is bounded — the operator names one area, file or
+module to test, or the diff is confined to one or two files — and it touches none of the classes
+below, the run may plan the blast radius instead of the whole app and say so in the plan header:
+`Light: <blast radius> · touches <classes>`. Skipped layers keep their row with `n/a` and a reason
+in the `Scope` cell; the "Not testing, on purpose" table names what a full run would have added;
+and inside the scope nothing is reduced ([references/ordering.md](references/ordering.md)).
 
-A scoped run is refused, and the change is planned in full, when it touches any of: authentication
-or authorization; secrets, credentials or PII; persistence, schema or migrations; money, rounding
-or totals; an existing public behaviour unless the change is additive. It is refused too when the
-diff is structural — renames, a moved package, a changed interface — or when a plan already covers
-that scope, in which case that plan is resumed.
+Refused, and planned in full, when the trigger is unbounded or touches authentication or
+authorization; secrets, credentials or PII; persistence, schema or migrations; money, rounding or
+totals; or the public contract — a signature, a format, or documented semantics. A defect fix that
+restores the documented contract is eligible. Also refused for a structural diff (renames, a moved
+package, a changed interface) or a scope a plan already covers, which is resumed instead.
 
 Scope: a diff means its blast radius first, closed by the regression gate (rule 9); a clean
 tree on main means the whole app. A scope may keep its own plan beside another scope's — for
