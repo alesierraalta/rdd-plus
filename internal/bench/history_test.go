@@ -58,6 +58,49 @@ func TestHistoryAddsTheCorpusColumn(t *testing.T) {
 	}
 }
 
+// A row written before the activation column says nothing about whether the scoped mode ran, and a row
+// written now says it as a number, including zero. The history stays append-only: earlier rows keep
+// their bytes, and the fresh header carries the line that says what the rows above it are.
+func TestHistoryAddsTheActivationColumn(t *testing.T) {
+	dir := t.TempDir()
+	old := "| ts | kind | out | model | cases | defects | reported | recall | caught | recall caught | false positives | failed | invalid | no plan | cost USD | skill version | scorer | corpus |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n| t0 | run | o | m | 1 | 2 | 1 | 0.50 | 0 | 0.00 | 0 | 0 | 0 | 0 | 1.000 | 0.3.7 | abc | sha256:c |\n"
+	if err := os.WriteFile(filepath.Join(dir, "history.md"), []byte(old), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := AppendHistory(dir, HistoryEntry{TS: "t1", Out: "o", Model: "m", Cases: 1, Defects: 2, Corpus: "sha256:c", LightActivated: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := AppendHistory(dir, HistoryEntry{TS: "t2", Out: "o", Model: "m", Cases: 1, Defects: 2, Corpus: "sha256:c"}); err != nil {
+		t.Fatal(err)
+	}
+	md, _ := os.ReadFile(filepath.Join(dir, "history.md"))
+	if !strings.HasPrefix(string(md), old) {
+		t.Fatalf("an earlier row must stay byte for byte: %s", md)
+	}
+	appended := string(md)[len(old):]
+	if !strings.Contains(appended, "non-activation") {
+		t.Fatalf("the fresh header must say what the rows above it are: %s", appended)
+	}
+	if !strings.Contains(appended, "| light |") {
+		t.Fatalf("the fresh header must carry the activation column: %s", appended)
+	}
+	for _, want := range []string{"| sha256:c | 1 |", "| sha256:c | 0 |"} {
+		if !strings.Contains(appended, want) {
+			t.Fatalf("the rows must carry the count, including zero: %q missing from %s", want, appended)
+		}
+	}
+	raw, _ := os.ReadFile(filepath.Join(dir, "history.jsonl"))
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("jsonl rows = %d, want 2", len(lines))
+	}
+	for i, want := range []string{`"light_activated":1`, `"light_activated":0`} {
+		if !strings.Contains(lines[i], want) {
+			t.Fatalf("row %d = %s, want %s", i, lines[i], want)
+		}
+	}
+}
+
 func TestSkillVersion(t *testing.T) {
 	dir := t.TempDir()
 	f := filepath.Join(dir, "SKILL.md")

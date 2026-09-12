@@ -306,6 +306,7 @@ func Run(opts Options) (Aggregate, int) {
 			FalsePositives: agg.FalsePositives, CostUSD: agg.CostUSD,
 			Failed: agg.Failed, Invalid: agg.Invalid, NoPlan: agg.NoPlan, Kind: KindRun,
 			SkillVersion: SkillVersion(opts.SkillFile), Corpus: agg.Corpus,
+			LightActivated: agg.LightActivated,
 		})
 	}
 	return agg, code

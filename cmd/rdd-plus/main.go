@@ -477,7 +477,7 @@ func runBenchRescore(args []string) int {
 		Found: agg.Found, Recall: agg.Recall, Caught: agg.Caught, RecallCaught: agg.RecallCaught,
 		FalsePositives: agg.FalsePositives, Failed: agg.Failed, Invalid: agg.Invalid, NoPlan: agg.NoPlan,
 		Kind: bench.KindRescore, RunTS: agg.RunTS, SourceRun: results, SkillVersion: agg.SkillVersion,
-		Corpus: agg.Corpus,
+		Corpus: agg.Corpus, LightActivated: agg.LightActivated,
 	})
 	fmt.Print(bench.Summary(agg))
 	return 0
