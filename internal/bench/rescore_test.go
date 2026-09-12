@@ -30,7 +30,9 @@ func TestRescore(t *testing.T) {
 	// Case without a workspace: only its kept plan remains; the catch is carried over.
 	gone := Result{Case: "gone", Run: 1, Total: 1, Found: 1, Caught: 1, PlanFound: true, CostUSD: 0.2, Catch: CatchResult{Checked: true, Caught: map[string]bool{"D1": true}}}
 	_ = os.MkdirAll(filepath.Join(results, "gone", "1"), 0o755)
-	_ = os.WriteFile(filepath.Join(results, "gone", "1", "test-plan.md"), []byte(plan("| F1 | src.txt:1 x | M | yes | E1 | open | me | - | - |\n", "| E1 | c | cmd | i | o | m | r | observado |\n")), 0o644)
+	// The gone case's retained plan declares a scoped run, so rescoring has to recalculate activation
+	// from the plan alone, exactly as it recalculates the rest of the score.
+	_ = os.WriteFile(filepath.Join(results, "gone", "1", "test-plan.md"), []byte("Light: a · touches cli\n\n"+plan("| F1 | src.txt:1 x | M | yes | E1 | open | me | - | - |\n", "| E1 | c | cmd | i | o | m | r | observado |\n")), 0o644)
 	writeJSON(filepath.Join(results, "aggregate.json"), Aggregate{TS: "t0", Model: "m", Cases: []Result{old, gone}, Defects: 3, Found: 1, Caught: 1, CostUSD: 0.7})
 	goneDir := filepath.Join(t.TempDir(), "gone")
 	_ = os.MkdirAll(filepath.Join(goneDir, FixtureDir), 0o755)
@@ -52,6 +54,12 @@ func TestRescore(t *testing.T) {
 	}
 	if agg.Cases[1].Caught != 1 || agg.Cases[1].Found != 1 {
 		t.Fatalf("removed workspace case: %+v", agg.Cases[1])
+	}
+	if !agg.Cases[1].LightActivated || agg.Cases[0].LightActivated {
+		t.Fatalf("activation must come from each case's own plan: %+v", agg.Cases)
+	}
+	if agg.LightActivated != 1 {
+		t.Fatalf("rescored activation = %d, want 1", agg.LightActivated)
 	}
 	data, err := os.ReadFile(filepath.Join(results, "rescored", "aggregate.json"))
 	if err != nil || !strings.Contains(string(data), `"rescored_from"`) {

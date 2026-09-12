@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	plancheck "github.com/alesierraalta/rdd-plus/internal/plan"
 )
 
 // PlanPath is where the skill persists its plan inside a workspace.
@@ -51,11 +53,15 @@ type Result struct {
 	Suite                SuiteResult    `json:"suite"`
 	Workspace            string         `json:"workspace,omitempty"`
 	PlanFound            bool           `json:"plan_found"`
-	PlanFormat           string         `json:"plan_format"`       // FormatTable, FormatProse or FormatEmpty
-	RowsWithoutPath      int            `json:"rows_without_path"` // finding rows that name no file, so nothing can be located
-	ClaimedPinned        int            `json:"claimed_pinned"`    // defects whose finding names a pinning test
-	Caught               int            `json:"caught"`            // defects some agent test distinguishes (fixture vs fix)
-	Catch                CatchResult    `json:"catch"`
+	PlanFormat           string         `json:"plan_format"` // FormatTable, FormatProse or FormatEmpty
+	// LightActivated records that the run declared a scoped run its own plan validates. It is the only
+	// durable answer to "did the mode run?": a defect found, a well-formed ordinary plan, or a line that
+	// merely looks like a declaration leaves it false.
+	LightActivated  bool        `json:"light_activated"`
+	RowsWithoutPath int         `json:"rows_without_path"` // finding rows that name no file, so nothing can be located
+	ClaimedPinned   int         `json:"claimed_pinned"`    // defects whose finding names a pinning test
+	Caught          int         `json:"caught"`            // defects some agent test distinguishes (fixture vs fix)
+	Catch           CatchResult `json:"catch"`
 }
 
 var (
@@ -93,7 +99,7 @@ func ScorePlanFile(path string, key Key) Result {
 // file and either a line within LineTolerance or one of its keywords; a row matching no defect
 // is a false positive.
 func Score(plan string, key Key) Result {
-	r := Result{Case: key.ID, Total: len(key.Defects)}
+	r := Result{Case: key.ID, Total: len(key.Defects), LightActivated: plancheck.LightActivated(plan)}
 	findings := sectionText(plan, "Findings")
 	rows := dataRows(findings)
 	r.FindingRows = len(rows)

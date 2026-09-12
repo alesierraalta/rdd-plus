@@ -149,6 +149,47 @@ func TestCorpusDigestIgnoresTheCaseRequest(t *testing.T) {
 	}
 }
 
+// A reading has to be able to say whether the mode ran: the run records it per case, the aggregate
+// counts it, and the summary prints it. A case that only found the defect reports no activation.
+func TestRunReportsActivationPerCaseAndInTheAggregate(t *testing.T) {
+	requireNodeAndGit(t)
+	root := t.TempDir()
+	plans := map[string]string{
+		"case-scoped": "Light: a · touches cli\n\n" + plan("", ""),
+		"case-plain":  plan("", ""),
+	}
+	var globs []string
+	for _, name := range []string{"case-scoped", "case-plain"} {
+		globs = append(globs, fakeCaseNamed(t, root, name))
+	}
+	agent := func(ctx context.Context, ws string, key Key, opts Options) (AgentResult, error) {
+		for name, doc := range plans {
+			if strings.Contains(ws, name) {
+				writePlan(t, ws, doc)
+			}
+		}
+		return AgentResult{Result: "nothing found", CostUSD: 0.01, Turns: 2}, nil
+	}
+	agg, code := Run(Options{CasesGlob: strings.Join(globs, ","), Runs: 1, Workers: 2, Timeout: time.Minute, SuiteTimeout: time.Minute, Out: t.TempDir(), BenchDir: t.TempDir(), Agent: agent})
+	if code != 0 {
+		t.Fatalf("exit code %d", code)
+	}
+	if len(agg.Cases) != len(plans) {
+		t.Fatalf("%d cases in the aggregate, want %d", len(agg.Cases), len(plans))
+	}
+	if agg.LightActivated != 1 {
+		t.Fatalf("aggregate activation = %d, want 1", agg.LightActivated)
+	}
+	for _, c := range agg.Cases {
+		if want := c.Case == "case-scoped"; c.LightActivated != want {
+			t.Fatalf("%s activation = %v, want %v", c.Case, c.LightActivated, want)
+		}
+	}
+	if summary := Summary(agg); !strings.Contains(summary, "light runs: 1") {
+		t.Fatalf("the summary must report the count:\n%s", summary)
+	}
+}
+
 // The prompt is the whole instruction a run gets: a case without a request receives exactly the prompt
 // the bench has always sent, and a case with one names it without deciding the mode, which is the
 // skill's call and the thing a reading measures.

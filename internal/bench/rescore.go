@@ -60,6 +60,9 @@ func Rescore(results string, lookup func(caseName string) (string, error), suite
 		if !res.PlanFound {
 			agg.NoPlan++
 		}
+		if res.LightActivated {
+			agg.LightActivated++
+		}
 	}
 	if agg.Defects > 0 {
 		agg.Recall = float64(agg.Found) / float64(agg.Defects)

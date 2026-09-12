@@ -107,11 +107,14 @@ type Aggregate struct {
 	Invalid        int      `json:"invalid"`
 	Failed         int      `json:"failed"`  // agent did not run to completion; excluded from recall
 	NoPlan         int      `json:"no_plan"` // valid runs that never wrote docs/testing/test-plan.md; scored zero
-	CostCeilingHit bool     `json:"cost_ceiling_hit"`
-	RescoredFrom   string   `json:"rescored_from,omitempty"` // set when this aggregate re-reads another run with newer rules
-	RunTS          string   `json:"run_ts,omitempty"`        // rescore: when the run it re-reads happened
-	SkillVersion   string   `json:"skill_version,omitempty"` // rescore: the version that produced the run
-	Corpus         string   `json:"corpus,omitempty"`        // digest of the case names and defect ids this run measured
+	// LightActivated counts the valid runs whose own plan declares a validated scoped run: the reading's
+	// answer to "did the mode run?", next to what it cost and what it caught.
+	LightActivated int    `json:"light_activated"`
+	CostCeilingHit bool   `json:"cost_ceiling_hit"`
+	RescoredFrom   string `json:"rescored_from,omitempty"` // set when this aggregate re-reads another run with newer rules
+	RunTS          string `json:"run_ts,omitempty"`        // rescore: when the run it re-reads happened
+	SkillVersion   string `json:"skill_version,omitempty"` // rescore: the version that produced the run
+	Corpus         string `json:"corpus,omitempty"`        // digest of the case names and defect ids this run measured
 }
 
 // CorpusCase is one case of a corpus: its name and the ids of the defects planted in it.
@@ -272,6 +275,9 @@ func Run(opts Options) (Aggregate, int) {
 			agg.FalsePositives += res.FalsePositives
 			if !res.PlanFound {
 				agg.NoPlan++
+			}
+			if res.LightActivated {
+				agg.LightActivated++
 			}
 		}
 		if opts.MaxCostUSD > 0 && agg.CostUSD >= opts.MaxCostUSD {
@@ -460,8 +466,8 @@ func writeJSON(path string, v any) {
 // Summary renders the aggregate as the markdown table written to summary.md.
 func Summary(agg Aggregate) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "# Bench %s\n\nModel: %s · cases: %d · defects: %d · reported: %d (%.2f) · claimed a pinning test: %d · caught by a test: %d (%.2f) · false positives: %d · failed: %d · invalid: %d · no plan: %d · cost: $%.3f",
-		agg.TS, agg.Model, len(agg.Cases), agg.Defects, agg.Found, agg.Recall, agg.ClaimedPinned, agg.Caught, agg.RecallCaught, agg.FalsePositives, agg.Failed, agg.Invalid, agg.NoPlan, agg.CostUSD)
+	fmt.Fprintf(&b, "# Bench %s\n\nModel: %s · cases: %d · defects: %d · reported: %d (%.2f) · claimed a pinning test: %d · caught by a test: %d (%.2f) · false positives: %d · failed: %d · invalid: %d · no plan: %d · light runs: %d · cost: $%.3f",
+		agg.TS, agg.Model, len(agg.Cases), agg.Defects, agg.Found, agg.Recall, agg.ClaimedPinned, agg.Caught, agg.RecallCaught, agg.FalsePositives, agg.Failed, agg.Invalid, agg.NoPlan, agg.LightActivated, agg.CostUSD)
 	if agg.Corpus != "" {
 		fmt.Fprintf(&b, " · corpus: %s", agg.Corpus)
 	}
@@ -471,7 +477,7 @@ func Summary(agg Aggregate) string {
 	if agg.CostCeilingHit {
 		b.WriteString(" · cost ceiling hit")
 	}
-	b.WriteString("\n\n| case | reported | pinned | caught | false positives | cost USD | turns | minutes | note |\n|---|---|---|---|---|---|---|---|---|\n")
+	b.WriteString("\n\n| case | reported | pinned | caught | light | false positives | cost USD | turns | minutes | note |\n|---|---|---|---|---|---|---|---|---|---|\n")
 	for _, c := range agg.Cases {
 		note := strings.TrimSpace(invalidTag(c) + noPlanTag(c))
 		if len(c.Notes) > 0 {
@@ -480,10 +486,18 @@ func Summary(agg Aggregate) string {
 		if c.Catch.Checked && len(c.Catch.Notes) > 0 {
 			note = strings.TrimSpace(note + " " + strings.Join(c.Catch.Notes, "; "))
 		}
-		fmt.Fprintf(&b, "| %s | %d/%d | %d/%d | %d/%d | %d | %.3f | %d | %.1f | %s |\n",
-			c.Case, c.Found, c.Total, c.ClaimedPinned, c.Total, c.Caught, c.Total, c.FalsePositives, c.CostUSD, c.Turns, c.Seconds/60, note)
+		fmt.Fprintf(&b, "| %s | %d/%d | %d/%d | %d/%d | %s | %d | %.3f | %d | %.1f | %s |\n",
+			c.Case, c.Found, c.Total, c.ClaimedPinned, c.Total, c.Caught, c.Total, lightTag(c), c.FalsePositives, c.CostUSD, c.Turns, c.Seconds/60, note)
 	}
 	return b.String()
+}
+
+// lightTag is the per-case column: a reading has to show which runs were scoped, not only how many.
+func lightTag(r Result) string {
+	if r.LightActivated {
+		return "yes"
+	}
+	return "no"
 }
 
 // claudeAgent spawns the real CLI with the run's prompt and reads its stream-json.

@@ -63,6 +63,50 @@ func TestFinishKeepsThePlanWhenItRemovesTheWorkspace(t *testing.T) {
 	}
 }
 
+// Activation is the run's own validated declaration, read from the plan the run left behind. A defect
+// it found, a well-formed ordinary plan, or a line that merely looks like a declaration is not
+// activation — this is the signal that separates "the mode ran" from "the mode never ran".
+func TestScoringReadsActivationFromThePlan(t *testing.T) {
+	key := Key{ID: "c", Defects: []Defect{{ID: "D1", File: "src/a.js", Line: 1, Keywords: []string{"clamp"}}}}
+	finding := "| F1 | `src/a.js:1` clamps to the maximum | M | yes | E1 | open | me | - | - |\n"
+	ledger := "| E1 | c | node | i | o | m | r | observado |\n"
+	scoped := func(declaration string) string { return declaration + plan(finding, ledger) }
+	cases := []struct {
+		name string
+		doc  string
+		want bool
+	}{
+		{"a validated declaration activates", scoped("Light: a · touches cli\n\n"), true},
+		{"no declaration never activates", scoped(""), false},
+		{"a declaration without the shape does not activate", scoped("Light: a\n\n"), false},
+		{"a target the plan never ranked does not activate", scoped("Light: zzz · touches cli\n\n"), false},
+		{"a skipped layer with no reason does not activate", scoped("Light: a · touches cli\n\n") +
+			"\n## Layer matrix\n\n| Layer | Skill | Scope | Status |\n|---|---|---|---|\n| Persistence | `x` | | n/a |\n", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := Score(tc.doc, key).LightActivated; got != tc.want {
+				t.Fatalf("LightActivated = %v, want %v", got, tc.want)
+			}
+		})
+	}
+	// The run that finds the defect by writing an ordinary plan is exactly what this signal has to keep
+	// apart from a scoped run: detection is not activation.
+	r := Score(scoped(""), key)
+	if r.Found != 1 {
+		t.Fatalf("an ordinary plan must still find the defect: %+v", r)
+	}
+	if r.LightActivated {
+		t.Fatal("finding a defect is not activation")
+	}
+	// And the signal survives the path the bench actually reads.
+	ws := t.TempDir()
+	writePlan(t, ws, scoped("Light: a · touches cli\n\n"))
+	if r := ScoreWorkspace(ws, key); !r.PlanFound || !r.LightActivated {
+		t.Fatalf("ScoreWorkspace dropped activation: %+v", r)
+	}
+}
+
 func writePlan(t *testing.T, ws, content string) {
 	t.Helper()
 	p := filepath.Join(ws, PlanPath)
