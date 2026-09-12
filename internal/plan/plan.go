@@ -51,9 +51,10 @@ var (
 	// A finding whose verdict asserts the defect is real owes a test that holds it.
 	settledStatus = regexp.MustCompile(`(?i)\b(confirmed|fixed)\b`)
 	// A scoped run declares itself in one plan-header line, `Light: <blast radius> · touches
-	// <classes>`. The declaration is the cheap half of the decision: a binary can read that the run
-	// said so, never that the change was really bounded.
-	lightHeader = regexp.MustCompile(`(?m)^\s*Light:`)
+	// <classes>`. The declaration is the cheap half of the decision: a binary can read its shape and
+	// whether the plan corroborates the target it names, never whether the change was really bounded.
+	lightLineRe  = regexp.MustCompile(`(?m)^\s*Light:[ \t]*(.*)$`)
+	lightShapeRe = regexp.MustCompile(`^(.+?)[ \t]*·[ \t]*touches[ \t]*(.*)$`)
 )
 
 // Check reads a plan and returns everything that breaks the contract, most structural first.
@@ -115,10 +116,75 @@ func Check(path string) ([]string, error) {
 			problems = append(problems, fmt.Sprintf("finding %s is settled but names no pinning test", id))
 		}
 	}
-	if lightHeader.MatchString(doc) {
-		problems = append(problems, unscopedLayers(doc)...)
+	if lightProblems, declared := lightReport(doc); declared {
+		problems = append(problems, lightProblems...)
 	}
 	return problems, nil
+}
+
+// LightActivated reports whether a plan declares a scoped run that passes every Light-specific rule.
+// The bench reads activation from here, so an ordinary plan, a detected defect, or a line that merely
+// looks like a declaration is never a scoped run.
+func LightActivated(doc string) bool {
+	problems, declared := lightReport(doc)
+	return declared && len(problems) == 0
+}
+
+// lightReport returns every breach a declared scoped run owes, and whether the plan declares one at
+// all. A plan that never claims to be scoped owes none of these rules.
+func lightReport(doc string) ([]string, bool) {
+	target, problems, declared := lightDeclaration(doc)
+	if !declared {
+		return nil, false
+	}
+	if target != "" && !targetIsInEvidence(doc, target) {
+		problems = append(problems, fmt.Sprintf("the Light declaration names target %s, which no Ranked-target row and no path:line citation corroborates", target))
+	}
+	return append(problems, unscopedLayers(doc)...), true
+}
+
+// lightDeclaration reads the `Light:` header: the declared shape, a non-empty blast radius and
+// non-empty touched classes. The classes are the declaration's own words; a binary can read that they
+// are there, never that they are true.
+func lightDeclaration(doc string) (target string, problems []string, declared bool) {
+	m := lightLineRe.FindStringSubmatch(doc)
+	if m == nil {
+		return "", nil, false
+	}
+	shape := lightShapeRe.FindStringSubmatch(strings.TrimSpace(m[1]))
+	if shape == nil {
+		return "", []string{"the Light declaration must read `Light: <blast radius> · touches <classes>`"}, true
+	}
+	target, classes := strings.TrimSpace(shape[1]), strings.TrimSpace(shape[2])
+	if target == "" || placeholder.MatchString(target) {
+		problems = append(problems, "the Light declaration names no blast radius")
+		// Nothing to corroborate: the breach is reported once, not again as a target the plan
+		// cannot vouch for.
+		target = ""
+	}
+	if classes == "" || placeholder.MatchString(classes) {
+		problems = append(problems, "the Light declaration names no touched classes")
+	}
+	return target, problems, true
+}
+
+// targetIsInEvidence corroborates a declared blast radius against what the plan already carries: an
+// exact `Target` cell in the ranked targets, or a path the plan cites as path:line. Reading the claim
+// back against the plan is all a binary can do; whether the target is bounded stays with the reader.
+func targetIsInEvidence(doc, target string) bool {
+	rows, header := table(section(doc, "Ranked targets"))
+	iTarget := columnIndex(header, "target")
+	for _, row := range rows {
+		if iTarget >= 0 && cell(row, iTarget) == target {
+			return true
+		}
+	}
+	for _, cite := range pathCiteRe.FindAllString(doc, -1) {
+		if path, _, ok := strings.Cut(cite, ":"); ok && path == target {
+			return true
+		}
+	}
+	return false
 }
 
 // unscopedLayers enforces the one rule a `Light:` plan owes beyond the ordinary contract: a layer

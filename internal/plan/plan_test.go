@@ -125,13 +125,18 @@ func TestCheckNamesEveryContractBreach(t *testing.T) {
 	}
 }
 
-// scopedPlan is the smallest compliant plan with a layer matrix, so a test varies only the two
-// things the scoped-run rule reads: the `Light:` declaration and the reason a skipped layer carries.
+// scopedPlan is the smallest compliant plan with a ranked target and a layer matrix, so a test varies
+// only what the scoped-run rule reads: the `Light:` declaration, whether the plan corroborates the
+// target it names, and the reason a skipped layer carries.
 func scopedPlan(light, scope string) string {
 	return light +
 		"## Findings\n\n" +
 		"| Id | Finding | Severity | Data safe? | Evidence id | Pinning test | Status | Verdict by / date | Reason | Fingerprint |\n" +
 		"|---|---|---|---|---|---|---|---|---|---|\n\n" +
+		"## Ranked targets\n\n" +
+		"| Target | Blast radius | Churn / past fixes | Consequence class | Existing evidence | Altitude | Target rung |\n" +
+		"|---|---|---|---|---|---|---|\n" +
+		"| cli flags | `internal/cli/flags.go:12` | Unknown | incorrect output | | | |\n\n" +
 		"## Layer matrix\n\n" +
 		"| Layer | Skill | Scope | Status |\n|---|---|---|---|\n" +
 		"| Persistence and migrations | `database-persistence-testing` | " + scope + " | n/a |\n"
@@ -190,9 +195,9 @@ func TestCheckLightPlanOwesAReasonForEverySkippedLayer(t *testing.T) {
 	}
 }
 
-// `Light:` is a header line the plan owns, not a breach in itself: the shipped skeleton with the
-// line added is still compliant.
-func TestCheckAcceptsALightHeaderOnACompliantPlan(t *testing.T) {
+// A `Light:` line is a claim the plan owes evidence for, not a header the check takes on faith: the
+// shipped skeleton with the line added names a target the plan never ranked, so the check says so.
+func TestCheckRejectsALightHeaderThePlanNeverRanked(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "plan.md")
 	if err := Init(p, false); err != nil {
@@ -213,8 +218,123 @@ func TestCheckAcceptsALightHeaderOnACompliantPlan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(problems) != 0 {
-		t.Fatalf("a Light header broke a compliant plan: %v", problems)
+	if joined := strings.Join(problems, "\n"); !strings.Contains(joined, "cli flags") {
+		t.Fatalf("a Light header nothing corroborates must name the target it claims: %v", problems)
+	}
+}
+
+// The declaration is the cheap half of the scoped-run decision, so the check reads its shape and that
+// the plan corroborates the target it names. Whether the change was really bounded stays with the
+// operator and the plan's reader, never with this check.
+func TestCheckValidatesTheLightDeclaration(t *testing.T) {
+	cases := []struct {
+		name     string
+		light    string
+		want     string // a substring of the breach; empty means the plan passes
+		wantOnly bool   // the breach must stand alone: one problem, no corroboration noise
+	}{
+		{
+			name:  "a declaration whose target the plan ranked passes",
+			light: lightLine,
+		},
+		{
+			name:  "a target the plan cites as path:line corroborates itself",
+			light: "Light: internal/cli/flags.go · touches cli\n\n",
+		},
+		{
+			name:  "a declaration without the separator",
+			light: "Light: cli flags\n\n",
+			want:  "must read",
+		},
+		{
+			name:     "a declaration whose blast radius is a placeholder",
+			light:    "Light: n/a · touches cli\n\n",
+			want:     "names no blast radius",
+			wantOnly: true,
+		},
+		{
+			name:     "a declaration whose touched classes are a placeholder",
+			light:    "Light: cli flags · touches none\n\n",
+			want:     "names no touched classes",
+			wantOnly: true,
+		},
+		{
+			name:  "a declaration with no touched classes",
+			light: "Light: cli flags · touches  \n\n",
+			want:  "names no touched classes",
+		},
+		{
+			name:  "a target the plan never ranked and never cited",
+			light: "Light: ledger rewrites · touches persistence\n\n",
+			want:  "corroborates",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := write(t, t.TempDir(), "plan.md", scopedPlan(tc.light, "no persistence in the touched diff"))
+			problems, err := Check(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.want == "" {
+				if len(problems) != 0 {
+					t.Fatalf("compliant plan rejected: %v", problems)
+				}
+				return
+			}
+			if tc.wantOnly && len(problems) != 1 {
+				t.Fatalf("problems = %v, want the one breach and nothing else", problems)
+			}
+			if joined := strings.Join(problems, "\n"); !strings.Contains(joined, tc.want) {
+				t.Fatalf("problems = %v, want one containing %q", problems, tc.want)
+			}
+			if tc.want == "corroborates" && !strings.Contains(strings.Join(problems, "\n"), "ledger rewrites") {
+				t.Fatalf("the breach must name the target it could not corroborate: %v", problems)
+			}
+		})
+	}
+}
+
+// Activation is the narrow reading of a validated declaration. A detected defect, an ordinary plan, or
+// a line that merely looks like a declaration is never activation; the bench records what this says.
+func TestLightActivatedIsNarrow(t *testing.T) {
+	cases := []struct {
+		name string
+		plan string
+		want bool
+	}{
+		{
+			name: "a validated declaration activates",
+			plan: scopedPlan(lightLine, "no persistence in the touched diff"),
+			want: true,
+		},
+		{
+			name: "no declaration never activates",
+			plan: scopedPlan("", "no persistence in the touched diff"),
+		},
+		{
+			name: "a declaration without the declared shape does not activate",
+			plan: scopedPlan("Light: cli flags\n\n", "no persistence in the touched diff"),
+		},
+		{
+			name: "an uncorroborated target does not activate",
+			plan: scopedPlan("Light: ledger rewrites · touches persistence\n\n", "no persistence in the touched diff"),
+		},
+		{
+			name: "a skipped layer with no reason does not activate",
+			plan: scopedPlan(lightLine, ""),
+		},
+		{
+			name: "prose that names the declaration is not a declaration",
+			plan: "A plan that declares `Light:` owes a reason per layer.\n" + scopedPlan("", "no persistence in the touched diff"),
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := LightActivated(tc.plan); got != tc.want {
+				t.Fatalf("LightActivated = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 
