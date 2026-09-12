@@ -21,6 +21,16 @@ import (
 // Prompt is the whole instruction the agent receives: the skill must infer everything else.
 const Prompt = "haz el testing"
 
+// agentPrompt is what a run is actually told. A case with no request gets the bare prompt the bench has
+// always sent, byte for byte; a case with one names it and nothing more. Choosing the mode stays the
+// skill's decision, because that is the thing a reading measures.
+func agentPrompt(key Key) string {
+	if request := key.RequestText(); request != "" {
+		return Prompt + "\n\nTest request: " + request
+	}
+	return Prompt
+}
+
 // Runners the bench can spawn. An empty Runner is the default: claude, so a run recorded before
 // the flag existed still names the runner it used.
 const (
@@ -75,8 +85,9 @@ type Options struct {
 	Log          io.Writer
 }
 
-// Agent runs the model once in a workspace; injected so tests never spawn claude.
-type Agent func(ctx context.Context, ws string, opts Options) (AgentResult, error)
+// Agent runs the model once in a workspace; injected so tests never spawn claude. The case's key
+// travels with the call by value, so one case's request can never reach another's run.
+type Agent func(ctx context.Context, ws string, key Key, opts Options) (AgentResult, error)
 
 // Aggregate is the whole run's outcome.
 type Aggregate struct {
@@ -318,7 +329,7 @@ func runOnce(caseDir string, key Key, run int, opts Options) Result {
 	var ar AgentResult
 	for attempt := 0; ; attempt++ {
 		ctx, cancel := context.WithTimeout(context.Background(), opts.Timeout)
-		ar, err = opts.Agent(ctx, ws, opts)
+		ar, err = opts.Agent(ctx, ws, key, opts)
 		cancel()
 		res.CostUSD += ar.CostUSD
 		res.Turns += ar.Turns
@@ -475,9 +486,9 @@ func Summary(agg Aggregate) string {
 	return b.String()
 }
 
-// claudeAgent spawns the real CLI with the single prompt and reads its stream-json.
-func claudeAgent(ctx context.Context, ws string, opts Options) (AgentResult, error) {
-	args := []string{"-p", Prompt, "--output-format", "stream-json", "--verbose",
+// claudeAgent spawns the real CLI with the run's prompt and reads its stream-json.
+func claudeAgent(ctx context.Context, ws string, key Key, opts Options) (AgentResult, error) {
+	args := []string{"-p", agentPrompt(key), "--output-format", "stream-json", "--verbose",
 		"--max-turns", fmt.Sprint(opts.MaxTurns), "--permission-mode", "bypassPermissions"}
 	if opts.Model != "" {
 		args = append(args, "--model", opts.Model)

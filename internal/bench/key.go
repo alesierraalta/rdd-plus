@@ -32,11 +32,24 @@ type Defect struct {
 
 // Key is the sealed answer key of a case: KEY.json next to the fixture directory.
 type Key struct {
-	ID       string   `json:"id"`
-	Language string   `json:"language"`
-	Suite    string   `json:"suite"`
-	Surface  string   `json:"surface"`
-	Defects  []Defect `json:"defects"`
+	ID       string `json:"id"`
+	Language string `json:"language"`
+	Suite    string `json:"suite"`
+	Surface  string `json:"surface"`
+	// Request is the bounded unit of work a run is asked to test, when the case has one. A case without
+	// it is the generic case the bench has always run. The pointer is what tells the two apart: a key
+	// that supplies a blank request is a mistake, not a generic case, and is refused rather than read
+	// back as "no request".
+	Request *string  `json:"request,omitempty"`
+	Defects []Defect `json:"defects"`
+}
+
+// RequestText is the case's bounded request, or "" when it declares none.
+func (k Key) RequestText() string {
+	if k.Request == nil {
+		return ""
+	}
+	return strings.TrimSpace(*k.Request)
 }
 
 // KeyFile is the answer-key file name; it must never be copied into a workspace.
@@ -69,6 +82,9 @@ func (k Key) Validate() error {
 	}
 	if strings.TrimSpace(k.Suite) == "" {
 		problems = append(problems, "suite is empty")
+	}
+	if k.Request != nil && k.RequestText() == "" {
+		problems = append(problems, "request is present but empty")
 	}
 	if len(k.Defects) == 0 {
 		problems = append(problems, "no defects")

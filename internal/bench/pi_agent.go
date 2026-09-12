@@ -14,11 +14,11 @@ import (
 	"time"
 )
 
-// piAgent spawns the real Pi CLI with the single prompt and reads its JSON event stream, mirroring
+// piAgent spawns the real Pi CLI with the run's prompt and reads its JSON event stream, mirroring
 // claudeAgent. Pi has no turn cap flag, so --timeout is the only wall-clock limit this runner
 // enforces; --max-turns applies to the claude runner alone.
-func piAgent(ctx context.Context, ws string, opts Options) (AgentResult, error) {
-	args := []string{"-p", Prompt, "--mode", "json", "--no-session"}
+func piAgent(ctx context.Context, ws string, key Key, opts Options) (AgentResult, error) {
+	args := []string{"-p", agentPrompt(key), "--mode", "json", "--no-session"}
 	if opts.Model != "" {
 		args = append(args, "--model", opts.Model)
 	}

@@ -106,7 +106,7 @@ func TestRunWithFakeAgent(t *testing.T) {
 	caseDir := fakeCase(t)
 	out := filepath.Join(t.TempDir(), "results")
 	benchDir := filepath.Join(t.TempDir(), "bench")
-	agent := func(ctx context.Context, ws string, opts Options) (AgentResult, error) {
+	agent := func(ctx context.Context, ws string, key Key, opts Options) (AgentResult, error) {
 		if err := os.MkdirAll(filepath.Join(ws, "docs", "testing"), 0o755); err != nil {
 			return AgentResult{}, err
 		}
@@ -147,7 +147,7 @@ func TestRunDryRunSpawnsNothingAndWritesNoHistory(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "results")
 	benchDir := filepath.Join(t.TempDir(), "bench")
 	called := false
-	agent := func(ctx context.Context, ws string, opts Options) (AgentResult, error) {
+	agent := func(ctx context.Context, ws string, key Key, opts Options) (AgentResult, error) {
 		called = true
 		return AgentResult{}, nil
 	}
@@ -165,7 +165,7 @@ func TestRunStopsAtTheCostCeiling(t *testing.T) {
 	caseDir := fakeCase(t)
 	out := filepath.Join(t.TempDir(), "results")
 	calls := 0
-	agent := func(ctx context.Context, ws string, opts Options) (AgentResult, error) {
+	agent := func(ctx context.Context, ws string, key Key, opts Options) (AgentResult, error) {
 		calls++
 		return AgentResult{CostUSD: 3}, nil
 	}

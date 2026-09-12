@@ -72,6 +72,147 @@ func fakeCaseNamed(t *testing.T, root, name string) string {
 	return caseDir
 }
 
+// setCaseRequest writes a bounded request into a case's sealed key, the way a corpus author would.
+func setCaseRequest(t *testing.T, caseDir, value string) {
+	t.Helper()
+	path := filepath.Join(caseDir, KeyFile)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	patched := strings.Replace(string(raw), `"surface":`, `"request":`+value+`,"surface":`, 1)
+	if patched == string(raw) {
+		t.Fatal("the key shape moved: the request was never added")
+	}
+	if err := os.WriteFile(path, []byte(patched), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Every invocation sees its own case's request: it travels by value with the key, so two cases
+// scheduled together cannot borrow each other's scope.
+func TestRunHandsEachCaseItsOwnRequest(t *testing.T) {
+	requireNodeAndGit(t)
+	root := t.TempDir()
+	requests := map[string]string{"case-a": "src/a.mjs", "case-b": "src/b.mjs"}
+	var globs []string
+	for _, name := range []string{"case-a", "case-b"} {
+		dir := fakeCaseNamed(t, root, name)
+		setCaseRequest(t, dir, `"`+requests[name]+`"`)
+		globs = append(globs, dir)
+	}
+	var mu sync.Mutex
+	seen := map[string]string{}
+	agent := func(ctx context.Context, ws string, key Key, opts Options) (AgentResult, error) {
+		mu.Lock()
+		for _, name := range []string{"case-a", "case-b"} {
+			if strings.Contains(ws, name) {
+				seen[name] = key.RequestText()
+			}
+		}
+		mu.Unlock()
+		return AgentResult{Result: "nothing found", CostUSD: 0.01, Turns: 2}, nil
+	}
+	agg, code := Run(Options{CasesGlob: strings.Join(globs, ","), Runs: 1, Workers: 2, Timeout: time.Minute, SuiteTimeout: time.Minute, Out: t.TempDir(), BenchDir: t.TempDir(), Agent: agent})
+	if code != 0 {
+		t.Fatalf("exit code %d", code)
+	}
+	if len(agg.Cases) != len(requests) {
+		t.Fatalf("%d cases in the aggregate, want %d", len(agg.Cases), len(requests))
+	}
+	for name, want := range requests {
+		if got := seen[name]; got != want {
+			t.Fatalf("%s ran with request %q, want %q (all: %v)", name, got, want, seen)
+		}
+	}
+}
+
+// The request changes what a run is asked to do, never the corpus it belongs to: a digest that moved
+// with it would leave no earlier reading comparable.
+func TestCorpusDigestIgnoresTheCaseRequest(t *testing.T) {
+	requireNodeAndGit(t)
+	caseDir := fakeCaseNamed(t, t.TempDir(), "case-a")
+	agent := func(ctx context.Context, ws string, key Key, opts Options) (AgentResult, error) {
+		return AgentResult{Result: "nothing found", CostUSD: 0.01, Turns: 2}, nil
+	}
+	digest := func() string {
+		agg, code := Run(Options{CasesGlob: caseDir, Runs: 1, Timeout: time.Minute, SuiteTimeout: time.Minute, Out: t.TempDir(), BenchDir: t.TempDir(), Agent: agent})
+		if code != 0 {
+			t.Fatalf("exit code %d", code)
+		}
+		return agg.Corpus
+	}
+	generic := digest()
+	setCaseRequest(t, caseDir, `"src/a.mjs"`)
+	if scoped := digest(); scoped != generic {
+		t.Fatalf("the request moved the corpus digest: %q -> %q", generic, scoped)
+	}
+}
+
+// The prompt is the whole instruction a run gets: a case without a request receives exactly the prompt
+// the bench has always sent, and a case with one names it without deciding the mode, which is the
+// skill's call and the thing a reading measures.
+func TestAgentPromptCarriesTheRequestOnlyWhenThereIsOne(t *testing.T) {
+	if got := agentPrompt(Key{}); got != Prompt {
+		t.Fatalf("a generic case got %q, want exactly %q", got, Prompt)
+	}
+	request := "src/slug.js"
+	got := agentPrompt(Key{Request: &request})
+	if !strings.HasPrefix(got, Prompt) {
+		t.Fatalf("the prompt must stay the instruction: %q", got)
+	}
+	if !strings.Contains(got, request) {
+		t.Fatalf("the request must reach the prompt: %q", got)
+	}
+	for _, word := range []string{"Light", "scoped", "blast radius"} {
+		if strings.Contains(got, word) {
+			t.Fatalf("the framing must not decide the mode: %q appears in %q", word, got)
+		}
+	}
+}
+
+// Both runners send the same framing, so a reading never depends on which one ran it. The fake CLIs
+// record their arguments: the request has to arrive as the -p value of each.
+func TestBothRunnersSendTheSameRequestFraming(t *testing.T) {
+	bin := t.TempDir()
+	for _, runner := range []string{"pi", "claude"} {
+		record := filepath.Join(bin, runner+".argv")
+		script := "#!/bin/sh\nprintf '%s\\036' \"$@\" > " + record + "\nexit 3\n"
+		if err := os.WriteFile(filepath.Join(bin, runner), []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	request := "src/slug.js"
+	key := Key{Request: &request}
+	ws := t.TempDir()
+	// Both fake CLIs exit non-zero, which is fine: what this checks is what they were told.
+	if _, err := piAgent(context.Background(), ws, key, Options{}); err == nil {
+		t.Fatal("the fake pi exits non-zero, so the run reports it")
+	}
+	if _, err := claudeAgent(context.Background(), ws, key, Options{MaxTurns: 1}); err == nil {
+		t.Fatal("the fake claude exits non-zero, so the run reports it")
+	}
+	want := agentPrompt(key)
+	for _, runner := range []string{"pi", "claude"} {
+		raw, err := os.ReadFile(filepath.Join(bin, runner+".argv"))
+		if err != nil {
+			t.Fatalf("%s never ran: %v", runner, err)
+		}
+		args := strings.Split(strings.TrimSuffix(string(raw), "\x1e"), "\x1e")
+		got := ""
+		for i, a := range args {
+			if a == "-p" && i+1 < len(args) {
+				got = args[i+1]
+				break
+			}
+		}
+		if got != want {
+			t.Fatalf("%s sent %q, want %q", runner, got, want)
+		}
+	}
+}
+
 // A run told to use workers must reach the pool: a sequential loop produces the same aggregate as
 // a concurrent one, so nothing else in this file can see whether the flag does anything.
 func TestRunRunsCasesSideBySideWithWorkers(t *testing.T) {
@@ -83,7 +224,7 @@ func TestRunRunsCasesSideBySideWithWorkers(t *testing.T) {
 	}
 	var mu sync.Mutex
 	live, peak := 0, 0
-	agent := func(ctx context.Context, ws string, opts Options) (AgentResult, error) {
+	agent := func(ctx context.Context, ws string, key Key, opts Options) (AgentResult, error) {
 		mu.Lock()
 		live++
 		if live > peak {
@@ -123,7 +264,7 @@ func TestRunKeepsCaseOrderWhateverFinishesFirst(t *testing.T) {
 	for _, name := range names {
 		globs = append(globs, fakeCaseNamed(t, root, name))
 	}
-	agent := func(ctx context.Context, ws string, opts Options) (AgentResult, error) {
+	agent := func(ctx context.Context, ws string, key Key, opts Options) (AgentResult, error) {
 		for i, name := range names {
 			if strings.Contains(ws, name) {
 				// The first case is the slowest, so completion order is the reverse of case order.
@@ -159,7 +300,7 @@ func TestRunCostCeilingStopsLaunchingMoreCases(t *testing.T) {
 	for _, name := range []string{"case-a", "case-b", "case-c", "case-d"} {
 		globs = append(globs, fakeCaseNamed(t, root, name))
 	}
-	agent := func(ctx context.Context, ws string, opts Options) (AgentResult, error) {
+	agent := func(ctx context.Context, ws string, key Key, opts Options) (AgentResult, error) {
 		time.Sleep(150 * time.Millisecond)
 		return AgentResult{Result: "nothing found", CostUSD: 1.00, Turns: 2}, nil
 	}
@@ -206,7 +347,7 @@ func TestRunLogsEachCaseAsItFinishes(t *testing.T) {
 		globs = append(globs, fakeCaseNamed(t, root, name))
 	}
 	release := make(chan struct{})
-	agent := func(ctx context.Context, ws string, opts Options) (AgentResult, error) {
+	agent := func(ctx context.Context, ws string, key Key, opts Options) (AgentResult, error) {
 		if strings.Contains(ws, "case-c") {
 			// Hold the last case open until the test has seen the other two lines.
 			<-release
@@ -247,7 +388,7 @@ func TestRunRecordsCorpusInHistory(t *testing.T) {
 	}
 	caseDir := fakeCase(t)
 	benchDir := t.TempDir()
-	agent := func(ctx context.Context, ws string, opts Options) (AgentResult, error) {
+	agent := func(ctx context.Context, ws string, key Key, opts Options) (AgentResult, error) {
 		return AgentResult{Result: "nothing found", CostUSD: 0.1, Turns: 3}, nil
 	}
 	agg, _ := Run(Options{CasesGlob: caseDir, Runs: 1, Timeout: time.Minute, SuiteTimeout: time.Minute, Out: t.TempDir(), BenchDir: benchDir, Agent: agent})

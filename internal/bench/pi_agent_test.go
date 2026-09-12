@@ -93,7 +93,7 @@ func TestPiStreamTreatsAnErroredAssistantMessageAsAFailure(t *testing.T) {
 func TestPiAgentReportsASpawnFailureAndANonZeroExit(t *testing.T) {
 	ws := t.TempDir()
 	t.Setenv("PATH", t.TempDir()) // no pi anywhere
-	ar, err := piAgent(context.Background(), ws, Options{})
+	ar, err := piAgent(context.Background(), ws, Key{}, Options{})
 	if err == nil {
 		t.Fatalf("a missing pi must be an error, got %+v", ar)
 	}
@@ -107,7 +107,7 @@ func TestPiAgentReportsASpawnFailureAndANonZeroExit(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin)
-	ar, err = piAgent(context.Background(), ws, Options{})
+	ar, err = piAgent(context.Background(), ws, Key{}, Options{})
 	if err == nil {
 		t.Fatalf("a non-zero exit must be an error, got %+v", ar)
 	}
@@ -131,7 +131,7 @@ func TestPiAgentMarksATimeout(t *testing.T) {
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
-	ar, err := piAgent(ctx, t.TempDir(), Options{})
+	ar, err := piAgent(ctx, t.TempDir(), Key{}, Options{})
 	if err != nil {
 		t.Fatalf("a timeout is reported through the result, not as an error: %v", err)
 	}
@@ -159,7 +159,7 @@ func TestRunPicksTheAgentOfTheSelectedRunner(t *testing.T) {
 	requireNodeAndGit(t)
 	caseDir := fakeCase(t)
 	spawned := false
-	agent := func(ctx context.Context, ws string, opts Options) (AgentResult, error) {
+	agent := func(ctx context.Context, ws string, key Key, opts Options) (AgentResult, error) {
 		spawned = true
 		if opts.Runner != RunnerPi {
 			t.Errorf("the runner must reach Options: %q", opts.Runner)

@@ -16,7 +16,7 @@ func TestFailedAgentIsNotScored(t *testing.T) {
 	}
 	caseDir := fakeCase(t)
 	out := t.TempDir()
-	agent := func(ctx context.Context, ws string, opts Options) (AgentResult, error) {
+	agent := func(ctx context.Context, ws string, key Key, opts Options) (AgentResult, error) {
 		return AgentResult{ExitCode: 1, Raw: "boom"}, errors.New("claude: exit status 1")
 	}
 	agg, _ := Run(Options{CasesGlob: caseDir, Runs: 1, Timeout: time.Minute, SuiteTimeout: time.Minute, Out: out, Agent: agent})
@@ -41,7 +41,7 @@ func TestErrorResultEventCountsAsFailure(t *testing.T) {
 		t.Skip("spawns node and git")
 	}
 	caseDir := fakeCase(t)
-	agent := func(ctx context.Context, ws string, opts Options) (AgentResult, error) {
+	agent := func(ctx context.Context, ws string, key Key, opts Options) (AgentResult, error) {
 		return AgentResult{IsError: true, ErrorText: "error_during_execution rate limited", CostUSD: 0.1, Turns: 1}, nil
 	}
 	agg, _ := Run(Options{CasesGlob: caseDir, Runs: 1, Timeout: time.Minute, SuiteTimeout: time.Minute, Out: t.TempDir(), Agent: agent})
@@ -56,7 +56,7 @@ func TestRetryRecoversFromOneInfrastructureFailure(t *testing.T) {
 	}
 	caseDir := fakeCase(t)
 	calls := 0
-	agent := func(ctx context.Context, ws string, opts Options) (AgentResult, error) {
+	agent := func(ctx context.Context, ws string, key Key, opts Options) (AgentResult, error) {
 		calls++
 		if calls == 1 {
 			return AgentResult{ExitCode: 1}, errors.New("claude: exit status 1")
@@ -85,7 +85,7 @@ func TestMissesKeepTheirWorkspace(t *testing.T) {
 		t.Skip("spawns node and git")
 	}
 	caseDir := fakeCase(t)
-	agent := func(ctx context.Context, ws string, opts Options) (AgentResult, error) {
+	agent := func(ctx context.Context, ws string, key Key, opts Options) (AgentResult, error) {
 		return AgentResult{Result: "nothing found", CostUSD: 0.1, Turns: 3}, nil
 	}
 	agg, _ := Run(Options{CasesGlob: caseDir, Runs: 1, Timeout: time.Minute, SuiteTimeout: time.Minute, Out: t.TempDir(), Agent: agent})

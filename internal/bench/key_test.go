@@ -55,3 +55,42 @@ func TestLoadKeyMissingFile(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 }
+
+// A case's bounded request is the unit of work the run is asked to test. A key without one is the
+// generic case the bench has always run; a key that supplies a blank one is a mistake in the key, so
+// it is refused instead of being read back as "no request".
+func TestLoadKeyValidatesTheCaseRequest(t *testing.T) {
+	valid := `{"id":"c1","language":"node","suite":"node --test","surface":"lib","defects":[{"id":"d1","file":"src/a.js","line":3,"class":"boundary","keywords":["limit"],"description":"x","trigger":{"input":"i","expected":"e","actual":"a"},"why_missed":"w"}]}`
+	withRequest := func(value string) string {
+		return strings.Replace(valid, `"surface":"lib"`, `"surface":"lib","request":`+value, 1)
+	}
+	cases := []struct {
+		name    string
+		body    string
+		want    string
+		wantErr string
+	}{
+		{"no request is the generic case", valid, "", ""},
+		{"a request names the bounded unit of work", withRequest(`"src/slug.js"`), "src/slug.js", ""},
+		{"a request is trimmed", withRequest(`"  src/slug.js  "`), "src/slug.js", ""},
+		{"a blank request is refused", withRequest(`"   "`), "", "request"},
+		{"a null request is the generic case", withRequest("null"), "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			k, err := LoadKey(writeKey(t, tc.body))
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("error = %v, want containing %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got := k.RequestText(); got != tc.want {
+				t.Fatalf("RequestText = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
