@@ -2,6 +2,16 @@
 
 Status: proposal, not implemented. Written 2026-09-10 against skill 0.3.6.
 
+**Measured, 2026-09-12, and the falsification below is why this note is here.** Eighteen cases at three
+runs a case, both sides on the same instrument, same model, same machine. The scoped mode declared
+itself **seven times on each side**: the trigger wording was never what kept it from firing — a prompt
+that named no bounded unit of work was — so the mode's reachability came from the reading, not from
+the rule. Detection was unchanged (77 versus 78 caught of 93) and the runs cost **8.5% more turns and
+6% more tokens**. The mode is kept for what it records, not for what it saves: a `Light:` run states
+its blast radius, the classes it touched, and a reason for every layer it skipped, and that record is
+what a plan which swept everything never leaves behind. The boundary list is not narrowed on this
+evidence, and no reading should claim a saving from it.
+
 ## Problem, with the field evidence
 
 A session ran the discipline on a change confined to one scope and paid for a whole-app campaign:

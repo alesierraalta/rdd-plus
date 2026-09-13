@@ -158,6 +158,17 @@ bin/rdd-plus bench run --cases '*' --runs 2 --model sonnet --agent-config bench 
 Eighteen cases at two runs each is roughly 36 agent runs; the last fifteen-case run cost $12.83, so
 the ceiling above stops the run just past where it would have spent what the corpus is worth.
 
+## What a reading can decide
+
+One run per case decides nothing. Two runs of the same configuration have flipped four of seventeen
+cases and moved the turn total by 13%; at three runs a case, five of the eighteen cases still change
+their own outcome (`n01`, `n02`, `n06`, `n08`, `n12`). Treat a per-case verdict as a sample, and a claim
+about the corpus as a claim about a distribution: the totals of one pass are not a result.
+
+The digest identifies the measurement — the cases, the request each one is asked for, and the runs per
+case — so a reading that changed any of those is not comparable with one that did not, and `bench
+compare` refuses when the two digests differ.
+
 ## Rules
 
 - The key never travels into the workspace the agent sees. Only `fixture/` is copied.

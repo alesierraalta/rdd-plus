@@ -81,11 +81,16 @@ EXECUTE mode resumes from the first `pending` row; a refreshed PLAN keeps existi
 ## Scoped runs: what a bounded trigger buys
 
 A bounded trigger — the operator names one area, file or module, or the diff is confined to one or two
-files — buys a smaller campaign, never a shallower one. The plan stops inventorying surfaces the
-trigger cannot reach. The target it does reach climbs to its rung through its sibling, leaves a pinning
-test and an evidence row, and the run closes on `rdd-plus plan check` like any other. A bounded request
-and a bounded diff are the same decision reached from two sides: one names the surface, the other shows
-it.
+files — buys a plan that says what it left out and why. It does not buy a cheaper run, and the
+measurement is blunt about it: on the eighteen-case corpus at three runs a case, the scoped mode
+declared itself seven times on **each** side and the change cost 8.5% more turns and 6% more tokens,
+with detection unchanged. What it buys is the record: a `Light:` run names its blast radius, the classes
+it touched, and a reason for every layer it skipped, which a plan that swept everything never states.
+
+What the trigger does not change is the depth: execution inside the scope is not reduced. The target it
+reaches climbs to its rung through its sibling, leaves a pinning test and an evidence row, and the run
+closes on `rdd-plus plan check` like any other. A bounded request and a bounded diff are the same
+decision reached from two sides: one names the surface, the other shows it.
 
 - Eligible: "test the reservation math in `src/inventory.js`"; a two-file fix to a pure function whose
 documented contract does not change.
