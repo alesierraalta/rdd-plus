@@ -53,7 +53,9 @@ var (
 	// A scoped run declares itself in one plan-header line, `Light: <blast radius> · touches
 	// <classes>`. The declaration is the cheap half of the decision: a binary can read its shape and
 	// whether the plan corroborates the target it names, never whether the change was really bounded.
-	lightLineRe  = regexp.MustCompile(`(?m)^\s*Light:[ \t]*(.*)$`)
+	// The whitespace class stays inside the line: a declaration is one header line, and a match that can
+	// start on the previous line would name the wrong line as its home.
+	lightLineRe  = regexp.MustCompile(`^[ \t]*Light:[ \t]*(.*)$`)
 	lightShapeRe = regexp.MustCompile(`^(.+?)[ \t]*·[ \t]*touches[ \t]*(.*)$`)
 )
 
@@ -141,7 +143,7 @@ func CheckDocument(doc string) []string {
 			problems = append(problems, fmt.Sprintf("line %d: finding %s is settled but names no pinning test", r.line, id))
 		}
 	}
-	if lightProblems, declared := lightReport(doc); declared {
+	if lightProblems, declared := lightReport(lines); declared {
 		problems = append(problems, lightProblems...)
 	}
 	return problems
@@ -167,60 +169,80 @@ func findingStatus(raw string) (string, string) {
 // The bench reads activation from here, so an ordinary plan, a detected defect, or a line that merely
 // looks like a declaration is never a scoped run.
 func LightActivated(doc string) bool {
-	problems, declared := lightReport(doc)
+	problems, declared := lightReport(strings.Split(doc, "\n"))
 	return declared && len(problems) == 0
+}
+
+// lightDecl is a parsed `Light:` declaration: the target it names, the line it sits on, and the breaches
+// its own shape owes. Whether the change was really bounded stays with the operator and the plan's
+// reader, never with this check.
+type lightDecl struct {
+	target   string
+	line     int
+	problems []string
+	found    bool
 }
 
 // lightReport returns every breach a declared scoped run owes, and whether the plan declares one at
 // all. A plan that never claims to be scoped owes none of these rules.
-func lightReport(doc string) ([]string, bool) {
-	target, problems, declared := lightDeclaration(doc)
-	if !declared {
+func lightReport(lines []string) ([]string, bool) {
+	d := lightDeclaration(lines)
+	if !d.found {
 		return nil, false
 	}
-	if target != "" && !targetIsInEvidence(doc, target) {
-		problems = append(problems, fmt.Sprintf("the Light declaration names target %s, which no Ranked-target row and no path:line citation corroborates", target))
+	problems := d.problems
+	if d.target != "" && !targetIsInEvidence(lines, d.target) {
+		problems = append(problems, fmt.Sprintf("line %d: the Light declaration names target %s, which no Ranked-target row and no path:line citation corroborates", d.line, quote(d.target)))
 	}
-	return append(problems, unscopedLayers(doc)...), true
+	layersHeading, layersEnd := sectionRegion(lines, "Layer matrix")
+	return append(problems, unscopedLayers(scanTable(lines, layersHeading+1, layersEnd))...), true
 }
 
 // lightDeclaration reads the `Light:` header: the declared shape, a non-empty blast radius and
 // non-empty touched classes. The classes are the declaration's own words; a binary can read that they
-// are there, never that they are true.
-func lightDeclaration(doc string) (target string, problems []string, declared bool) {
-	m := lightLineRe.FindStringSubmatch(doc)
-	if m == nil {
-		return "", nil, false
+// are there, never that they are true. It reads the declaration line by line so a breach can name the
+// line the declaration sits on.
+func lightDeclaration(lines []string) lightDecl {
+	for i, l := range lines {
+		m := lightLineRe.FindStringSubmatch(l)
+		if m == nil {
+			continue
+		}
+		line := i + 1
+		shape := lightShapeRe.FindStringSubmatch(strings.TrimSpace(m[1]))
+		if shape == nil {
+			return lightDecl{line: line, found: true, problems: []string{
+				fmt.Sprintf("line %d: the Light declaration must read `Light: <blast radius> · touches <classes>`", line)}}
+		}
+		target, classes := strings.TrimSpace(shape[1]), strings.TrimSpace(shape[2])
+		var problems []string
+		if target == "" || placeholder.MatchString(target) {
+			problems = append(problems, fmt.Sprintf("line %d: the Light declaration names no blast radius", line))
+			// Nothing to corroborate: the breach is reported once, not again as a target the plan
+			// cannot vouch for.
+			target = ""
+		}
+		if classes == "" || placeholder.MatchString(classes) {
+			problems = append(problems, fmt.Sprintf("line %d: the Light declaration names no touched classes", line))
+		}
+		return lightDecl{target: target, line: line, problems: problems, found: true}
 	}
-	shape := lightShapeRe.FindStringSubmatch(strings.TrimSpace(m[1]))
-	if shape == nil {
-		return "", []string{"the Light declaration must read `Light: <blast radius> · touches <classes>`"}, true
-	}
-	target, classes := strings.TrimSpace(shape[1]), strings.TrimSpace(shape[2])
-	if target == "" || placeholder.MatchString(target) {
-		problems = append(problems, "the Light declaration names no blast radius")
-		// Nothing to corroborate: the breach is reported once, not again as a target the plan
-		// cannot vouch for.
-		target = ""
-	}
-	if classes == "" || placeholder.MatchString(classes) {
-		problems = append(problems, "the Light declaration names no touched classes")
-	}
-	return target, problems, true
+	return lightDecl{}
 }
 
 // targetIsInEvidence corroborates a declared blast radius against what the plan already carries: an
 // exact `Target` cell in the ranked targets, or a path the plan cites as path:line. Reading the claim
 // back against the plan is all a binary can do; whether the target is bounded stays with the reader.
-func targetIsInEvidence(doc, target string) bool {
-	rows, header := table(section(doc, "Ranked targets"))
-	iTarget := columnIndex(header, "target")
-	for _, row := range rows {
-		if iTarget >= 0 && cell(row, iTarget) == target {
+func targetIsInEvidence(lines []string, target string) bool {
+	rankedHeading, rankedEnd := sectionRegion(lines, "Ranked targets")
+	ranked := scanTable(lines, rankedHeading+1, rankedEnd)
+	iTarget := columnIndex(ranked.header, "target")
+	for _, r := range ranked.rows {
+		if iTarget >= 0 && cell(r.cells, iTarget) == target {
 			return true
 		}
 	}
-	for _, cite := range pathCiteRe.FindAllString(doc, -1) {
+	for _, cite := range pathCiteRe.FindAllString(strings.Join(lines, "\n"), -1) {
 		if path, _, ok := strings.Cut(cite, ":"); ok && path == target {
 			return true
 		}
@@ -231,17 +253,16 @@ func targetIsInEvidence(doc, target string) bool {
 // unscopedLayers enforces the one rule a `Light:` plan owes beyond the ordinary contract: a layer
 // the run left out states why in its `Scope` cell, in a sentence rather than a keyword. Without it
 // `Light:` is a label anyone can type, and the layer sweep's blind spot comes back unrecorded.
-func unscopedLayers(doc string) []string {
-	rows, header := table(section(doc, "Layer matrix"))
-	iStatus := columnIndex(header, "status")
-	iScope := columnIndex(header, "scope")
+func unscopedLayers(layers tableScan) []string {
+	iStatus := columnIndex(layers.header, "status")
+	iScope := columnIndex(layers.header, "scope")
 	var problems []string
-	for _, row := range rows {
-		if !naStatus.MatchString(cell(row, iStatus)) {
+	for _, r := range layers.rows {
+		if !naStatus.MatchString(cell(r.cells, iStatus)) {
 			continue
 		}
-		if cell(row, iScope) == "" {
-			problems = append(problems, fmt.Sprintf("layer %s is out of scope in a Light plan and its Scope cell is empty, so nothing records why it was left out", cell(row, 0)))
+		if cell(r.cells, iScope) == "" {
+			problems = append(problems, fmt.Sprintf("line %d: layer %s is out of scope in a Light plan and its Scope cell is empty, so nothing records why it was left out", r.line, quote(cell(r.cells, 0))))
 		}
 	}
 	return problems
@@ -312,9 +333,9 @@ func sectionRegion(lines []string, name string) (heading, end int) {
 	return -1, -1
 }
 
-// section and table are the readers the Light declaration still uses: the Light path keeps the rules and
-// the messages it had, so this slice cannot move its activation reading while the table scanner changes.
-// When the Light rules move onto sectionRegion/scanTable these two go with them.
+// section and table are the readers gaps.go still uses. The Light rules read their tables through
+// sectionRegion and scanTable instead, so a Light breach can name the row it blames; when the gaps sweep
+// moves onto the same scanner these two go with it.
 
 // section returns the body under "## <name>" up to the next level-2 heading.
 func section(doc, name string) string {

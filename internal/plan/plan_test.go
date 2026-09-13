@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -335,6 +336,75 @@ func TestLightActivatedIsNarrow(t *testing.T) {
 				t.Fatalf("LightActivated = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// A Light breach is located like every other row-level breach: a declaration that breaks its own shape
+// names the line it sits on, so the reader opens the plan where the fix goes instead of grepping for the
+// label the message quotes.
+func TestCheckNamesTheLineOfTheLightDeclaration(t *testing.T) {
+	cases := []struct {
+		name   string
+		prefix string
+		light  string
+		want   string
+	}{
+		{
+			name:  "a declaration without the separator",
+			light: "Light: cli flags\n\n",
+			want:  "line 1: the Light declaration must read",
+		},
+		{
+			name:  "a declaration whose blast radius is a placeholder",
+			light: "Light: n/a · touches cli\n\n",
+			want:  "line 1: the Light declaration names no blast radius",
+		},
+		{
+			name:  "a declaration whose touched classes are a placeholder",
+			light: "Light: cli flags · touches none\n\n",
+			want:  "line 1: the Light declaration names no touched classes",
+		},
+		{
+			name:  "a target the plan never ranked",
+			light: "Light: ledger rewrites · touches persistence\n\n",
+			want:  "line 1: the Light declaration names target ledger rewrites, which no Ranked-target row",
+		},
+		{
+			name:   "a declaration below the plan header",
+			prefix: "# Test plan\n\n",
+			light:  "Light: ledger rewrites · touches persistence\n\n",
+			want:   "line 3: the Light declaration names target ledger rewrites, which no Ranked-target row",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := write(t, t.TempDir(), "plan.md", tc.prefix+scopedPlan(tc.light, "no persistence in the touched diff"))
+			problems, err := Check(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if joined := strings.Join(problems, "\n"); !strings.Contains(joined, tc.want) {
+				t.Fatalf("problems = %v, want one containing %q", problems, tc.want)
+			}
+		})
+	}
+}
+
+// The layer a Light plan left out is named by the line its own row sits on, not by the table that holds
+// it: a second `n/a` row must not inherit the line of the first one.
+func TestCheckNamesTheLineOfTheLayerItBlames(t *testing.T) {
+	doc := scopedPlan(lightLine, "")
+	// A compliant layer first, so the breach has a row above it to be confused with.
+	doc = strings.Replace(doc, "| Persistence and migrations |", "| API contracts | `none` | reviewed in place | done |\n| Persistence and migrations |", 1)
+	row := "| Persistence and migrations |"
+	want := fmt.Sprintf("line %d: layer Persistence and migrations is out of scope", strings.Count(doc[:strings.Index(doc, row)], "\n")+1)
+	p := write(t, t.TempDir(), "plan.md", doc)
+	problems, err := Check(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if joined := strings.Join(problems, "\n"); !strings.Contains(joined, want) {
+		t.Fatalf("problems = %v, want one containing %q", problems, want)
 	}
 }
 
