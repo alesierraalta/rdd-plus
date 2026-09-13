@@ -432,3 +432,75 @@ func TestSplitHonoursEscapedPipes(t *testing.T) {
 		}
 	}
 }
+
+// The Findings vocabulary is closed. A status outside it used to be read by a `confirmed|fixed` regex
+// and silently treated as unsettled, so a row labelled `resolved` stopped owing the test that holds its
+// verdict and the plan still passed.
+func TestCheckNamesAStatusOutsideTheFindingsVocabulary(t *testing.T) {
+	cases := []struct {
+		name    string
+		status  string
+		pin     string
+		want    string
+		wantNot string
+	}{
+		{
+			name:   "a status the vocabulary does not carry",
+			status: "resolved",
+			pin:    "",
+			want:   `line 5: finding F1 status "resolved" is not one of: open, confirmed, fixed, rejected, wontfix`,
+			// The breach is the vocabulary's. An unknown status is neither valid nor read as a settled one
+			// that owes a pinning test, so the row is judged once and on the rule it actually broke.
+			wantNot: "names no pinning test",
+		},
+		{
+			name:   "a row with no status at all",
+			status: "",
+			pin:    "",
+			want:   "line 5: finding F1 has no status: one of open, confirmed, fixed, rejected, wontfix",
+		},
+		{
+			name:   "a documented settled status still owes its pinning test",
+			status: " FIXED ",
+			pin:    "",
+			want:   "line 5: finding F1 is settled but names no pinning test",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			plan := header + "| F1 | `src/a.js:5` x | M | yes | E1 | " + tc.pin + " | " + tc.status + " | me | - | - |\n" +
+				ledger + "| E1 | c | cmd | i | o | m | r | observado |\n"
+			p := write(t, t.TempDir(), "plan.md", plan)
+			problems, err := Check(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			joined := strings.Join(problems, "\n")
+			if !strings.Contains(joined, tc.want) {
+				t.Fatalf("problems = %v, want one containing %q", problems, tc.want)
+			}
+			if tc.wantNot != "" && strings.Contains(joined, tc.wantNot) {
+				t.Fatalf("problems = %v, want none containing %q", problems, tc.wantNot)
+			}
+		})
+	}
+}
+
+// A closed vocabulary has an accepted side worth pinning too: every documented status is read as
+// written, and a settled one that names its pinning test owes nothing.
+func TestCheckAcceptsEveryDocumentedFindingsStatus(t *testing.T) {
+	for _, status := range []string{"open", "confirmed", "fixed", "rejected", "wontfix"} {
+		t.Run(status, func(t *testing.T) {
+			plan := header + "| F1 | `src/a.js:5` x | M | yes | E1 | t.js :: x | " + status + " | me | - | - |\n" +
+				ledger + "| E1 | c | cmd | i | o | m | r | observado |\n"
+			p := write(t, t.TempDir(), "plan.md", plan)
+			problems, err := Check(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(problems) != 0 {
+				t.Fatalf("status %q is documented and owes nothing here: %v", status, problems)
+			}
+		})
+	}
+}
