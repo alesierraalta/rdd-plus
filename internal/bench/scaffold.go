@@ -59,17 +59,22 @@ func Scaffold(caseDir, ws string, key Key, suiteTimeout time.Duration) (SuiteRes
 			return SuiteResult{}, fmt.Errorf("git %s: %v: %s", args[0], err, strings.TrimSpace(out))
 		}
 	}
-	return RunSuite(ws, key.Suite, suiteTimeout), nil
+	return RunSuite(ws, key.Suite, suiteTimeout)
 }
 
-// RunSuite executes the fixture suite command in ws and parses pass/fail counts best-effort.
-func RunSuite(ws, suite string, timeout time.Duration) SuiteResult {
-	// A suite the corpus carries is well formed; a malformed one keeps the words it read, exactly as the
-	// whitespace split it replaces did, so no recorded reading changes.
-	fields, _ := doctor.ShellWords(suite)
+// RunSuite executes the fixture suite command in ws and parses pass/fail counts best-effort. A command the
+// shared splitter cannot read is refused before any subprocess runs: the words read so far are the head of a
+// command nobody wrote, because an unterminated quote is dropped rather than kept, so `sh -c "touch x` would
+// run `touch x` and the run would record a suite failure the fixture never had. The refused result keeps the
+// command it could not read, so the caller can report which suite was unreadable.
+func RunSuite(ws, suite string, timeout time.Duration) (SuiteResult, error) {
 	res := SuiteResult{Command: suite, ExitCode: -1}
+	fields, err := doctor.ShellWords(suite)
+	if err != nil {
+		return res, err
+	}
 	if len(fields) == 0 {
-		return res
+		return res, nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -77,7 +82,7 @@ func RunSuite(ws, suite string, timeout time.Duration) SuiteResult {
 	cmd.Dir = ws
 	var buf bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &buf, &buf
-	err := cmd.Run()
+	err = cmd.Run()
 	if err == nil {
 		res.ExitCode = 0
 	} else if ee := (&exec.ExitError{}); errors.As(err, &ee) {
@@ -86,7 +91,7 @@ func RunSuite(ws, suite string, timeout time.Duration) SuiteResult {
 	res.Passed, res.Failed = parseCounts(buf.String())
 	res.Green = res.ExitCode == 0
 	res.Output = tail(buf.String(), 2000)
-	return res
+	return res, nil
 }
 
 var (

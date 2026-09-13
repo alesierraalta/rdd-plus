@@ -3,6 +3,7 @@ package bench
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -23,20 +24,30 @@ func TestSuiteCommandIsSplitWithTheSharedQuoteRule(t *testing.T) {
 	}
 
 	suite := `sh "` + script + `"`
-	argv, parser := perTestCommand(suite)
+	argv, parser, err := perTestCommand(suite)
+	if err != nil {
+		t.Fatalf("a well-formed suite reports no split error: %v", err)
+	}
 	if len(argv) != 2 || argv[0] != "sh" || argv[1] != script {
 		t.Fatalf("a quoted path with a space must be one word: %q", argv)
 	}
 	if parser != nil {
 		t.Fatal("a sh suite has no per-test format, got one")
 	}
-	if res := RunSuite(dir, suite, time.Minute); res.ExitCode != 0 || !res.Green {
+	res, err := RunSuite(dir, suite, time.Minute)
+	if err != nil {
+		t.Fatalf("suite %q: %v", suite, err)
+	}
+	if res.ExitCode != 0 || !res.Green {
 		t.Fatalf("suite %q: exit %d, green %v, output %q", suite, res.ExitCode, res.Green, res.Output)
 	}
 
 	// The per-test rewrite inserts its reporter flag into the split words without re-splitting what it
 	// kept, so the quoted argument survives the rewrite too.
-	argv, parser = perTestCommand(`node --test "` + suiteDir + `/x.test.js"`)
+	argv, parser, err = perTestCommand(`node --test "` + suiteDir + `/x.test.js"`)
+	if err != nil {
+		t.Fatalf("a well-formed suite reports no split error: %v", err)
+	}
 	want := []string{"node", "--test", "--test-reporter=tap", filepath.Join(suiteDir, "x.test.js")}
 	if parser == nil {
 		t.Fatalf("node --test must keep its per-test format: %q", argv)
@@ -48,6 +59,60 @@ func TestSuiteCommandIsSplitWithTheSharedQuoteRule(t *testing.T) {
 		if argv[i] != want[i] {
 			t.Fatalf("node rewrite: %q, want %q", argv, want)
 		}
+	}
+}
+
+// A suite whose quote is left open is not a command anyone can read, so the splitter reports it. Running the
+// words read so far would run a command nobody wrote: the quote is dropped, not preserved, so `sh -c "touch
+// /tmp/x/marker` would run `touch /tmp/x/marker` and report a suite failure the fixture never had. The
+// marker proves the refusal is pre-execution: nothing ran, so the file was never created.
+func TestSuiteWithAnUnterminatedQuoteIsRefusedBeforeItRuns(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "marker")
+	suite := `sh -c "touch ` + marker
+
+	res, err := RunSuite(dir, suite, time.Minute)
+	if err == nil {
+		t.Fatalf("a suite the splitter cannot read must be refused: %+v", res)
+	}
+	if !strings.Contains(err.Error(), "unterminated quote") {
+		t.Fatalf("the refusal must be the shared splitter's error, not a new one: %v", err)
+	}
+	if res.Command != suite || res.ExitCode != -1 || res.Green {
+		t.Fatalf("a refused suite keeps its command and records no outcome: %+v", res)
+	}
+	if _, _, err := suiteOn(dir, "", dir, nil, suite, time.Minute); err == nil {
+		t.Fatal("the whole-suite check must report the suite it cannot read")
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("the malformed suite ran: the dropped quote turned it into a touch command")
+	}
+}
+
+// The per-test path reads the same field with the same rule, so it must refuse the same malformed suite
+// before it stages or runs anything. The marker is what makes this behavioral rather than an assertion about
+// an error value: had the words read so far been run, the file would exist.
+func TestPerTestSuiteWithAnUnterminatedQuoteIsRefusedBeforeItRuns(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "marker")
+	suite := `sh -c "touch ` + marker
+
+	if _, _, err := perTestCommand(suite); err == nil {
+		t.Fatal("the per-test rewrite must report a suite it cannot read")
+	}
+	outcomes, code, out, err := perTest(dir, suite, time.Minute)
+	if err == nil || outcomes != nil || code != -1 || out != "" {
+		t.Fatalf("a refused per-test run records no outcome: %v %v %q %v", outcomes, code, out, err)
+	}
+	_, _, _, terr := testsOn(t.TempDir(), "", dir, nil, suite, time.Minute)
+	if terr == nil {
+		t.Fatal("the per-test check must report the suite it cannot read")
+	}
+	if !strings.Contains(terr.Error(), "unterminated quote") {
+		t.Fatalf("the refusal must be the shared splitter's error, not a new one: %v", terr)
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("the malformed suite ran: the dropped quote turned it into a touch command")
 	}
 }
 
@@ -67,7 +132,10 @@ func TestSuiteCommandWithoutQuotesIsUnchanged(t *testing.T) {
 		{"a\tb\tc", []string{"a", "b", "c"}},
 	}
 	for _, tc := range cases {
-		argv, _ := perTestCommand(tc.in)
+		argv, _, err := perTestCommand(tc.in)
+		if err != nil {
+			t.Fatalf("%q: %v", tc.in, err)
+		}
 		if len(argv) != len(tc.want) {
 			t.Fatalf("%q -> %q, want %q", tc.in, argv, tc.want)
 		}

@@ -207,14 +207,19 @@ func agentTestFiles(fixture, ws string) ([]string, error) {
 	return out, err
 }
 
-// suiteOn runs the suite on fixture + overlay + the agent's test files, in a fresh directory.
+// suiteOn runs the suite on fixture + overlay + the agent's test files, in a fresh directory. A suite the
+// shared splitter cannot read is reported instead of run, so the caller records the case as unreadable
+// rather than as a suite failure the fixture never had.
 func suiteOn(fixture, overlay, ws string, tests []string, suite string, timeout time.Duration) (green bool, output string, err error) {
 	dir, err := stage(fixture, overlay, ws, tests)
 	if err != nil {
 		return false, "", err
 	}
 	defer os.RemoveAll(dir)
-	r := RunSuite(dir, suite, timeout)
+	r, err := RunSuite(dir, suite, timeout)
+	if err != nil {
+		return false, r.Output, err
+	}
 	return r.ExitCode == 0, r.Output, nil
 }
 
@@ -225,8 +230,7 @@ func testsOn(fixture, overlay, ws string, tests []string, suite string, timeout 
 		return nil, -1, "", err
 	}
 	defer os.RemoveAll(dir)
-	outcomes, code, out := perTest(dir, suite, timeout)
-	return outcomes, code, out, nil
+	return perTest(dir, suite, timeout)
 }
 
 // stage builds fixture + overlay + the agent's test files in a fresh directory.

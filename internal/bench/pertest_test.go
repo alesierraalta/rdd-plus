@@ -50,7 +50,10 @@ func TestPerTestCommand(t *testing.T) {
 		"sh run-tests.sh":     {"sh", "run-tests.sh"},
 	}
 	for suite, want := range cases {
-		got, _ := perTestCommand(suite)
+		got, _, err := perTestCommand(suite)
+		if err != nil {
+			t.Fatalf("%q: %v", suite, err)
+		}
 		if len(got) != len(want) {
 			t.Fatalf("%q: %v", suite, got)
 		}
