@@ -77,15 +77,26 @@ func (g Gaps) quotesFromThePlan() bool {
 // cells are attacker-controlled the moment you open somebody else's checkout.
 const MaxQuoted = 120
 
-// instructionShaped catches the cheapest prompt injections: a cell written as a command to the
-// reader rather than as the name of a thing.
-var instructionShaped = regexp.MustCompile(`(?i)\b(ignore|disregard|forget)\b.{0,20}\b(previous|prior|above|all)\b|\bsystem prompt\b|\byou must\b`)
+// instructionShaped catches the cheapest prompt injections: a cell written as a command to the reader rather
+// than as the name of a thing. The keyword is anchored where it ends, not where it starts: residue glued in
+// front of it must not hide it, while a keyword inside a longer word (`ignoring the all-clear`) still misses.
+var instructionShaped = regexp.MustCompile(`(?i)(ignore|disregard|forget)\b.{0,20}\b(previous|prior|above|all)\b|\bsystem prompt\b|\byou must\b`)
+
+// ansiSequence matches the terminal escapes a plan cell can carry: a CSI sequence (`ESC [` … final byte, which
+// is every SGR colour, and the same sequence under the C1 byte U+009B), an OSC (`ESC ]` … `BEL` or … `ESC \`),
+// and the two-byte escapes a terminal acts on. They are stripped first, because the control pass below would
+// otherwise delete the ESC and print the payload — `[31m` — as residue in front of the instruction it smuggled.
+var ansiSequence = regexp.MustCompile("\\x1b\\[[0-9;?]*[ -/]*[@-~]|\\x9b[0-9;?]*[ -/]*[@-~]|\\x1b\\][^\\x07\\x1b]*(?:\\x07|\\x1b\\\\)?|\\x1b[@-Z\\\\-_]")
 
 // quote makes one cell safe to print: a single line, bounded, with nothing that reads as an
 // instruction or opens a table of its own.
 func quote(s string) string {
+	// Bytes that are not UTF-8 reach every pass below as invisible U+FFFD; an unterminated OSC is stripped with its title.
+	s = strings.ToValidUTF8(s, " ")
+	s = ansiSequence.ReplaceAllString(s, "")
 	s = strings.Map(func(r rune) rune {
-		if r == '\n' || r == '\r' || r == '\t' || r < 0x20 || r == 0x7f {
+		// C1 controls are escape residue as much as their 7-bit twins.
+		if r == '\n' || r == '\r' || r == '\t' || r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
 			return ' '
 		}
 		return r
