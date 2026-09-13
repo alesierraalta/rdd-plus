@@ -114,28 +114,39 @@ type Aggregate struct {
 	RescoredFrom   string `json:"rescored_from,omitempty"` // set when this aggregate re-reads another run with newer rules
 	RunTS          string `json:"run_ts,omitempty"`        // rescore: when the run it re-reads happened
 	SkillVersion   string `json:"skill_version,omitempty"` // rescore: the version that produced the run
-	Corpus         string `json:"corpus,omitempty"`        // digest of the case names and defect ids this run measured
+	Corpus         string `json:"corpus,omitempty"`        // digest of the measurement this run made: cases, requests, runs
+	Runs           int    `json:"runs"`                    // runs per case the reading asked for: three runs triple the defect denominator
 }
 
-// CorpusCase is one case of a corpus: its name and the ids of the defects planted in it.
+// CorpusCase is one case of a corpus: its name, the bounded request it is asked for, and the ids of
+// the defects planted in it.
 type CorpusCase struct {
 	Name    string
+	Request string
 	Defects []string
 }
 
-// CorpusDigest identifies a corpus by its case names and defect ids. It is stable under case
-// and defect-id reordering, and changes when a case name or a defect id changes or a defect is
-// added or removed. Two runs whose digests differ did not measure the same ground.
-func CorpusDigest(cases []CorpusCase) string {
+// CorpusDigest identifies the measurement a run makes: the cases it covers, the request each one is
+// asked for, and how many times each runs. It is stable under case and defect-id reordering, and moves
+// when any of those changes, so two runs whose digests differ did not measure the same ground. The
+// parts are length-prefixed: joined with a bare separator, a name or an id carrying that separator
+// would impersonate two parts, and two different corpora would hash to one value.
+func CorpusDigest(cases []CorpusCase, runs int) string {
 	lines := make([]string, 0, len(cases))
 	for _, c := range cases {
 		ids := append([]string(nil), c.Defects...)
 		sort.Strings(ids)
-		lines = append(lines, c.Name+":"+strings.Join(ids, ","))
+		lines = append(lines, part(c.Name)+part(c.Request)+part(strings.Join(ids, ",")))
 	}
 	sort.Strings(lines)
-	sum := sha256.Sum256([]byte(strings.Join(lines, "\n")))
+	sum := sha256.Sum256([]byte(part(fmt.Sprint(runs)) + "\n" + strings.Join(lines, "\n")))
 	return "sha256:" + hex.EncodeToString(sum[:])[:16]
+}
+
+// part encodes one part of the digest so that no two different parts can produce the same text: the
+// length comes first, so a value containing the separator cannot stand in for two values.
+func part(s string) string {
+	return fmt.Sprint(len(s)) + ":" + s
 }
 
 // defectIDs lists a key's defect ids in key order; the digest sorts them.
@@ -166,7 +177,7 @@ func Run(opts Options) (Aggregate, int) {
 		opts.Agent = runnerAgent(opts.Runner)
 	}
 	now := time.Now()
-	agg := Aggregate{TS: now.UTC().Format(time.RFC3339), Out: opts.Out, Model: opts.Model, DryRun: opts.DryRun}
+	agg := Aggregate{TS: now.UTC().Format(time.RFC3339), Out: opts.Out, Model: opts.Model, DryRun: opts.DryRun, Runs: opts.Runs}
 	var patterns []string
 	for _, g := range strings.Split(opts.CasesGlob, ",") {
 		patterns = append(patterns, resolveCasesGlob(opts.BenchDir, strings.TrimSpace(g)))
@@ -257,7 +268,7 @@ func Run(opts Options) (Aggregate, int) {
 		// A case whose run later fails or is invalid is still part of the corpus.
 		if !inCorpus[name] {
 			inCorpus[name] = true
-			corpus = append(corpus, CorpusCase{Name: name, Defects: defectIDs(u.key)})
+			corpus = append(corpus, CorpusCase{Name: name, Request: u.key.RequestText(), Defects: defectIDs(u.key)})
 		}
 		res := results[i]
 		agg.Cases = append(agg.Cases, res)
@@ -296,7 +307,7 @@ func Run(opts Options) (Aggregate, int) {
 		code = ExitPartial
 		fmt.Fprintf(opts.Log, "partial: %d failed, %d invalid; recall covers valid cases only\n", agg.Failed, agg.Invalid)
 	}
-	agg.Corpus = CorpusDigest(corpus)
+	agg.Corpus = CorpusDigest(corpus, opts.Runs)
 	writeJSON(filepath.Join(opts.Out, "aggregate.json"), agg)
 	_ = os.WriteFile(filepath.Join(opts.Out, "summary.md"), []byte(Summary(agg)), 0o644)
 	if !opts.DryRun && opts.BenchDir != "" {
@@ -306,7 +317,7 @@ func Run(opts Options) (Aggregate, int) {
 			FalsePositives: agg.FalsePositives, CostUSD: agg.CostUSD,
 			Failed: agg.Failed, Invalid: agg.Invalid, NoPlan: agg.NoPlan, Kind: KindRun,
 			SkillVersion: SkillVersion(opts.SkillFile), Corpus: agg.Corpus,
-			LightActivated: agg.LightActivated,
+			LightActivated: agg.LightActivated, Runs: opts.Runs,
 		})
 	}
 	return agg, code

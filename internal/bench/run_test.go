@@ -24,15 +24,15 @@ func TestCorpusDigestIsStableAndSensitive(t *testing.T) {
 		{Name: "case-b", Defects: []string{"D1"}},
 		{Name: "case-a", Defects: []string{"D1", "D2"}},
 	}
-	got := CorpusDigest(base)
-	if want := "sha256:80f505d735845a9b"; got != want {
+	got := CorpusDigest(base, 1)
+	if want := "sha256:24078e5b39423c52"; got != want {
 		t.Fatalf("digest = %q, want %q", got, want)
 	}
 	if len(got) != len("sha256:")+16 || got[:len("sha256:")] != "sha256:" {
 		t.Fatalf("digest %q is not sha256: plus 16 hex characters", got)
 	}
-	if CorpusDigest(reordered) != got {
-		t.Fatalf("case and defect order must not change the digest: %s != %s", CorpusDigest(reordered), got)
+	if CorpusDigest(reordered, 1) != got {
+		t.Fatalf("case and defect order must not change the digest: %s != %s", CorpusDigest(reordered, 1), got)
 	}
 	for name, cases := range map[string][]CorpusCase{
 		"changed defect id": {{Name: "case-a", Defects: []string{"D3", "D1"}}, {Name: "case-b", Defects: []string{"D1"}}},
@@ -40,9 +40,34 @@ func TestCorpusDigestIsStableAndSensitive(t *testing.T) {
 		"added defect":      {{Name: "case-a", Defects: []string{"D2", "D1"}}, {Name: "case-b", Defects: []string{"D1", "D2"}}},
 		"removed defect":    {{Name: "case-a", Defects: []string{"D1"}}, {Name: "case-b", Defects: []string{"D1"}}},
 	} {
-		if CorpusDigest(cases) == got {
+		if CorpusDigest(cases, 1) == got {
 			t.Errorf("%s must change the digest", name)
 		}
+	}
+}
+
+// A reading is comparable to another only when both measured the same thing: the same cases, asked the
+// same way, run the same number of times. A digest that ignored the request or the run count let a
+// three-run row with a tripled denominator sit beside one-run rows as though the series were
+// like-for-like, which is what a review caught in the recorded history.
+func TestCorpusDigestSeparatesDifferentMeasurements(t *testing.T) {
+	plain := []CorpusCase{{Name: "case-a", Defects: []string{"D1"}}}
+	asked := []CorpusCase{{Name: "case-a", Request: "the clamp behaviour", Defects: []string{"D1"}}}
+	if CorpusDigest(plain, 1) == CorpusDigest(asked, 1) {
+		t.Fatal("a case asked for a bounded request is a different measurement")
+	}
+	if CorpusDigest(plain, 1) == CorpusDigest(plain, 3) {
+		t.Fatal("three runs triples the denominator, so it is a different measurement")
+	}
+	if CorpusDigest(asked, 3) == CorpusDigest(asked, 2) {
+		t.Fatal("the run count must change the digest")
+	}
+	// The parts are length-prefixed. Joined with a bare separator, a name or an id that carries it
+	// would impersonate two parts and two different corpora would hash to one value.
+	one := []CorpusCase{{Name: "a:b", Defects: []string{"c"}}}
+	two := []CorpusCase{{Name: "a", Defects: []string{"b:c"}}}
+	if CorpusDigest(one, 1) == CorpusDigest(two, 1) {
+		t.Fatalf("a separator inside a name or an id must not merge two corpora: %q", CorpusDigest(one, 1))
 	}
 }
 
@@ -127,25 +152,30 @@ func TestRunHandsEachCaseItsOwnRequest(t *testing.T) {
 	}
 }
 
-// The request changes what a run is asked to do, never the corpus it belongs to: a digest that moved
-// with it would leave no earlier reading comparable.
-func TestCorpusDigestIgnoresTheCaseRequest(t *testing.T) {
+// The request changes what a run is asked to do, so it changes the measurement: the digest has to move
+// with it. It did not, and the recorded history then held a reading with requests beside readings
+// without them as though one series covered both.
+func TestCorpusDigestMovesWithTheCaseRequest(t *testing.T) {
 	requireNodeAndGit(t)
 	caseDir := fakeCaseNamed(t, t.TempDir(), "case-a")
 	agent := func(ctx context.Context, ws string, key Key, opts Options) (AgentResult, error) {
 		return AgentResult{Result: "nothing found", CostUSD: 0.01, Turns: 2}, nil
 	}
-	digest := func() string {
-		agg, code := Run(Options{CasesGlob: caseDir, Runs: 1, Timeout: time.Minute, SuiteTimeout: time.Minute, Out: t.TempDir(), BenchDir: t.TempDir(), Agent: agent})
+	digest := func(runs int) string {
+		agg, code := Run(Options{CasesGlob: caseDir, Runs: runs, Timeout: time.Minute, SuiteTimeout: time.Minute, Out: t.TempDir(), BenchDir: t.TempDir(), Agent: agent})
 		if code != 0 {
 			t.Fatalf("exit code %d", code)
 		}
 		return agg.Corpus
 	}
-	generic := digest()
+	generic := digest(1)
 	setCaseRequest(t, caseDir, `"src/a.mjs"`)
-	if scoped := digest(); scoped != generic {
-		t.Fatalf("the request moved the corpus digest: %q -> %q", generic, scoped)
+	if asked := digest(1); asked == generic {
+		t.Fatalf("a case asked for a request is a different measurement, yet both digest to %q", generic)
+	}
+	// And the run count is part of the measurement too: three runs triple the denominator.
+	if three := digest(3); three == digest(1) {
+		t.Fatalf("three runs and one run digest to the same value: %q", three)
 	}
 }
 
@@ -433,7 +463,7 @@ func TestRunRecordsCorpusInHistory(t *testing.T) {
 		return AgentResult{Result: "nothing found", CostUSD: 0.1, Turns: 3}, nil
 	}
 	agg, _ := Run(Options{CasesGlob: caseDir, Runs: 1, Timeout: time.Minute, SuiteTimeout: time.Minute, Out: t.TempDir(), BenchDir: benchDir, Agent: agent})
-	want := "sha256:4cdf5fe1fd6b408e" // case-01 with its single defect d1
+	want := "sha256:1151e18c0107a49d" // case-01 with its single defect d1, no request, one run
 	if agg.Corpus != want {
 		t.Fatalf("aggregate corpus = %q, want %q", agg.Corpus, want)
 	}

@@ -67,10 +67,10 @@ func TestHistoryAddsTheActivationColumn(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "history.md"), []byte(old), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := AppendHistory(dir, HistoryEntry{TS: "t1", Out: "o", Model: "m", Cases: 1, Defects: 2, Corpus: "sha256:c", LightActivated: 1}); err != nil {
+	if err := AppendHistory(dir, HistoryEntry{TS: "t1", Out: "o", Model: "m", Cases: 1, Defects: 2, Corpus: "sha256:c", LightActivated: 1, Runs: 3}); err != nil {
 		t.Fatal(err)
 	}
-	if err := AppendHistory(dir, HistoryEntry{TS: "t2", Out: "o", Model: "m", Cases: 1, Defects: 2, Corpus: "sha256:c"}); err != nil {
+	if err := AppendHistory(dir, HistoryEntry{TS: "t2", Out: "o", Model: "m", Cases: 1, Defects: 2, Corpus: "sha256:c", Runs: 1}); err != nil {
 		t.Fatal(err)
 	}
 	md, _ := os.ReadFile(filepath.Join(dir, "history.md"))
@@ -84,9 +84,9 @@ func TestHistoryAddsTheActivationColumn(t *testing.T) {
 	if !strings.Contains(appended, "| light |") {
 		t.Fatalf("the fresh header must carry the activation column: %s", appended)
 	}
-	for _, want := range []string{"| sha256:c | 1 |", "| sha256:c | 0 |"} {
+	for _, want := range []string{"| sha256:c | 1 | 3 |", "| sha256:c | 0 | 1 |"} {
 		if !strings.Contains(appended, want) {
-			t.Fatalf("the rows must carry the count, including zero: %q missing from %s", want, appended)
+			t.Fatalf("the rows must carry the count and the run multiplicity, including zero: %q missing from %s", want, appended)
 		}
 	}
 	raw, _ := os.ReadFile(filepath.Join(dir, "history.jsonl"))

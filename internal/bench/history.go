@@ -32,11 +32,15 @@ type HistoryEntry struct {
 	RunTS          string  `json:"run_ts,omitempty"`     // rescore: when the run it re-reads happened
 	SourceRun      string  `json:"source_run,omitempty"` // rescore: the results directory it re-read
 	Scorer         string  `json:"scorer"`               // build that produced the numbers, so two readings of one run are ordered
-	Corpus         string  `json:"corpus,omitempty"`     // digest of the case names and defect ids the run measured
+	Corpus         string  `json:"corpus,omitempty"`     // digest of the measurement the run made: cases, requests, runs
 	// LightActivated is how many of the run's cases declared a scoped run their own plan validates. It
 	// is written even when it is zero: a row without the field was written before the column existed, so
 	// it says nothing about the mode, while a zero says the mode was watched and did not run.
 	LightActivated int `json:"light_activated"`
+	// Runs is how many times each case ran. It is written so a reader can reconcile the defect
+	// denominator without re-deriving it: three runs triple it, and a row that does not say so sits in
+	// the history as though it were comparable to a one-run row.
+	Runs int `json:"runs"`
 }
 
 // A row is either a run that spawned agents or a rescore that re-read one with newer rules.
@@ -45,7 +49,7 @@ const (
 	KindRescore = "rescore"
 )
 
-const historyHeader = "| ts | kind | out | model | cases | defects | reported | recall | caught | recall caught | false positives | failed | invalid | no plan | cost USD | skill version | scorer | corpus | light |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n"
+const historyHeader = "| ts | kind | out | model | cases | defects | reported | recall | caught | recall caught | false positives | failed | invalid | no plan | cost USD | skill version | scorer | corpus | light | runs |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n"
 
 // reported and caught count different things, so neither bounds the other.
 const historyIntro = "# Benchmark history\n\nOne row per `rdd-plus bench run`; never rewritten. A `rescore` row re-reads an earlier\nrun with newer scoring rules: it spends nothing, so summing the cost column over rescore\nrows would count the same money twice. `reported and caught are independent`: reported\ncounts defects written in the plan, caught counts defects some test distinguishes, and\neither can exceed the other.\n\nEvery row names the `scorer` build that produced its numbers. When the scoring rules change,\na later rescore of one source run supersedes an earlier one, and the scorer column is what\ntells the two apart; rows are never rewritten.\n\n"
@@ -97,8 +101,8 @@ func AppendHistory(benchDir string, e HistoryEntry) error {
 		}
 		kind = "rescore of " + e.SourceRun
 	}
-	row := fmt.Sprintf("| %s | %s | %s | %s | %d | %d | %d | %.2f | %d | %.2f | %d | %d | %d | %d | %.3f | %s | %s | %s | %d |\n",
-		ts, kind, e.Out, e.Model, e.Cases, e.Defects, e.Found, e.Recall, e.Caught, e.RecallCaught, e.FalsePositives, e.Failed, e.Invalid, e.NoPlan, e.CostUSD, e.SkillVersion, e.Scorer, e.Corpus, e.LightActivated)
+	row := fmt.Sprintf("| %s | %s | %s | %s | %d | %d | %d | %.2f | %d | %.2f | %d | %d | %d | %d | %.3f | %s | %s | %s | %d | %d |\n",
+		ts, kind, e.Out, e.Model, e.Cases, e.Defects, e.Found, e.Recall, e.Caught, e.RecallCaught, e.FalsePositives, e.Failed, e.Invalid, e.NoPlan, e.CostUSD, e.SkillVersion, e.Scorer, e.Corpus, e.LightActivated, e.Runs)
 	return appendFile(md, []byte(row))
 }
 
