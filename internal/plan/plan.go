@@ -58,68 +58,78 @@ var (
 )
 
 // Check reads a plan and returns everything that breaks the contract, most structural first.
+// Every breach that names a row or a cell carries its file line, so the reader opens the plan at the row
+// instead of grepping for the text the message quotes.
 // An empty result means the plan is well formed, not that the testing was good.
 func Check(path string) ([]string, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	doc := string(raw)
+	return CheckDocument(string(raw)), nil
+}
+
+// CheckDocument is Check on the document itself, so the rules can be read against a document that has
+// never been written to disk. The rules live in one place because a second copy would drift.
+func CheckDocument(doc string) []string {
+	lines := strings.Split(doc, "\n")
+
+	heading, end := sectionRegion(lines, "Findings")
+	if heading < 0 {
+		// Nothing to point at: a section that does not exist never gets an invented location.
+		return []string{"no Findings section"}
+	}
+	findings := scanTable(lines, heading+1, end)
+	if findings.header == nil {
+		prose := strings.Join(lines[heading+1:end], "\n")
+		if strings.Contains(prose, "###") || strings.Contains(prose, "- ") {
+			return []string{fmt.Sprintf("line %d: the Findings section is not a table: prose cannot be located, honoured, or re-scored", heading+1)}
+		}
+		return []string{fmt.Sprintf("line %d: the Findings section has no table", heading+1)}
+	}
+	// The ledger is the one other table the check reads back. A plan without one simply has no rows to
+	// corroborate against, exactly as before: sectionRegion reports it missing and the scan returns empty.
+	ledgerHeading, ledgerEnd := sectionRegion(lines, "Evidence ledger")
+	ledger := scanTable(lines, ledgerHeading+1, ledgerEnd)
+
 	var problems []string
-
-	findings := section(doc, "Findings")
-	if findings == "" {
-		return append(problems, "no Findings section"), nil
-	}
-	rows, header := table(findings)
-	if header == nil {
-		if strings.Contains(findings, "###") || strings.Contains(findings, "- ") {
-			return append(problems, "the Findings section is not a table: prose cannot be located, honoured, or re-scored"), nil
-		}
-		return append(problems, "the Findings section has no table"), nil
-	}
-
-	ledgerRows, _ := table(section(doc, "Evidence ledger"))
 	ledgerIDs := map[string]bool{}
-	for _, lr := range ledgerRows {
-		if len(lr) == 0 {
-			continue
-		}
-		id := cell(lr, 0)
+	for _, r := range ledger.rows {
+		id := cell(r.cells, 0)
 		ledgerIDs[id] = true
-		if label := cell(lr, len(lr)-1); strings.EqualFold(label, "razonado") {
-			problems = append(problems, fmt.Sprintf("evidence %s is labelled razonado: a hypothesis belongs under Hypotheses, never in the ledger", id))
+		if label := cell(r.cells, len(r.cells)-1); strings.EqualFold(label, "razonado") {
+			problems = append(problems, fmt.Sprintf("line %d: evidence %s is labelled razonado: a hypothesis belongs under Hypotheses, never in the ledger", r.line, quote(id)))
 		}
 	}
 
-	iFind := columnIndex(header, "finding")
-	iEvidence := columnIndex(header, "evidence")
-	iPin := columnIndex(header, "pinning test")
-	iStatus := columnIndex(header, "status")
-	for _, row := range rows {
-		id := cell(row, 0)
-		if iFind >= 0 && !pathCiteRe.MatchString(cell(row, iFind)) {
-			problems = append(problems, fmt.Sprintf("finding %s cites no path:line, so nothing can be located", id))
+	iFind := columnIndex(findings.header, "finding")
+	iEvidence := columnIndex(findings.header, "evidence")
+	iPin := columnIndex(findings.header, "pinning test")
+	iStatus := columnIndex(findings.header, "status")
+	for _, r := range findings.rows {
+		id := quote(cell(r.cells, 0))
+		if iFind >= 0 && !pathCiteRe.MatchString(cell(r.cells, iFind)) {
+			problems = append(problems, fmt.Sprintf("line %d: finding %s cites no path:line, so nothing can be located", r.line, id))
 		}
-		ev := cell(row, iEvidence)
+		ev := cell(r.cells, iEvidence)
 		switch {
 		case iEvidence < 0 || placeholder.MatchString(ev):
-			problems = append(problems, fmt.Sprintf("finding %s cites no evidence row", id))
+			problems = append(problems, fmt.Sprintf("line %d: finding %s cites no evidence row", r.line, id))
 		default:
 			for _, part := range strings.FieldsFunc(ev, func(r rune) bool { return r == ',' || r == ';' || r == '/' || r == ' ' }) {
 				if part = strings.Trim(part, "`"); part != "" && !ledgerIDs[part] {
-					problems = append(problems, fmt.Sprintf("finding %s cites evidence %s, which is not a row in the Evidence ledger", id, part))
+					problems = append(problems, fmt.Sprintf("line %d: finding %s cites evidence %s, which is not a row in the Evidence ledger", r.line, id, quote(part)))
 				}
 			}
 		}
-		if settledStatus.MatchString(cell(row, iStatus)) && (iPin < 0 || placeholder.MatchString(cell(row, iPin))) {
-			problems = append(problems, fmt.Sprintf("finding %s is settled but names no pinning test", id))
+		if settledStatus.MatchString(cell(r.cells, iStatus)) && (iPin < 0 || placeholder.MatchString(cell(r.cells, iPin))) {
+			problems = append(problems, fmt.Sprintf("line %d: finding %s is settled but names no pinning test", r.line, id))
 		}
 	}
 	if lightProblems, declared := lightReport(doc); declared {
 		problems = append(problems, lightProblems...)
 	}
-	return problems, nil
+	return problems
 }
 
 // LightActivated reports whether a plan declares a scoped run that passes every Light-specific rule.
@@ -205,6 +215,75 @@ func unscopedLayers(doc string) []string {
 	}
 	return problems
 }
+
+// row is one markdown table data row: its cells and the line it sits on in the plan file. Carrying them
+// together is the whole point — `path: problem` left the reader grepping for the row the message was
+// about.
+type row struct {
+	line  int
+	cells []string
+}
+
+// tableScan is what a region scan found. header is nil when the region carries no table at all. A blank
+// line is a separator that lost its pipes, not the end of the block: skipping it is what stops a blank
+// inserted inside a table from dropping every row under it while the plan still reports `well formed`.
+type tableScan struct {
+	header []string
+	rows   []row
+}
+
+// scanTable reads the first markdown table of lines[start:end] (0-based, end exclusive), carrying the line
+// each row sits on. Before the header any line is the section's own description; once the header is read,
+// a non-blank line that is not a row ends the table — the shipped template puts prose under every table —
+// and the rows below it are not read. A separator or placeholder row is skipped, as before.
+func scanTable(lines []string, start, end int) tableScan {
+	var s tableScan
+	for i := start; i < end && i < len(lines); i++ {
+		t := strings.TrimSpace(lines[i])
+		if t == "" {
+			continue
+		}
+		if !strings.HasPrefix(t, "|") {
+			if s.header != nil {
+				break
+			}
+			continue
+		}
+		cells := split(t)
+		if s.header == nil {
+			s.header = cells
+			continue
+		}
+		if isSeparator(cells) || placeholder.MatchString(cell(cells, 0)) {
+			continue
+		}
+		s.rows = append(s.rows, row{line: i + 1, cells: cells})
+	}
+	return s
+}
+
+// sectionRegion locates a `## <name>` section: its 0-based heading line and the exclusive end of its body,
+// or (-1, -1) when the section is missing. A table may sit under a `###`, so the region spans to the next
+// level-2 heading and the scan decides which part of it is a table.
+func sectionRegion(lines []string, name string) (heading, end int) {
+	for i, l := range lines {
+		t := strings.TrimSpace(l)
+		if !strings.HasPrefix(t, "## ") || !strings.EqualFold(strings.TrimSpace(t[3:]), name) {
+			continue
+		}
+		for j := i + 1; j < len(lines); j++ {
+			if strings.HasPrefix(strings.TrimSpace(lines[j]), "## ") {
+				return i, j
+			}
+		}
+		return i, len(lines)
+	}
+	return -1, -1
+}
+
+// section and table are the readers the Light declaration still uses: the Light path keeps the rules and
+// the messages it had, so this slice cannot move its activation reading while the table scanner changes.
+// When the Light rules move onto sectionRegion/scanTable these two go with them.
 
 // section returns the body under "## <name>" up to the next level-2 heading.
 func section(doc, name string) string {

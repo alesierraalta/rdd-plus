@@ -347,6 +347,77 @@ func TestCheckOnAMissingFile(t *testing.T) {
 const header = "## Findings\n\n| Id | Finding | Severity | Data safe? | Evidence id | Pinning test | Status | Verdict by / date | Reason | Fingerprint |\n|---|---|---|---|---|---|---|---|---|---|\n"
 const ledger = "\n## Evidence ledger\n\n| Id | Claim | Executed | Inputs | Observed | Mutation | Reproduction | Label |\n|---|---|---|---|---|---|---|---|\n"
 
+// A breach that names a row has to say where the row is. `path: finding F1 cites no path:line` left the
+// reader grepping the file for the row the check was talking about, which is the cost the checker
+// exists to remove.
+func TestCheckNamesTheLineOfTheRowItBlames(t *testing.T) {
+	// `header` puts the column header on line 3 and the separator on line 4, so the first data row is
+	// line 5: the number the breach has to carry.
+	plan := header + "| F1 | `src/a.js:5` x | M | yes | E9 | t.js :: x | fixed | me | - | - |\n" +
+		ledger + "| E1 | c | cmd | i | o | m | r | observado |\n"
+	p := write(t, t.TempDir(), "plan.md", plan)
+	problems, err := Check(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(problems, "\n"), "line 5: finding F1 cites evidence E9") {
+		t.Fatalf("a row breach must name its line: %v", problems)
+	}
+}
+
+// A blank line inside a table used to end the block: every row under it was dropped and the plan still
+// reported `well formed`. A blank is a separator that lost its pipes, not the end of the table.
+func TestCheckReadsARowSeparatedFromTheTableByABlankLine(t *testing.T) {
+	// The blank sits on line 5; the row it used to hide is line 6.
+	plan := header + "\n| F1 | `src/a.js:5` x | M | yes | E9 | t.js :: x | fixed | me | - | - |\n" +
+		ledger + "| E1 | c | cmd | i | o | m | r | observado |\n"
+	p := write(t, t.TempDir(), "plan.md", plan)
+	problems, err := Check(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(problems, "\n"), "line 6: finding F1 cites evidence E9") {
+		t.Fatalf("a row under a blank line is still a row: %v", problems)
+	}
+}
+
+// The Findings table is not the only one the check reads back: a ledger row's breach names the ledger line,
+// so the line anchor covers both tables the checker reads.
+func TestCheckNamesTheLineOfTheLedgerRowItBlames(t *testing.T) {
+	// The Findings row is line 5; the razonado ledger row is line 11.
+	plan := header + "| F1 | `src/a.js:5` x | M | yes | E1 | t.js :: x | fixed | me | - | - |\n" +
+		ledger + "| E1 | c | cmd | i | o | m | r | razonado |\n"
+	p := write(t, t.TempDir(), "plan.md", plan)
+	problems, err := Check(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(problems, "\n"), "line 11: evidence E1 is labelled razonado") {
+		t.Fatalf("a ledger breach must name its line: %v", problems)
+	}
+}
+
+// The line anchor must not narrow the checker: this repository's own plan and both shipped fixtures are the
+// ordinary valid plans it reads, and they stay well formed.
+func TestCheckAcceptsTheShippedPlans(t *testing.T) {
+	files := []string{
+		filepath.Join("..", "..", "docs", "testing", "test-plan.md"),
+		filepath.Join("..", "..", "assets", "skills", "test-strategy", "evals", "fixtures", "plans", "clean.md"),
+		filepath.Join("..", "..", "assets", "skills", "test-strategy", "evals", "fixtures", "plans", "rejected.md"),
+	}
+	for _, f := range files {
+		t.Run(filepath.Base(f), func(t *testing.T) {
+			raw, err := os.ReadFile(f)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if problems := CheckDocument(string(raw)); len(problems) != 0 {
+				t.Fatalf("the unmodified plan is not well formed: %v", problems)
+			}
+		})
+	}
+}
+
 // A backslash-escaped pipe is part of its cell. Splitting on it shifts every column to the right,
 // which moves a layer's owner out of the column a report reads.
 func TestSplitHonoursEscapedPipes(t *testing.T) {
