@@ -182,16 +182,53 @@ func matches(skills fs.FS, name, target string) bool {
 	return same
 }
 
+// shellWords splits a command the way a shell would: on whitespace, except inside quotes, where a space
+// is part of the word. Both readers of a hook command go through here. Splitting on whitespace alone, a
+// hook wired as `"/opt/Program Files/rdd-plus" gate` reads as three words whose first is a truncated
+// path: the wiring check misses the subcommand, the comparison resolves nothing, and doctor stays quiet
+// about a hook it is there to judge.
+func shellWords(command string) []string {
+	var (
+		words []string
+		cur   strings.Builder
+		quote byte
+	)
+	flush := func() {
+		if cur.Len() > 0 {
+			words = append(words, cur.String())
+			cur.Reset()
+		}
+	}
+	for i := 0; i < len(command); i++ {
+		switch c := command[i]; {
+		case quote != 0:
+			if c == quote {
+				quote = 0
+				continue
+			}
+			cur.WriteByte(c)
+		case c == '"' || c == '\'':
+			quote = c
+		case c == ' ' || c == '\t' || c == '\r' || c == '\n':
+			flush()
+		default:
+			cur.WriteByte(c)
+		}
+	}
+	flush()
+	return words
+}
+
 // compareGateBinaries answers whether the wired Stop hook runs a different file than the rdd-plus on
 // PATH. Two paths that resolve to the same file (a symlink, today's real layout) are one binary and
 // one verdict; two different files are a time bomb. A missing hook binary or a missing PATH binary
 // is left to the verdicts doctor already reports.
 func compareGateBinaries(hookCommand string, lookPath func(string) (string, error)) (wired, path string, differ bool) {
-	fields := strings.Fields(hookCommand)
-	if len(fields) == 0 {
+	words := shellWords(hookCommand)
+	if len(words) == 0 {
 		return "", "", false
 	}
-	wired = strings.Trim(fields[0], `"'`)
+	wired = words[0]
 	// Only a command written as a path names a binary doctor can resolve; `node script.mjs` and a
 	// bare `rdd-plus` are left alone rather than guessed at.
 	if !strings.ContainsRune(wired, filepath.Separator) {
@@ -250,7 +287,7 @@ func hookWired(settingsPath string) (string, string) {
 				continue
 			}
 			// "gate" counts only in the subcommand position, right after the executable.
-			if fields := strings.Fields(trimmed); len(fields) > 1 && fields[1] == "gate" {
+			if fields := shellWords(trimmed); len(fields) > 1 && fields[1] == "gate" {
 				return HookRddPlus, cmd
 			}
 			if gateBinaryRe.MatchString(trimmed) {

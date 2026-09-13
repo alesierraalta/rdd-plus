@@ -80,6 +80,41 @@ func TestRetryRecoversFromOneInfrastructureFailure(t *testing.T) {
 	}
 }
 
+// A hang is an infrastructure failure, not a verdict: the timed-out attempt left nothing to score, so
+// the case gets its retry like any other failed attempt instead of being spent on the stall.
+func TestTimeoutIsRetriedAndTheCaseIsNotLost(t *testing.T) {
+	if testing.Short() {
+		t.Skip("spawns node and git")
+	}
+	caseDir := fakeCase(t)
+	calls := 0
+	agent := func(ctx context.Context, ws string, key Key, opts Options) (AgentResult, error) {
+		calls++
+		if calls == 1 {
+			return AgentResult{TimedOut: true, CostUSD: 0.2, Turns: 4}, nil
+		}
+		p := "# plan\n\n## Findings\n\n| Id | Finding | Sev | Safe | Evidence | Status | By | Reason | FP |\n|---|---|---|---|---|---|---|---|---|\n| F1 | src/a.mjs:1 wrong | M | yes | E1 | confirmed | t | r | f |\n\n## Evidence ledger\n\n| Id | Claim |\n|---|---|\n| E1 | c |\n"
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(ws, PlanPath)), 0o755); err != nil {
+			return AgentResult{}, err
+		}
+		return AgentResult{Result: "done", CostUSD: 0.2, Turns: 4}, os.WriteFile(filepath.Join(ws, PlanPath), []byte(p), 0o644)
+	}
+	agg, _ := Run(Options{CasesGlob: caseDir, Runs: 1, Timeout: time.Minute, SuiteTimeout: time.Minute, Out: t.TempDir(), Agent: agent, Retries: 1, RetryDelay: time.Millisecond})
+	if calls != 2 {
+		t.Fatalf("a timeout must be retried, got %d calls", calls)
+	}
+	res := agg.Cases[0]
+	if res.Failed || res.Found != 1 {
+		t.Fatalf("the second attempt decides the case: %+v", res)
+	}
+	if !strings.Contains(strings.Join(res.Notes, " "), "retrying") {
+		t.Fatalf("the retry must be visible in the notes: %v", res.Notes)
+	}
+	if res.CostUSD != 0.4 || res.Turns != 8 {
+		t.Fatalf("both attempts were paid for, so both are counted: %+v", res)
+	}
+}
+
 func TestMissesKeepTheirWorkspace(t *testing.T) {
 	if testing.Short() {
 		t.Skip("spawns node and git")

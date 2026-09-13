@@ -352,8 +352,11 @@ func runOnce(caseDir string, key Key, run int, opts Options) Result {
 		res.CostUSD += ar.CostUSD
 		res.Turns += ar.Turns
 		writeAgentLog(filepath.Dir(ws), attempt, ar, err)
-		infra := err != nil || ar.IsError
-		if !infra || ar.TimedOut || attempt >= opts.Retries {
+		// A timeout is an infrastructure failure like any other: the agent hung or the provider stalled,
+		// so the run has no verdict for the case at all. Retrying it is bounded by --retries, and losing
+		// a case to a stall costs more than the second attempt.
+		infra := err != nil || ar.IsError || ar.TimedOut
+		if !infra || attempt >= opts.Retries {
 			break
 		}
 		res.Notes = append(res.Notes, fmt.Sprintf("attempt %d failed, retrying after %s", attempt+1, opts.RetryDelay))

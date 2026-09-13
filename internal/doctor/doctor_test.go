@@ -288,6 +288,29 @@ func TestDoctorFlagsAHookBinaryThatDiffersFromPATH(t *testing.T) {
 	}
 }
 
+// A quoted command is one command, not its first word: a hook wired from a path with a space in it was
+// read as its truncated head, which resolved to nothing, so doctor said nothing about a hook that does
+// point at a different binary.
+func TestQuotedHookPathWithASpaceIsComparedWhole(t *testing.T) {
+	dir := t.TempDir()
+	spaceDir := filepath.Join(t.TempDir(), "Program Files")
+	if err := os.MkdirAll(spaceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	hookBin := binary(t, spaceDir, "rdd-plus")
+	pathBin := binary(t, t.TempDir(), "rdd-plus")
+	writeSettings(t, dir, `"`+hookBin+`" gate`)
+	r := Run(dir, func(name string) (string, error) {
+		if name == "rdd-plus" {
+			return pathBin, nil
+		}
+		return "/usr/bin/" + name, nil
+	})
+	if !r.BinariesDiffer || r.WiredBinary != hookBin || r.PathBinary != pathBin {
+		t.Fatalf("a quoted path with a space must be compared as one path: %+v", r)
+	}
+}
+
 // Doctor already has verdicts for an unwired hook and for rdd-plus off PATH; the new line must not
 // reinvent them.
 func TestDoctorStaysQuietWhenItCannotCompareBinaries(t *testing.T) {
