@@ -1,12 +1,47 @@
 package bench
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+// The runs column was added to the aggregate after readings had already been recorded, so an older
+// aggregate.json carries no runs field at all and unmarshals to the zero value. Rescore copies the field
+// through rather than guessing one: a recorded 3 stays 3, and an absent count stays 0, which is the
+// honest "this aggregate never recorded a run count" that no reading can be compared on. This test pins
+// behavior that already held before the doc comments named it.
+func TestRescoreCarriesTheRunCountItWasGiven(t *testing.T) {
+	results := t.TempDir()
+	// No cases: the aggregate's own fields are what this test reads, and a lookup that must never run
+	// fails loudly if rescoring starts reaching for a case directory it was not given.
+	noLookup := func(name string) (string, error) { return "", fmt.Errorf("unexpected case lookup: %s", name) }
+
+	writeJSON(filepath.Join(results, "aggregate.json"), Aggregate{TS: "t0", Model: "m", Runs: 3})
+	agg, err := Rescore(results, noLookup, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agg.Runs != 3 {
+		t.Fatalf("rescored runs = %d, want the 3 the source aggregate recorded", agg.Runs)
+	}
+
+	// The same measurement written before the column existed: no runs field, so the count is unknown.
+	legacy := `{"ts":"t1","model":"m","cases":[],"defects":0,"found":0,"caught":0}`
+	if err := os.WriteFile(filepath.Join(results, "aggregate.json"), []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	agg, err = Rescore(results, noLookup, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agg.Runs != 0 {
+		t.Fatalf("rescored runs = %d, want 0 rather than a guessed 1: the aggregate never recorded one", agg.Runs)
+	}
+}
 
 // Rescore re-reads each case's kept plan and workspace with the current rules; a case whose
 // workspace was removed keeps the catch it had.

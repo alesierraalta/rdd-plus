@@ -39,7 +39,8 @@ type HistoryEntry struct {
 	LightActivated int `json:"light_activated"`
 	// Runs is how many times each case ran. It is written so a reader can reconcile the defect
 	// denominator without re-deriving it: three runs triple it, and a row that does not say so sits in
-	// the history as though it were comparable to a one-run row.
+	// the history as though it were comparable to a one-run row. A zero means the row never recorded a run
+	// count — it was written before the column existed — so no reading can be compared on it.
 	Runs int `json:"runs"`
 }
 

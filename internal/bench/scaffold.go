@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/alesierraalta/rdd-plus/internal/doctor"
 )
 
 // SuiteResult is the fixture's own suite outcome before the agent touches it.
@@ -62,7 +64,9 @@ func Scaffold(caseDir, ws string, key Key, suiteTimeout time.Duration) (SuiteRes
 
 // RunSuite executes the fixture suite command in ws and parses pass/fail counts best-effort.
 func RunSuite(ws, suite string, timeout time.Duration) SuiteResult {
-	fields := strings.Fields(suite)
+	// A suite the corpus carries is well formed; a malformed one keeps the words it read, exactly as the
+	// whitespace split it replaces did, so no recorded reading changes.
+	fields, _ := doctor.ShellWords(suite)
 	res := SuiteResult{Command: suite, ExitCode: -1}
 	if len(fields) == 0 {
 		return res

@@ -9,12 +9,16 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/alesierraalta/rdd-plus/internal/doctor"
 )
 
 // perTestCommand rewrites a suite command so it reports one line per test: node's TAP reporter
 // and go's -json stream. Other runners keep their command and are read as one whole-suite result.
+// The suite is one field stored as one string, so it is split by the shared rule the hook command uses;
+// a malformed suite keeps the words it read, as the whitespace split it replaces did.
 func perTestCommand(suite string) (argv []string, parser func(string) map[string]bool) {
-	fields := strings.Fields(suite)
+	fields, _ := doctor.ShellWords(suite)
 	if len(fields) == 0 {
 		return nil, nil
 	}

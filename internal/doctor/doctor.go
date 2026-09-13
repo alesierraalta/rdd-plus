@@ -5,6 +5,7 @@ package doctor
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -182,12 +183,16 @@ func matches(skills fs.FS, name, target string) bool {
 	return same
 }
 
-// shellWords splits a command the way a shell would: on whitespace, except inside quotes, where a space
-// is part of the word. Both readers of a hook command go through here. Splitting on whitespace alone, a
-// hook wired as `"/opt/Program Files/rdd-plus" gate` reads as three words whose first is a truncated
-// path: the wiring check misses the subcommand, the comparison resolves nothing, and doctor stays quiet
-// about a hook it is there to judge.
-func shellWords(command string) []string {
+// ShellWords splits a command the way a shell would: on whitespace, except inside quotes, where a space
+// is part of the word. Every reader of a command stored as one string goes through here — the wiring
+// check, the binary comparison, the probe that runs the wired hook, and a bench suite command — so one
+// rule reads one field. It also reports whether the command was well formed: a quote left open is not a
+// command anyone can read, so the caller that executes the words must refuse it, while a caller that only
+// inspects a command reads the words either way. Splitting on whitespace alone, a hook wired as
+// `"/opt/Program Files/rdd-plus" gate` reads as three words whose first is a truncated path: the wiring
+// check misses the subcommand, the comparison resolves nothing, and doctor stays quiet about a hook it is
+// there to judge.
+func ShellWords(command string) ([]string, error) {
 	var (
 		words []string
 		cur   strings.Builder
@@ -216,7 +221,10 @@ func shellWords(command string) []string {
 		}
 	}
 	flush()
-	return words
+	if quote != 0 {
+		return words, errors.New("unterminated quote")
+	}
+	return words, nil
 }
 
 // compareGateBinaries answers whether the wired Stop hook runs a different file than the rdd-plus on
@@ -224,7 +232,7 @@ func shellWords(command string) []string {
 // one verdict; two different files are a time bomb. A missing hook binary or a missing PATH binary
 // is left to the verdicts doctor already reports.
 func compareGateBinaries(hookCommand string, lookPath func(string) (string, error)) (wired, path string, differ bool) {
-	words := shellWords(hookCommand)
+	words, _ := ShellWords(hookCommand)
 	if len(words) == 0 {
 		return "", "", false
 	}
@@ -287,7 +295,7 @@ func hookWired(settingsPath string) (string, string) {
 				continue
 			}
 			// "gate" counts only in the subcommand position, right after the executable.
-			if fields := shellWords(trimmed); len(fields) > 1 && fields[1] == "gate" {
+			if fields, _ := ShellWords(trimmed); len(fields) > 1 && fields[1] == "gate" {
 				return HookRddPlus, cmd
 			}
 			if gateBinaryRe.MatchString(trimmed) {

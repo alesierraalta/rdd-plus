@@ -200,6 +200,51 @@ func jsonString(s string) string {
 	return string(b)
 }
 
+// One rule reads every command stored as one string, so the splitter is tested where it lives. A quoted
+// path is one word, and both quote characters count as quoting: the reader that used to live beside the
+// probe honoured double quotes only, which is how one command read as something other than what a shell
+// would run. The signal is tested with the words: a quote left open is reported, not silently repaired,
+// because the caller that executes the words has to refuse a command nobody can read — but the words read
+// so far are still returned, so a caller that only inspects a command keeps reading exactly what it did
+// before the signal existed.
+func TestShellWordsSplitsLikeAShell(t *testing.T) {
+	cases := []struct {
+		name    string
+		in      string
+		want    []string
+		wantErr bool
+	}{
+		{"plain command", `/h/bin/rdd-plus gate`, []string{"/h/bin/rdd-plus", "gate"}, false},
+		{"double quoted path with a space", `"/h/my bin/rdd-plus" gate`, []string{"/h/my bin/rdd-plus", "gate"}, false},
+		{"single quoted path with a space", `'/h/my bin/rdd-plus' gate`, []string{"/h/my bin/rdd-plus", "gate"}, false},
+		{"tabs and newlines separate words", "a\tb\r\nc", []string{"a", "b", "c"}, false},
+		{"leading and repeated whitespace", "  spaced   out  ", []string{"spaced", "out"}, false},
+		{"one quoted word alone", `"/h/gate"`, []string{"/h/gate"}, false},
+		{"whitespace only", "   \t\n", nil, false},
+		{"empty", "", nil, false},
+		// A quote left open is not a command: the probe must not run "unbalanced" as a program.
+		{"unterminated double quote", `"/h/my bin/rdd-plus gate`, []string{"/h/my bin/rdd-plus gate"}, true},
+		{"unterminated single quote", `'/h/my bin/rdd-plus`, []string{"/h/my bin/rdd-plus"}, true},
+		{"unterminated quote after a word", `/h/bin/rdd-plus "gate`, []string{"/h/bin/rdd-plus", "gate"}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ShellWords(tc.in)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("ShellWords(%q) error = %v, want an error: %v", tc.in, err, tc.wantErr)
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("%q -> %q, want %q", tc.in, got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Fatalf("%q -> %q, want %q", tc.in, got, tc.want)
+				}
+			}
+		})
+	}
+}
+
 // writeSettings wires one Stop hook command into a config dir, the way sync would.
 func writeSettings(t *testing.T, dir, command string) {
 	t.Helper()

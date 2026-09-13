@@ -280,9 +280,11 @@ func runPlan(args []string) int {
 
 // probeHook runs the wired Stop command the way Claude Code does, with an empty payload on
 // stdin, and requires it to exit zero. Matching the command string proves nothing: a binary that
-// needs a subcommand looks identical to one that does not.
+// needs a subcommand looks identical to one that does not. The command is read by the one splitter the
+// rest of the tool reads commands with, so a command it cannot read is refused here instead of run as a
+// fragment.
 func probeHook(command string) error {
-	fields, err := shellFields(command)
+	fields, err := doctor.ShellWords(command)
 	if err != nil || len(fields) == 0 {
 		return fmt.Errorf("cannot read the wired command")
 	}
@@ -292,34 +294,6 @@ func probeHook(command string) error {
 	cmd.Stdin = strings.NewReader("{}")
 	cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
 	return cmd.Run()
-}
-
-// shellFields splits a hook command on spaces, honouring the double quotes a path with spaces
-// needs. It is not a shell: a command that needs one is beyond what this probe can check.
-func shellFields(command string) ([]string, error) {
-	var fields []string
-	var cur strings.Builder
-	inQuote := false
-	for _, r := range command {
-		switch {
-		case r == '"':
-			inQuote = !inQuote
-		case r == ' ' && !inQuote:
-			if cur.Len() > 0 {
-				fields = append(fields, cur.String())
-				cur.Reset()
-			}
-		default:
-			cur.WriteRune(r)
-		}
-	}
-	if inQuote {
-		return nil, fmt.Errorf("unbalanced quote")
-	}
-	if cur.Len() > 0 {
-		fields = append(fields, cur.String())
-	}
-	return fields, nil
 }
 
 func runBench(args []string) int {

@@ -115,7 +115,11 @@ type Aggregate struct {
 	RunTS          string `json:"run_ts,omitempty"`        // rescore: when the run it re-reads happened
 	SkillVersion   string `json:"skill_version,omitempty"` // rescore: the version that produced the run
 	Corpus         string `json:"corpus,omitempty"`        // digest of the measurement this run made: cases, requests, runs
-	Runs           int    `json:"runs"`                    // runs per case the reading asked for: three runs triple the defect denominator
+	// Runs is how many times each case ran: three runs triple the defect denominator, so a reader can
+	// reconcile the counts without re-deriving them. A zero means the aggregate never recorded a run
+	// count — it was written before the field existed, or read from a file without one — so no reading can
+	// be compared on it. Rescore copies this field through rather than guessing a count.
+	Runs int `json:"runs"`
 }
 
 // CorpusCase is one case of a corpus: its name, the bounded request it is asked for, and the ids of

@@ -218,31 +218,41 @@ func TestVersionNamesTheBuild(t *testing.T) {
 	}
 }
 
-func TestShellFields(t *testing.T) {
-	cases := []struct {
-		in   string
-		want []string
-	}{
-		{`/h/bin/testing-gate gate`, []string{"/h/bin/testing-gate", "gate"}},
-		{`"/h/my bin/testing-gate" gate`, []string{"/h/my bin/testing-gate", "gate"}},
-		{`  spaced   out  `, []string{"spaced", "out"}},
-		{`"/h/gate"`, []string{"/h/gate"}},
-	}
-	for _, tc := range cases {
-		got, err := shellFields(tc.in)
-		if err != nil {
-			t.Fatalf("%q: %v", tc.in, err)
+// The probe runs the wired Stop command, so a command it cannot read must be refused before anything is
+// run: an unterminated quote used to be an error the probe turned into the doctor's own verdict, and it
+// must not become an attempt to execute the fragment. The split-rule cases that used to live here belong
+// to the one splitter, doctor.ShellWords, and are tested in internal/doctor.
+func TestProbeHookRefusesACommandItCannotRead(t *testing.T) {
+	for _, command := range []string{"", "   \t", `"unbalanced`, `'unbalanced`, `/h/bin/rdd-plus "gate`} {
+		err := probeHook(command)
+		if err == nil {
+			t.Fatalf("probeHook(%q) must refuse the command rather than run a fragment", command)
 		}
-		if len(got) != len(tc.want) {
-			t.Fatalf("%q -> %q", tc.in, got)
-		}
-		for i := range got {
-			if got[i] != tc.want[i] {
-				t.Fatalf("%q -> %q, want %q", tc.in, got, tc.want)
-			}
+		if !strings.Contains(err.Error(), "cannot read the wired command") {
+			t.Fatalf("probeHook(%q) = %v, want the probe's own verdict", command, err)
 		}
 	}
-	if _, err := shellFields(`"unbalanced`); err == nil {
-		t.Fatal("an unbalanced quote must be an error, not a silent split")
+}
+
+// Reading the command with the shared rule must not change the command that gets executed: the probe has
+// to keep running the double-quoted path sync writes, and keep reporting a wiring that exits non-zero.
+func TestProbeHookRunsTheWiredCommand(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "Program Files")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write := func(name, body string) string {
+		t.Helper()
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	if err := probeHook(`"` + write("gate", "#!/bin/sh\nexit 0\n") + `"`); err != nil {
+		t.Fatalf("a quoted path with a space that answers must pass the probe: %v", err)
+	}
+	if err := probeHook(`"` + write("broken", "#!/bin/sh\nexit 3\n") + `"`); err == nil {
+		t.Fatal("a wired command that exits non-zero must fail the probe")
 	}
 }
