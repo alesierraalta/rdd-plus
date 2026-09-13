@@ -26,13 +26,20 @@ type Gaps struct {
 	TargetsTotal  int      `json:"targets_total"`
 	// PendingTargets names each ranked target that is not done, carrying its line the same way.
 	PendingTargets []string `json:"pending_targets,omitempty"`
+	// UnrecognizedStatuses names every non-empty breadth status outside the declared vocabulary —
+	// `pending · in progress · done · blocked · n/a` — with the status, its line, its row and what the count
+	// did with it. Disclosure, not enforcement: never fail a plan over a label.
+	UnrecognizedStatuses []string `json:"unrecognized_statuses,omitempty"`
+	// InterruptedTables names every breadth table a stray line cut in two: the rows under the cut were never
+	// read, so Any() fails closed on them.
+	InterruptedTables []string `json:"interrupted_tables,omitempty"`
 }
 
-// Any reports whether the run left breadth owed. The verdict is read from the fields above — the two lists
-// and the target counter — never from the text Report writes, so a caller that holds the structured result
-// decides without parsing prose a later reword is free to change.
+// Any reports whether the run left breadth owed. The verdict is read from the fields above — the lists, the
+// target counter and the unread tables — never from the text Report writes, so a caller that holds the
+// structured result decides without parsing prose a later reword is free to change.
 func (g Gaps) Any() bool {
-	return g.NoLayerMatrix || len(g.UnsweptLayers) > 0 || g.TargetsDone < g.TargetsTotal
+	return g.NoLayerMatrix || len(g.UnsweptLayers) > 0 || g.TargetsDone < g.TargetsTotal || len(g.InterruptedTables) > 0
 }
 
 // Report renders the gaps as the lines a final message has to carry to be honest.
@@ -64,13 +71,19 @@ func (g Gaps) Report() string {
 	for _, t := range g.PendingTargets {
 		fmt.Fprintf(&b, "  still pending: %s\n", t)
 	}
+	for _, u := range g.UnrecognizedStatuses {
+		fmt.Fprintf(&b, "  %s\n", u)
+	}
+	for _, t := range g.InterruptedTables {
+		fmt.Fprintf(&b, "  %s\n", t)
+	}
 	return b.String()
 }
 
 // quotesFromThePlan reports whether the report is about to print text read out of the plan file, so the block
 // is marked as data exactly when it needs to be.
 func (g Gaps) quotesFromThePlan() bool {
-	return len(g.UnsweptLayers) > 0 || len(g.PendingTargets) > 0
+	return len(g.UnsweptLayers) > 0 || len(g.PendingTargets) > 0 || len(g.UnrecognizedStatuses) > 0 || len(g.InterruptedTables) > 0
 }
 
 // MaxQuoted bounds any text taken from the plan file. A plan lives in the repository, so its
@@ -118,6 +131,10 @@ func quote(s string) string {
 var doneStatus = regexp.MustCompile(`(?i)^(done|fixed|closed)$`)
 var naStatus = regexp.MustCompile(`(?i)^(n/?a|none|skipped)$`)
 
+// owedStatus is the rest of the breadth tables' declared vocabulary: the states that mean "not swept yet"
+// rather than "not a word we know". A row carrying one of these is owed, not unreadable.
+var owedStatus = regexp.MustCompile(`(?i)^(pending|in[ -]?progress|blocked)$`)
+
 // GapsInFile reads a plan and reports what it still owes.
 func GapsInFile(path string) (Gaps, error) {
 	raw, err := os.ReadFile(path)
@@ -132,21 +149,13 @@ func GapsInFile(path string) (Gaps, error) {
 // The breadth tables are read through the same line-carrying scanner the checker uses, so an owed row names
 // the line it sits on instead of leaving the reader to grep for the text the report quotes. A region that
 // carries no table at all is `never planned`: prose there used to read as a width of zero and leave Any()
-// false, which is the one verdict a sweep must never be handed by accident.
+// false, which is the one verdict a sweep must never be handed by accident. A table the scanner could not
+// read to the end is the other half of that: its unread rows are reported, and Any() fails closed on them.
 func GapsIn(doc string) (Gaps, error) {
 	lines := strings.Split(doc, "\n")
-	// plan.go has no scanSection yet, and this slice does not own that file: the five lines below are what it
-	// would be, so the gaps sweep reads the scanner's rows without moving the scanner.
-	scan := func(name string) tableScan {
-		heading, end := sectionRegion(lines, name)
-		if heading < 0 || end <= heading+1 {
-			return tableScan{}
-		}
-		return scanTable(lines, heading+1, end)
-	}
 
 	var g Gaps
-	layers := scan("Layer matrix")
+	layers := scanSection(lines, "Layer matrix")
 	if layers.header == nil {
 		g.NoLayerMatrix = true
 	} else {
@@ -162,14 +171,23 @@ func GapsIn(doc string) (Gaps, error) {
 				g.LayersDone++
 				continue
 			}
-			name := quote(cell(r.cells, 0))
+			label := quote(cell(r.cells, 0))
+			name := label
 			if owner := quote(strings.Trim(cell(r.cells, iSkill), "`")); owner != "[empty]" {
 				name += " (" + owner + ")"
 			}
 			g.UnsweptLayers = append(g.UnsweptLayers, fmt.Sprintf("(line %d): %s", r.line, name))
+			// The label alone: the owner is already named by the unswept line above it.
+			if message := unrecognizedStatus(status, r.line, label, "never swept"); message != "" {
+				g.UnrecognizedStatuses = append(g.UnrecognizedStatuses, message)
+			}
+		}
+		if _, message := interruptedTable("Layer matrix", layers); message != "" {
+			g.InterruptedTables = append(g.InterruptedTables, message)
 		}
 	}
-	ranked := scan("Ranked targets")
+
+	ranked := scanSection(lines, "Ranked targets")
 	iStatus := columnIndex(ranked.header, "status")
 	for _, r := range ranked.rows {
 		status := cell(r.cells, iStatus)
@@ -181,7 +199,25 @@ func GapsIn(doc string) (Gaps, error) {
 			g.TargetsDone++
 			continue
 		}
-		g.PendingTargets = append(g.PendingTargets, fmt.Sprintf("(line %d): %s", r.line, quote(cell(r.cells, 0))))
+		name := quote(cell(r.cells, 0))
+		g.PendingTargets = append(g.PendingTargets, fmt.Sprintf("(line %d): %s", r.line, name))
+		if message := unrecognizedStatus(status, r.line, name, "still owed"); message != "" {
+			g.UnrecognizedStatuses = append(g.UnrecognizedStatuses, message)
+		}
+	}
+	if _, message := interruptedTable("Ranked targets", ranked); message != "" {
+		g.InterruptedTables = append(g.InterruptedTables, message)
 	}
 	return g, nil
+}
+
+// unrecognizedStatus names a status cell the count could not place, with the line it was read from, its row,
+// and what the count did with it. It returns "" for the whole declared vocabulary — swept, not applicable,
+// and owed-but-not-yet-swept alike — and for an empty cell. Disclosure, not enforcement (finding F24): a
+// checker that rejects the honest middle of a sweep teaches sessions to write `done` instead of the truth.
+func unrecognizedStatus(status string, line int, name, counted string) string {
+	if strings.TrimSpace(status) == "" || doneStatus.MatchString(status) || naStatus.MatchString(status) || owedStatus.MatchString(status) {
+		return ""
+	}
+	return fmt.Sprintf("unrecognized status \"%s\" (line %d): %s — counted as %s", quote(status), line, name, counted)
 }

@@ -574,3 +574,84 @@ func TestCheckAcceptsEveryDocumentedFindingsStatus(t *testing.T) {
 		})
 	}
 }
+
+// A line that is not a table row closes the block, and a `|` row after it proves the table was cut in two.
+func TestCheckReportsATableInterruptedByProse(t *testing.T) {
+	plan := header +
+		"| F1 | `src/a.js:5` x | M | yes | E1 | t.js :: x | fixed | me | - | - |\n" +
+		"a sentence that closes the table\n" +
+		"| F2 | `src/b.js:9` y | M | yes | E9 | t.js :: y | fixed | me | - | - |\n" +
+		ledger + "| E1 | c | cmd | i | o | m | r | observado |\n"
+	joined := strings.Join(CheckDocument(plan), "\n")
+	if !strings.Contains(joined, "line 6: the Findings table is interrupted at line 6") ||
+		!strings.Contains(joined, "a sentence that closes the table") || !strings.Contains(joined, "line 7") {
+		t.Fatalf("an interrupted table must name the cut, the line that made it and the row it hid:\n%s", joined)
+	}
+	if strings.Contains(joined, "cites evidence E9") {
+		t.Fatalf("a row under an interruption was never read and must not be judged:\n%s", joined)
+	}
+}
+
+// A `###` after a table header is a boundary only when a table of its own starts there, never a silent cut.
+func TestCheckReportsATableInterruptedByASubheading(t *testing.T) {
+	plan := header +
+		"| F1 | `src/a.js:5` x | M | yes | E1 | t.js :: x | fixed | me | - | - |\n" +
+		"### Notes\n" +
+		"| F2 | `src/b.js:9` y | M | yes | E9 | t.js :: y | fixed | me | - | - |\n" +
+		ledger + "| E1 | c | cmd | i | o | m | r | observado |\n"
+	joined := strings.Join(CheckDocument(plan), "\n")
+	if !strings.Contains(joined, "line 6: the Findings table is interrupted at line 6") ||
+		!strings.Contains(joined, "### Notes") || !strings.Contains(joined, "line 7") {
+		t.Fatalf("a subheading that cuts the table must be reported as the cut it is:\n%s", joined)
+	}
+	if strings.Contains(joined, "cites evidence E9") {
+		t.Fatalf("a row under an interruption was never read and must not be judged:\n%s", joined)
+	}
+}
+
+// A fenced example above the real table must not become the Findings header.
+func TestCheckIgnoresAFencedExampleTable(t *testing.T) {
+	for _, marker := range []string{"```", "~~~"} {
+		t.Run(marker, func(t *testing.T) {
+			doc := "## Findings\n\n" + marker + "markdown\n| Id | Finding | Severity |\n|---|---|---|\n" +
+				"| F9 | `src/fenced.ts:1` | visible error |\n" + marker + "\n\n" +
+				strings.TrimPrefix(header, "## Findings\n\n") +
+				"| F1 | `src/real.ts:1` | visible error | yes | E1 |  | resolved | me | - | - |\n" +
+				ledger + "| E1 | c | cmd | i | o | m | r | observado |\n"
+			joined := strings.Join(CheckDocument(doc), "\n")
+			if !strings.Contains(joined, `finding F1 status "resolved"`) {
+				t.Fatalf("the real row's breach is what the checker owes:\n%s", joined)
+			}
+			if strings.Contains(joined, "F9") || strings.Contains(joined, "interrupted") {
+				t.Fatalf("the fenced example must not be read as a table:\n%s", joined)
+			}
+		})
+	}
+}
+
+// An unclosed fence skipped every line under it: fail closed rather than read a shorter plan as a whole one.
+func TestCheckReportsAnUnclosedFence(t *testing.T) {
+	doc := header + "\n```markdown\n| Id | Finding |\n|---|---|\n"
+	want := "line 6: the Findings table region ends inside a code fence opened at line 6, so nothing below it was read"
+	if problems := CheckDocument(doc); !strings.Contains(strings.Join(problems, "\n"), want) {
+		t.Fatalf("problems = %v, want one containing %q", problems, want)
+	}
+}
+
+// A subheading is a boundary when its own table starts there, as the skeleton's `### Hypotheses` does.
+func TestCheckAcceptsASubheadingThatOpensItsOwnTable(t *testing.T) {
+	nested := header +
+		"| F1 | `src/a.js:5` x | M | yes | E1 | t.js :: x | fixed | me | - | - |\n" +
+		"### Notes\n\nNotes prose.\n\n| Note | Why |\n|---|---|\n| a note | a reason |\n" +
+		ledger + "| E1 | c | cmd | i | o | m | r | observado |\n"
+	if problems := CheckDocument(nested); len(problems) != 0 {
+		t.Fatalf("a subheading with its own header and delimiter opens a table: %v", problems)
+	}
+	body, err := Template()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if problems := CheckDocument(body); len(problems) != 0 {
+		t.Fatalf("the shipped template must stay well formed: %v", problems)
+	}
+}

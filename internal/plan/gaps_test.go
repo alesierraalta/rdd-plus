@@ -410,3 +410,77 @@ func TestGapsPrintAHostileCellAsDataNotAsAnInstruction(t *testing.T) {
 		})
 	}
 }
+
+// The breadth tables declare a counting vocabulary — `pending · in progress · done · blocked · n/a` — and
+// the count reads anything outside it as never swept. The disclosure names the word behind the ratio.
+func TestGapsNameAStatusOutsideTheCountingVocabulary(t *testing.T) {
+	doc := matrix("done (E1, E2)", "done", "done", "done", "done") +
+		sprintf(ranked, "done", "pending (blocked on publishing)")
+	g, err := GapsIn(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		`unrecognized status "done (E1, E2)" (line 5): Security — counted as never swept`,
+		`unrecognized status "pending (blocked on publishing)" (line 16): 2. slug rendering — counted as still owed`,
+	}
+	if !reflect.DeepEqual(g.UnrecognizedStatuses, want) || !strings.Contains(g.Report(), want[0]) {
+		t.Fatalf("unrecognized statuses = %v, want %v named in the report too", g.UnrecognizedStatuses, want)
+	}
+	if g.LayersDone != 4 || g.LayersTotal != 5 || g.TargetsDone != 1 || g.TargetsTotal != 2 {
+		t.Fatalf("gaps %+v, want the counting rules held before the label was named", g)
+	}
+	plain, err := GapsIn(matrix("pending", "in progress", "blocked", "n/a", "done") + sprintf(ranked, "done", "n/a"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.ToLower(plain.Report()), "unrecognized status") {
+		t.Fatalf("a declared status owes no disclosure:\n%s", plain.Report())
+	}
+}
+
+// A row the scanner never read must not read as `nothing owed`: the interrupted table fails closed.
+func TestGapsFailClosedOnAnInterruptedBreadthTable(t *testing.T) {
+	cases := []struct {
+		name string
+		doc  string
+		line int
+	}{
+		{
+			name: "Ranked targets",
+			doc: matrix("done", "done", "done", "done", "done") +
+				"## Ranked targets\n\n| Target | Verdict | Status |\n|---|---|---|\n" +
+				"| 1. token refresh | probe | done |\n" +
+				"a sentence that closes the table\n" +
+				"| 2. slug rendering | probe | done |\n",
+			line: 16,
+		},
+		{
+			name: "Layer matrix",
+			doc: "## Layer matrix\n\n| Layer | Skill | Scope | Status |\n|---|---|---|---|\n" +
+				"| Security | `appsec-adversarial-auditor` | x | done |\n" +
+				"a sentence that closes the table\n" +
+				"| Runtime and faults | `runtime-reliability-testing` | x | done |\n\n" +
+				"## Ranked targets\n\n| Target | Verdict | Status |\n|---|---|---|\n| 1. token refresh | probe | done |\n",
+			line: 6,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			g, err := GapsIn(tc.doc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !g.Any() {
+				t.Fatalf("a row that was never read is not nothing owed: %+v", g)
+			}
+			if len(g.InterruptedTables) != 1 {
+				t.Fatalf("interrupted tables = %v, want the %s one and nothing else", g.InterruptedTables, tc.name)
+			}
+			report := g.Report()
+			if !strings.Contains(report, fmt.Sprintf("interrupted at line %d", tc.line)) || !strings.Contains(report, tc.name) {
+				t.Fatalf("the report must name the interrupted %s table and its line:\n%s", tc.name, report)
+			}
+		})
+	}
+}

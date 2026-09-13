@@ -102,10 +102,23 @@ func CheckDocument(doc string) []string {
 	}
 	// The ledger is the one other table the check reads back. A plan without one simply has no rows to
 	// corroborate against, exactly as before: sectionRegion reports it missing and the scan returns empty.
-	ledgerHeading, ledgerEnd := sectionRegion(lines, "Evidence ledger")
-	ledger := scanTable(lines, ledgerHeading+1, ledgerEnd)
+	ledger := scanSection(lines, "Evidence ledger")
+	ranked := scanSection(lines, "Ranked targets")
+	layers := scanSection(lines, "Layer matrix")
 
 	var problems []string
+	// A table a stray line cut in two is reported before the rows it kept: the rows under the cut were never
+	// read, so everything the check says below is said about a part of the table.
+	for _, t := range []struct {
+		name string
+		scan tableScan
+	}{
+		{"Findings", findings}, {"Evidence ledger", ledger}, {"Ranked targets", ranked}, {"Layer matrix", layers},
+	} {
+		if line, message := interruptedTable(t.name, t.scan); message != "" {
+			problems = append(problems, fmt.Sprintf("line %d: %s", line, message))
+		}
+	}
 	ledgerIDs := map[string]bool{}
 	for _, r := range ledger.rows {
 		id := cell(r.cells, 0)
@@ -194,8 +207,8 @@ func lightReport(lines []string) ([]string, bool) {
 	if d.target != "" && !targetIsInEvidence(lines, d.target) {
 		problems = append(problems, fmt.Sprintf("line %d: the Light declaration names target %s, which no Ranked-target row and no path:line citation corroborates", d.line, quote(d.target)))
 	}
-	layersHeading, layersEnd := sectionRegion(lines, "Layer matrix")
-	return append(problems, unscopedLayers(scanTable(lines, layersHeading+1, layersEnd))...), true
+	layers := scanSection(lines, "Layer matrix")
+	return append(problems, unscopedLayers(layers)...), true
 }
 
 // lightDeclaration reads the `Light:` header: the declared shape, a non-empty blast radius and
@@ -234,8 +247,7 @@ func lightDeclaration(lines []string) lightDecl {
 // exact `Target` cell in the ranked targets, or a path the plan cites as path:line. Reading the claim
 // back against the plan is all a binary can do; whether the target is bounded stays with the reader.
 func targetIsInEvidence(lines []string, target string) bool {
-	rankedHeading, rankedEnd := sectionRegion(lines, "Ranked targets")
-	ranked := scanTable(lines, rankedHeading+1, rankedEnd)
+	ranked := scanSection(lines, "Ranked targets")
 	iTarget := columnIndex(ranked.header, "target")
 	for _, r := range ranked.rows {
 		if iTarget >= 0 && cell(r.cells, iTarget) == target {
@@ -276,42 +288,150 @@ type row struct {
 	cells []string
 }
 
-// tableScan is what a region scan found. header is nil when the region carries no table at all. A blank
-// line is a separator that lost its pipes, not the end of the block: skipping it is what stops a blank
-// inserted inside a table from dropping every row under it while the plan still reports `well formed`.
+// tableScan is what a region scan found. header is nil when the region carries no table at all. ended and
+// resumed are the pair the old scanner hid: a line that is not a row closes the block, and a `|` line after
+// it proves the table was cut in two. fenceLine records a fence the region ended inside.
 type tableScan struct {
-	header []string
-	rows   []row
+	header    []string
+	head      int // 1-based line of the last heading row: the separator when one was read, else the header
+	rows      []row
+	ended     int    // 1-based line that closed the block, 0 when no line closed it
+	endedText string // that line, unsanitised: it is plan text, so every quote of it goes through quote()
+	resumed   int    // 1-based line of the first `|` line after the close, 0 when the block was not interrupted
+	fenceLine int    // 1-based line an unclosed code fence opened at, 0 when no fence was left open
 }
 
-// scanTable reads the first markdown table of lines[start:end] (0-based, end exclusive), carrying the line
-// each row sits on. Before the header any line is the section's own description; once the header is read,
-// a non-blank line that is not a row ends the table — the shipped template puts prose under every table —
-// and the rows below it are not read. A separator or placeholder row is skipped, as before.
+// scanSection reads the first table of a `## <name>` section.
+func scanSection(lines []string, name string) tableScan {
+	heading, end := sectionRegion(lines, name)
+	if heading < 0 || end <= heading+1 {
+		return tableScan{}
+	}
+	return scanTable(lines, heading+1, end)
+}
+
+// scanTable reads the table of lines[start:end] (0-based, end exclusive), carrying the line each row sits
+// on. A blank line is skipped exactly like the separator row, so a blank inserted inside a table no longer
+// drops every row under it. Once the block has closed, a `|` line is recorded as the proof that a table was
+// cut. A fenced code block is documentation: an example table is never read as a row, or as the proof of a cut.
 func scanTable(lines []string, start, end int) tableScan {
+	const (
+		beforeHeader = iota
+		insideTable
+		afterEnd
+	)
 	var s tableScan
+	state := beforeHeader
+	fence, fenceLine := "", 0
 	for i := start; i < end && i < len(lines); i++ {
 		t := strings.TrimSpace(lines[i])
-		if t == "" {
-			continue
-		}
-		if !strings.HasPrefix(t, "|") {
-			if s.header != nil {
-				break
+		if fence != "" {
+			if strings.HasPrefix(t, fence) {
+				fence, fenceLine = "", 0
 			}
 			continue
 		}
-		cells := split(t)
-		if s.header == nil {
-			s.header = cells
+		if marker := fenceMarker(t); marker != "" {
+			fence, fenceLine = marker, i+1
 			continue
 		}
-		if isSeparator(cells) || placeholder.MatchString(cell(cells, 0)) {
-			continue
+		if state == insideTable && strings.HasPrefix(t, "###") {
+			// A subheading ends this block only when a table of its own starts there.
+			if resumed, opens := tableUnderSubheading(lines, i+1, end); resumed != 0 && !opens {
+				s.ended, s.endedText, s.resumed = i+1, lines[i], resumed
+			}
+			break
 		}
-		s.rows = append(s.rows, row{line: i + 1, cells: cells})
+		switch {
+		case t == "":
+			continue
+		case strings.HasPrefix(t, "|"):
+			switch state {
+			case beforeHeader:
+				s.header, state, s.head = split(t), insideTable, i+1
+			case insideTable:
+				cells := split(t)
+				switch {
+				case isSeparator(cells):
+					s.head = i + 1
+				case !placeholder.MatchString(cell(cells, 0)):
+					s.rows = append(s.rows, row{line: i + 1, cells: cells})
+				}
+			default:
+				if s.resumed == 0 {
+					s.resumed = i + 1
+				}
+			}
+		default:
+			if state == insideTable {
+				s.ended, s.endedText, state = i+1, lines[i], afterEnd
+			}
+		}
+	}
+	if fence != "" {
+		// Every line under the fence was skipped, so the table this region owes may be inside it.
+		s.fenceLine = fenceLine
 	}
 	return s
+}
+
+// tableUnderSubheading reads what follows a `###` line inside a region: the first line that opens a markdown
+// row, and whether that row is a table of its own — GFM's shape, a header row whose delimiter is adjacent —
+// which is the boundary a subheading legitimately is. Prose and blank lines before the first pipe row belong
+// to the subsection; anything else after it means the row belongs to the table the subheading cut.
+func tableUnderSubheading(lines []string, start, end int) (resumed int, opens bool) {
+	fence, row := "", 0
+	for i := start; i < end && i < len(lines); i++ {
+		t := strings.TrimSpace(lines[i])
+		if fence != "" {
+			if strings.HasPrefix(t, fence) {
+				fence = ""
+			}
+			continue
+		}
+		if marker := fenceMarker(t); marker != "" {
+			fence = marker
+			continue
+		}
+		if row == 0 {
+			if !strings.HasPrefix(t, "|") {
+				continue
+			}
+			row = i + 1
+			continue
+		}
+		// A header row and its delimiter are adjacent, so any other line makes this row part of the
+		// table the subheading cut.
+		if !strings.HasPrefix(t, "|") || !isSeparator(split(t)) {
+			return row, false
+		}
+		return row, true
+	}
+	return row, false
+}
+
+// fenceMarker returns the marker a line opens a code fence with — three backticks or three tildes — or "".
+func fenceMarker(t string) string {
+	switch {
+	case strings.HasPrefix(t, "```"):
+		return "```"
+	case strings.HasPrefix(t, "~~~"):
+		return "~~~"
+	}
+	return ""
+}
+
+// interruptedTable renders the breach a region leaves when part of it was never read, and the line to report
+// it at. The text of the cutting line goes through quote(): it is plan text, not a sentence this package wrote.
+func interruptedTable(section string, s tableScan) (int, string) {
+	if s.resumed != 0 {
+		return s.ended, fmt.Sprintf("the %s table is interrupted at line %d by \"%s\", so the rows after it are never read (the next table row is at line %d)",
+			section, s.ended, quote(s.endedText), s.resumed)
+	}
+	if s.fenceLine != 0 {
+		return s.fenceLine, fmt.Sprintf("the %s table region ends inside a code fence opened at line %d, so nothing below it was read", section, s.fenceLine)
+	}
+	return 0, ""
 }
 
 // sectionRegion locates a `## <name>` section: its 0-based heading line and the exclusive end of its body,
