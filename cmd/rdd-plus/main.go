@@ -773,11 +773,23 @@ func runShellSandboxed(image string) commandRunner { return sandboxRunner(image,
 // and not about the row, and they are told apart by the text Docker and the container emit, because neither
 // reports a machine-readable code for them. That is a heuristic and it is declared as one: naming the common
 // failures is worth more than a generic command-failed that sends the reader to the row, as long as what the
-// reader is told is what was observed.
+// reader is told is what was observed. One more needs no heuristic at all: a docker that never started arrives
+// as an *exec.Error, and reading that as a failing command would send the reader to the row for a machine that
+// has no container runtime.
 //
 // One failure has no signal at all and is not invented here: a command that needs a service on this machine
 // fails inside the container with an empty stderr, which is indistinguishable from a test that simply failed.
 func sandboxRefusal(image, output string, err error) error {
+	// A sandbox that never started is about the sandbox, not about the row: exec reports a binary it could not
+	// find or start as an *exec.Error, and a docker that ran and failed as an *exec.ExitError, so the two are
+	// told apart by type rather than by reading a message.
+	var start *exec.Error
+	if errors.As(err, &start) {
+		return evidence.Refusal{
+			Reason: evidence.ReasonMisconfigured,
+			Detail: fmt.Sprintf("the sandbox could not start: %v; every row is observed in a container in this mode, so check that docker is installed and on PATH", err),
+		}
+	}
 	var exit *exec.ExitError
 	if errors.As(err, &exit) && exit.ExitCode() == 125 {
 		return evidence.Refusal{

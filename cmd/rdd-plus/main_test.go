@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/alesierraalta/rdd-plus/internal/buildinfo"
+	"github.com/alesierraalta/rdd-plus/internal/evidence"
 )
 
 // buildCLI compiles the command once per test binary; the contract under test is the process's,
@@ -550,5 +553,22 @@ func TestProbeHookRunsTheWiredCommand(t *testing.T) {
 	}
 	if err := probeHook(`"` + write("broken", "#!/bin/sh\nexit 3\n") + `"`); err == nil {
 		t.Fatal("a wired command that exits non-zero must fail the probe")
+	}
+}
+
+// A docker binary that is not there is not a failing row: nothing starts, so no container ever exists and the
+// refusal has to name the sandbox rather than the command. exec reports a binary it could not find or start as
+// an *exec.Error, while a docker that ran and failed reports an *exec.ExitError, which is the line this test
+// pins. Nothing here starts a container.
+func TestSandboxRunnerNamesADockerThatIsNotOnPath(t *testing.T) {
+	t.Setenv("PATH", t.TempDir()) // an empty directory: there is no docker to find
+	run := sandboxRunner(sandboxImageDefault, sandboxReadOnly)
+	_, err := run(context.Background(), t.TempDir(), "printf one")
+	var refusal evidence.Refusal
+	if !errors.As(err, &refusal) || refusal.Reason != evidence.ReasonMisconfigured {
+		t.Fatalf("run = %v, want a %s refusal", err, evidence.ReasonMisconfigured)
+	}
+	if !strings.Contains(refusal.Detail, "docker") {
+		t.Fatalf("detail = %q, want it to name the missing docker", refusal.Detail)
 	}
 }
