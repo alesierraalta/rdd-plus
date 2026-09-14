@@ -33,7 +33,7 @@ Rows are never removed by budget; budget changes order and status only.
 | 7. Install journey from a clean machine: `go install …@latest` → `sync` → `doctor` | every new user | — | visible error | none (needs the GitHub remote) | real-run | real-run | `real-run-validation` | Probe | pending (blocked on publishing) |
 | 9. Benchmark dataset: 15 cases / 27 planted defects, every suite green with the defect present, every trigger reproduces the wrong output | the number every future comparison rests on | new | silently wrong answer (a defect that does not reproduce inflates recall for free) | E8 (my re-execution of 6 triggers + all 15 suites), E9 (dry-run through the runner) | process | L2 | `exploit-testing` | Probe | done |
 | 10. Bench runner and scorer (`bench run\|score\|history`): scaffold never copies the key, suite must be green, scorer matches by file and line or keyword, history is append-only | every benchmark number | new | silently wrong answer (a lenient scorer rewards prose) | unit 20 tests incl. wrong-file and placeholder negatives; E9 | unit + process | L2 | `exploit-testing` | Probe | done (baseline run pending row) |
-| 8. `evidence verify` subcommand: re-execute a ledger row's command, compare the observed digest, re-apply the declared mutation and require red | the falsifiability of every finding | — | silently wrong answer | design only | unit + process | L3 | `exploit-testing` | Probe | pending |
+| 8. `evidence verify` subcommand: re-execute a ledger row's command, compare the observed digest, re-apply the declared mutation and require red | the falsifiability of every finding | — | silently wrong answer | E28 (a pin recorded in sandbox and re-checked, with the mutated half required to go red) and the evidence, replay and plan suites; the promise is served by `plan admit --execute [--sandbox]`, not by a command of its own | unit + process | L3 | `exploit-testing` | Probe | done |
 
 ## Real-run recipes
 
@@ -181,5 +181,5 @@ Skill versions before 2026-09-10 used the `3.N` scheme; the same releases are `0
 2. Target 6: Go port of the eval harness, self-test, calibration seeding, and fingerprint
 3. Candidate 3.4: the plan is initialised with `rdd-plus plan init` and `plan check` passes before the final message; measure whether that recovers reporting without costing catching
 4. Cut the non-testing turns from a benchmark case: 82 memory and tool-loading calls across 15 cases, roughly a fifth of the turns and $2 of the $10.74
-5. Target 8: `evidence verify`
-4. Target 7: install journey after publishing
+5. Extend the machine columns row by row, the way E28 was extended: it is the only row that carries an `Admit` command, a pin and a `Mutate` claim, so the rest of the ledger is still prose and no finding cites a row whose falsifiability a replay could check
+6. Target 7: install journey after publishing
