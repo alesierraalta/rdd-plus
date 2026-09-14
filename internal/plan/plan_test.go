@@ -890,6 +890,60 @@ func TestCheckNamesAStatusOutsideTheFindingsVocabulary(t *testing.T) {
 	}
 }
 
+func TestCheckReportsACutWithNoRowReadBeforeIt(t *testing.T) {
+	plan := header + "### Notes\n" +
+		"| F1 | `src/a.js:5` x | M | yes | E9 | t.js :: x | fixed | me | - | - |\n" +
+		ledger + "| E1 | c | cmd | i | o | m | r | observado |\n"
+	joined := strings.Join(CheckDocument(plan), "\n")
+	if !strings.Contains(joined, "interrupted at line 5") || !strings.Contains(joined, "### Notes") {
+		t.Fatalf("a cut before the first row must still be reported:\n%s", joined)
+	}
+	if strings.Contains(joined, "cites evidence E9") {
+		t.Fatalf("a row under an interruption was never read and must not be judged:\n%s", joined)
+	}
+}
+
+func TestCheckReportsAMalformedRowUnderASubheading(t *testing.T) {
+	plan := header +
+		"| F1 | `src/a.js:5` x | M | yes | E1 | t.js :: x | fixed | me | - | - |\n" +
+		"\n### Hypotheses (razonado)\n\n| Hypothesis | Probe |\n|---|---|\n| H1 | a | b | c |\n" +
+		ledger + "| E1 | c | cmd | i | o | m | r | observado |\n"
+	joined := strings.Join(CheckDocument(plan), "\n")
+	if !strings.Contains(joined, "Hypotheses (razonado) table row \"H1\" has 4 cells against the header's 2") {
+		t.Fatalf("a malformed row under a subheading must be reported:\n%s", joined)
+	}
+}
+
+func TestLedgerReadsARowAfterABlankLine(t *testing.T) {
+	head := "## Evidence ledger\n\n" +
+		"| Id | Claim | Executed | Admit | Inputs | Observed | Digest | Normalize | Mutation | Reproduction | Label |\n" +
+		"|---|---|---|---|---|---|---|---|---|---|---|\n"
+	rows := Ledger(head +
+		"| E1 | first | c | go version | i | o |  |  | m | r | observado |\n" +
+		"\n" +
+		"| E2 | second | c | go env GOOS | i | o |  |  | m | r | observado |\n")
+	if len(rows) != 2 || rows[0].ID != "E1" || rows[1].ID != "E2" {
+		t.Fatalf("rows = %v, want E1 and E2: a blank line inside the section hid the row from the runner", rows)
+	}
+}
+
+func TestRecordDigestFindsARowAfterABlankLine(t *testing.T) {
+	digest := "sha256:" + strings.Repeat("a", 64)
+	doc := "## Evidence ledger\n\n" +
+		"| Id | Claim | Executed | Admit | Inputs | Observed | Digest | Normalize | Mutation | Reproduction | Label |\n" +
+		"|---|---|---|---|---|---|---|---|---|---|---|\n" +
+		"| E1 | first | c | go version | i | o |  |  | m | r | observado |\n" +
+		"\n" +
+		"| E2 | second | c | go env GOOS | i | o |  |  | m | r | observado |\n"
+	out, err := RecordDigest(doc, "E2", digest)
+	if err != nil {
+		t.Fatalf("RecordDigest on a row after a blank line: %v", err)
+	}
+	if !strings.Contains(out, "| "+digest+" |") {
+		t.Fatalf("the digest did not land on E2's Digest cell:\n%s", out)
+	}
+}
+
 // The ledger's machine columns are resolved by name, and the row's own Normalize expression is one of them.
 // A header that carries it must resolve it, and a header that does not must leave the field empty rather
 // than borrowing the cell of the column beside it.
