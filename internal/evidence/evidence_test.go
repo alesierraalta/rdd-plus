@@ -823,6 +823,121 @@ func TestAdmitRefusesARowWhoseMutationCannotBeChecked(t *testing.T) {
 	}
 }
 
+// mutationDir lays down the one file the mutation tests edit, so every case declares an edit the tree actually
+// carries: `x` on line 3 of src.go, exactly once.
+func mutationDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "src.go"), []byte("package p\n\nvar x = 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// A row that declares a mutation earns its second observation from the replay rather than from a second run of the
+// command: the replay already owes the mutated half and the restored half, so the stability probe costs nothing
+// extra. The replay is handed exactly the parsed edit, the directory the row runs in, and the row's command, and
+// the row is admitted over the output the restored half produced.
+func TestAdmitAdmitsARowWhoseMutationGoesRedAndComesBack(t *testing.T) {
+	dir := mutationDir(t)
+	fresh := digest(t, "one\n", "")
+	rows := []plan.LedgerRow{{ID: "E1", Admit: "printf one", Digest: fresh, Mutate: "x => y @ src.go:3", Label: "observado"}}
+
+	var runs, replays []call
+	var seen plan.Mutation
+	results := Admit(rows, Options{Execute: true, Dir: dir}, Deps{
+		Run: fakeRun("one\n", nil, &runs),
+		Replay: func(m plan.Mutation, replayDir, command string) ReplayResult {
+			seen = m
+			replays = append(replays, call{dir: replayDir, command: command})
+			return ReplayResult{MutatedOutput: "boom\n", MutatedErr: errors.New("exit status 1"), RestoredOutput: "one\n"}
+		},
+	})
+	assertRows(t, results, []want{{id: "E1", verdict: VerdictAdmitted, command: "printf one", digest: fresh, lines: 1}})
+	if len(replays) != 1 {
+		t.Fatalf("the replay ran %d times, want the one that owes both halves", len(replays))
+	}
+	if seen != (plan.Mutation{Old: "x", New: "y", Path: "src.go", Line: 3}) || replays[0] != (call{dir: dir, command: "printf one"}) {
+		t.Fatalf("the replay saw %+v in %+v, want the row's edit, its directory and its command", seen, replays[0])
+	}
+	if len(runs) != 1 || runs[0] != (call{dir: dir, command: "printf one"}) {
+		t.Fatalf("the runner saw %v, want the row's command run once in %q, because the replay owes the second observation", runs, dir)
+	}
+}
+
+// A mutation the row's own command survives proves nothing: the command never noticed the edit, so the row cannot
+// claim the edit is what makes it fail.
+func TestAdmitRefusesARowWhoseMutationStaysGreen(t *testing.T) {
+	dir := mutationDir(t)
+	rows := []plan.LedgerRow{{ID: "E1", Admit: "printf one", Digest: digest(t, "one\n", ""), Mutate: "x => y @ src.go:3", Label: "observado"}}
+	results := Admit(rows, Options{Execute: true, Dir: dir}, Deps{
+		Run: func(context.Context, string, string) (string, error) { return "one\n", nil },
+		Replay: func(plan.Mutation, string, string) ReplayResult {
+			return ReplayResult{MutatedOutput: "one\n"}
+		},
+	})
+	assertRows(t, results, []want{{id: "E1", verdict: VerdictRefused, reason: ReasonMutationNotRed, command: "printf one",
+		detail: []string{"src.go:3", "stayed green"}}})
+}
+
+// A replay that cannot put the tree back leaves the next observation standing on a tree nobody trusts, so the claim
+// is refused rather than checked against it.
+func TestAdmitRefusesARowWhoseReplayCannotPutTheTreeBack(t *testing.T) {
+	dir := mutationDir(t)
+	rows := []plan.LedgerRow{{ID: "E1", Admit: "printf one", Digest: digest(t, "one\n", ""), Mutate: "x => y @ src.go:3", Label: "observado"}}
+	results := Admit(rows, Options{Execute: true, Dir: dir}, Deps{
+		Run: func(context.Context, string, string) (string, error) { return "one\n", nil },
+		Replay: func(plan.Mutation, string, string) ReplayResult {
+			return ReplayResult{MutatedOutput: "boom\n", MutatedErr: errors.New("exit status 1"), RestoredErr: errors.New("exit status 1")}
+		},
+	})
+	assertRows(t, results, []want{{id: "E1", verdict: VerdictRefused, reason: ReasonMutationNotGreen, command: "printf one",
+		detail: []string{"exit status 1", "not evidence"}}})
+}
+
+// A refusal in either half of the replay is about the sandbox rather than about the edit: a mutated run that never
+// ran must not be read as the red observation the claim is made of, and a restored run that never started is not a
+// tree that was not put back. The refusal's own reason travels out unchanged.
+func TestAdmitRefusesARowWhoseReplayWasRefused(t *testing.T) {
+	cases := []struct {
+		name   string
+		replay ReplayResult
+		reason string
+		detail string
+	}{
+		{
+			name:   "the mutated half was refused",
+			replay: ReplayResult{MutatedErr: Refusal{Reason: ReasonMisconfigured, Detail: "the sandbox could not start a container"}, RestoredOutput: "one\n"},
+			reason: ReasonMisconfigured,
+			detail: "the sandbox could not start a container",
+		},
+		{
+			name: "the restored half was refused",
+			replay: ReplayResult{MutatedOutput: "boom\n", MutatedErr: errors.New("exit status 1"),
+				RestoredErr: Refusal{Reason: ReasonNoNetwork, Detail: "the command needed the network"}},
+			reason: ReasonNoNetwork,
+			detail: "the command needed the network",
+		},
+		{
+			name:   "the tree could not be staged",
+			replay: ReplayResult{MutatedErr: Refusal{Reason: ReasonMutationNotReplay, Detail: "the tree could not be staged for a replay"}},
+			reason: ReasonMutationNotReplay,
+			detail: "the tree could not be staged for a replay",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := mutationDir(t)
+			rows := []plan.LedgerRow{{ID: "E1", Admit: "printf one", Digest: digest(t, "one\n", ""), Mutate: "x => y @ src.go:3", Label: "observado"}}
+			results := Admit(rows, Options{Execute: true, Dir: dir}, Deps{
+				Run:    func(context.Context, string, string) (string, error) { return "one\n", nil },
+				Replay: func(plan.Mutation, string, string) ReplayResult { return tc.replay },
+			})
+			assertRows(t, results, []want{{id: "E1", verdict: VerdictRefused, reason: tc.reason, command: "printf one", detail: []string{tc.detail}}})
+		})
+	}
+}
+
 // A runner that knows the failure is about its own environment rather than about the command says so with a
 // Refusal, and that reason is reported as it stands: a sandbox that refused a write is not a failing test, and
 // calling it one would send the reader looking in the wrong place.

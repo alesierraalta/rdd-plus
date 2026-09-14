@@ -337,6 +337,14 @@ func runPlanAdmit(path string, execute bool, timeout time.Duration, only, record
 	if sandbox {
 		runner = runShellSandboxed(sandboxImage)
 	}
+	deps := evidence.Deps{Run: runner}
+	// The replay is wired exactly where a tree the tool owns exists: a sandbox stages a copy of the tree git knows,
+	// edits the copy, runs against it and puts the file back, so a row that claims its own command is falsifiable
+	// has that claim checked instead of admitted unchecked. The host mode has no such copy and leaves Replay nil,
+	// which refuses such a row.
+	if sandbox {
+		deps.Replay = replayMutation(sandboxImage, timeout)
+	}
 	results := evidence.Admit(ledgerRows, evidence.Options{
 		Execute: execute,
 		Dir:     feedback.RepoRoot("."),
@@ -344,7 +352,7 @@ func runPlanAdmit(path string, execute bool, timeout time.Duration, only, record
 		Mode:    mode,
 		Only:    admitIDs(only),
 		Record:  recordIDs,
-	}, evidence.Deps{Run: runner})
+	}, deps)
 
 	admitted, wouldRun, refused := 0, 0, 0
 	for _, r := range results {
@@ -695,22 +703,22 @@ func runBenchHistory(args []string) int {
 // exists, and the default only spares the common case a flag.
 const sandboxImageDefault = "golang:1.26-alpine"
 
-// runShellSandboxed runs one command inside a container that cannot touch the host tree. It is the only
-// confinement this tool offers, and what it buys is narrow: the command is still arbitrary code, but a write
-// lands on a read-only mount instead of the working tree, and the network is gone.
-//
-// The invocation was measured rather than guessed, and three of its parts are load-bearing:
-//   - `--tmpfs /tmp:exec`: Docker mounts a tmpfs noexec by default, and Go then dies with
-//     `fork/exec ...: permission denied`, which reads like a repository permission bug rather than a sandbox
-//     one.
-//   - a writable `GOCACHE`: the build cache is written on every run, and the image's own cache directory sits
-//     behind --read-only. `GOTMPDIR` was measured unnecessary.
-//   - `-v <dir>:/w:ro` with `-w /w`: the command needs the tree, and the tree is the thing that must not
-//     change.
-//
-// `--read-only` and `--network none` do not change whether a command passes; they are exactly the isolation
-// this mode claims, so they are asserted here rather than relied on to make anything work.
-func runShellSandboxed(image string) func(context.Context, string, string) (string, error) {
+// commandRunner runs one command in dir and returns its combined output. It is the shape the host runner and the
+// sandbox runner both present to the admission, named here so a replay can take a runner as a parameter.
+type commandRunner func(ctx context.Context, dir, command string) (string, error)
+
+const (
+	// sandboxReadOnly is how the container sees the tree for a row's own command: the command must not reach this
+	// machine's working tree, so a write fails against the mount instead of landing.
+	sandboxReadOnly = "ro"
+	// sandboxWritable is how the container sees the tree for a replay, which edits a copy it owns and then puts the
+	// file back, so the mount has to allow the write.
+	sandboxWritable = "rw"
+)
+
+// sandboxRunner returns a runner that observes one command inside a container. mount is how the container sees
+// dir: read-only for a row's own command, writable for a replay, which edits a copy it owns.
+func sandboxRunner(image, mount string) commandRunner {
 	return func(ctx context.Context, dir, command string) (string, error) {
 		if !filepath.IsAbs(dir) {
 			return "", evidence.Refusal{
@@ -723,7 +731,7 @@ func runShellSandboxed(image string) func(context.Context, string, string) (stri
 			"--network", "none",
 			"--read-only",
 			"--tmpfs", "/tmp:exec",
-			"-v", dir+":/w:ro",
+			"-v", dir+":/w:"+mount,
 			"-w", "/w",
 			"-e", "GOCACHE=/tmp/gocache",
 			image, "sh", "-c", command,
@@ -743,6 +751,23 @@ func runShellSandboxed(image string) func(context.Context, string, string) (stri
 		return output, sandboxRefusal(image, output, err)
 	}
 }
+
+// runShellSandboxed runs one command inside a container that cannot touch the host tree. It is the only
+// confinement this tool offers, and what it buys is narrow: the command is still arbitrary code, but a write
+// lands on a read-only mount instead of the working tree, and the network is gone.
+//
+// The invocation was measured rather than guessed, and three of its parts are load-bearing:
+//   - `--tmpfs /tmp:exec`: Docker mounts a tmpfs noexec by default, and Go then dies with
+//     `fork/exec ...: permission denied`, which reads like a repository permission bug rather than a sandbox
+//     one.
+//   - a writable `GOCACHE`: the build cache is written on every run, and the image's own cache directory sits
+//     behind --read-only. `GOTMPDIR` was measured unnecessary.
+//   - `-v <dir>:/w:ro` with `-w /w`: the command needs the tree, and the tree is the thing that must not
+//     change.
+//
+// `--read-only` and `--network none` do not change whether a command passes; they are exactly the isolation
+// this mode claims, so they are asserted here rather than relied on to make anything work.
+func runShellSandboxed(image string) commandRunner { return sandboxRunner(image, sandboxReadOnly) }
 
 // sandboxRefusal names why a sandboxed command produced no observation. Three of these are about the sandbox
 // and not about the row, and they are told apart by the text Docker and the container emit, because neither

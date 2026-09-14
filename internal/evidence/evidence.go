@@ -353,10 +353,24 @@ func admitRow(row plan.LedgerRow, opts Options, deps Deps, record bool) RowResul
 	var again string
 	if mutation != nil {
 		replayed := deps.Replay(*mutation, opts.Dir, command)
+		// A refusal says the failure is about the sandbox rather than about the edit, and a mutated run that never
+		// ran must not be read as the red observation the claim is made of. The same reading applies to the
+		// restored half: a sandbox that never started is not a tree that was not put back.
+		var refusal Refusal
+		if errors.As(replayed.MutatedErr, &refusal) {
+			return refused(result, refusal.Reason, fmt.Sprintf(
+				"evidence %s declares the edit `%s` => `%s` at %s:%d and the mutated half of the replay was refused: %s",
+				row.ID, mutation.Old, mutation.New, mutation.Path, mutation.Line, refusal.Detail))
+		}
 		if replayed.MutatedErr == nil {
 			return refused(result, ReasonMutationNotRed, fmt.Sprintf(
 				"evidence %s declares the edit `%s` => `%s` at %s:%d and the command stayed green under it: a mutation its own row survives proves nothing about that row, so the claim is refused rather than recorded",
 				row.ID, mutation.Old, mutation.New, mutation.Path, mutation.Line))
+		}
+		if errors.As(replayed.RestoredErr, &refusal) {
+			return refused(result, refusal.Reason, fmt.Sprintf(
+				"evidence %s declares the edit `%s` => `%s` at %s:%d and the restored half of the replay was refused: %s",
+				row.ID, mutation.Old, mutation.New, mutation.Path, mutation.Line, refusal.Detail))
 		}
 		if replayed.RestoredErr != nil {
 			return refused(result, ReasonMutationNotGreen, fmt.Sprintf(

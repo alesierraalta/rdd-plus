@@ -845,6 +845,10 @@ func TestValidateMutationChecksTheTreeBeforeAnythingRuns(t *testing.T) {
 	dir := t.TempDir()
 	write(t, dir, "src/a.go", "package a\n\nvar x = 1\nvar y = 1\nvar z = 2\n")
 	write(t, dir, "src/dup.go", "a\nb\na\n")
+	// A real file outside dir, whose content would let the escaping case validate if the guard did not exist. The
+	// case must fail on the verdict, not on a different error string: without the guard this file is found, the
+	// line holds the old text exactly once, and the mutation is accepted.
+	write(t, filepath.Dir(dir), "outside.go", "package a\n\n\nvar y = 1\n\n")
 
 	cases := []struct {
 		name   string
@@ -852,12 +856,15 @@ func TestValidateMutationChecksTheTreeBeforeAnythingRuns(t *testing.T) {
 		reason string // empty means it validates
 	}{
 		{"the text is on the named line exactly once", Mutation{Old: "var y", New: "var w", Path: "src/a.go", Line: 4}, ""},
+		// `..` that comes back inside is not an escape: the guard refuses a path that leaves the tree, not the token.
+		{"a path that climbs and comes back stays inside", Mutation{Old: "var y", New: "var w", Path: "src/../src/a.go", Line: 4}, ""},
 		{"the file is not there", Mutation{Old: "x", New: "y", Path: "src/nope.go", Line: 1}, ReasonMutationNotFound},
 		{"the line does not exist", Mutation{Old: "x", New: "y", Path: "src/a.go", Line: 99}, ReasonMutationNoLine},
 		{"the text is not on that line", Mutation{Old: "var z", New: "var q", Path: "src/a.go", Line: 3}, ReasonMutationNotFound},
 		{"the text is not in the file", Mutation{Old: "nope", New: "y", Path: "src/a.go", Line: 3}, ReasonMutationNotFound},
 		{"the text occurs twice", Mutation{Old: "a", New: "z", Path: "src/dup.go", Line: 1}, ReasonMutationAmbiguous},
 		{"the path is absolute", Mutation{Old: "x", New: "y", Path: "/etc/passwd", Line: 1}, ReasonMutationMalformed},
+		{"the path climbs out of the tree", Mutation{Old: "var y", New: "var w", Path: "../outside.go", Line: 4}, ReasonMutationMalformed},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

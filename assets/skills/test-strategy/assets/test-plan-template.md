@@ -101,12 +101,15 @@ and checked in the other is refused as a mode mismatch, rather than as a digest 
 nothing about why the digests disagree.
 
 `Mutate` is the machine half of a falsifiability claim: `<old> => <new> @ <path>:<line>`, one textual edit whose
-old text must occur exactly once in that file and on that line. It is a value and not a command because a replay
-has to be able to undo exactly what it did, and an edit admits an exact inverse while a command does not. A row
-that declares one is claiming its own command goes red under the edit and green without it, so the claim is
-checked rather than believed: `plan admit` refuses a mutation it cannot parse, find, or tell apart from another,
-and refuses a row whose claim it cannot replay at all. `Mutation or negative control → result` stays prose for a
-human to read; `Mutate` is the part a binary can act on and undo.
+old text must occur exactly once in that file and on that line, naming a file inside the tree. It is a value and
+not a command because a replay has to be able to undo exactly what it did, and an edit admits an exact inverse
+while a command does not. A row that declares one is claiming its own command goes red under the edit and green
+without it, so the claim is checked rather than believed: `plan admit` refuses a mutation it cannot parse, find,
+or tell apart from another, and under `--sandbox` it replays the claim — the edit lands on a copy of the tree git
+knows, the command must fail there, the file is put back and its bytes verified, and the command must pass again.
+A row whose command survives the edit, or whose restored half fails, is refused; outside `--sandbox` there is no
+copy to edit and put back, so the claim is refused rather than admitted unchecked. `Mutation or negative control →
+result` stays prose for a human to read; `Mutate` is the part a binary can act on and undo.
 
 ### Hypotheses (razonado)
 

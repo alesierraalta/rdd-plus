@@ -60,13 +60,19 @@ findings. This contract applies to every testing skill routed by `test-strategy`
    checkable record.
 10. **A falsifiability claim is a value, not a sentence.** The optional `Mutate` cell holds
     `<old> => <new> @ <path>:<line>`: one textual edit, whose old text must occur exactly once in that file and
-    on that line. It is checked before anything runs, and each defect is named: a cell that does not parse, a
-    file that is not there, a line that does not exist, text that is absent, text that occurs more than once,
-    and an edit that changes nothing. A row that declares a mutation is claiming its own command goes red under
-    it and green without it. That claim is refused rather than admitted unchecked when it cannot be replayed,
-    because replaying an edit means applying it and putting it back, and only a tree the tool owns can be put
-    back with certainty. `Mutation or negative control → result` stays prose for a human; `Mutate` is the part a
-    binary can act on, and undo.
+    on that line, and which names a file inside the tree. It is checked before anything runs, and each defect is
+    named: a cell that does not parse, a path that is absolute or climbs out with `..`, a file that is not there,
+    a line that does not exist, text that is absent, text that occurs more than once, and an edit that changes
+    nothing. A row that declares a mutation is claiming its own command goes red under it and green without it.
+    Under `--sandbox` that claim is replayed: the edit lands on a copy of the tree git knows, the command must
+    fail there, the file is put back and its bytes verified, and the command must pass again. A command that
+    survives the edit (`mutation-not-red`), a restored half that fails (`mutation-not-green`), and a replay the
+    sandbox refuses or cannot complete (`mutation-not-replayed`, or the sandbox's own reason) are all refused
+    rather than admitted. Outside `--sandbox` there is no copy the tool owns, so the claim is refused there
+    instead of admitted unchecked. Two limits are stated rather than hidden: the copy carries what git knows and
+    no `.git`, and only the file the edit names is restored, so a row whose command needs repository metadata or
+    an ignored input fails its own replay — a refusal, never an admission. `Mutation or negative control →
+    result` stays prose for a human; `Mutate` is the part a binary can act on, and undo.
 
 ## Record template
 

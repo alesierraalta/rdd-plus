@@ -291,6 +291,12 @@ func ValidateMutation(root string, m Mutation) error {
 		return MutationError{Reason: ReasonMutationMalformed, Detail: fmt.Sprintf(
 			"%q is an absolute path, and a mutation names a file inside the tree so the replay can copy that tree and leave this one alone", m.Path)}
 	}
+	// A path that climbs out of the tree is refused for the same reason an absolute one is: the replay edits a
+	// copy of the tree, and `..` would land the edit on a file the copy does not own.
+	if clean := filepath.Clean(filepath.FromSlash(m.Path)); clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return MutationError{Reason: ReasonMutationMalformed, Detail: fmt.Sprintf(
+			"%q climbs out of the tree with `..`, and a mutation names a file inside the tree so the replay can copy that tree and leave this one alone", m.Path)}
+	}
 	full := filepath.Join(root, filepath.FromSlash(m.Path))
 	info, err := os.Stat(full)
 	if err != nil {
