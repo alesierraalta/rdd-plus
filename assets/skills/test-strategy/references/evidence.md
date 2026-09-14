@@ -43,8 +43,13 @@ findings. This contract applies to every testing skill routed by `test-strategy`
 8. **`Admit` and `Digest` are the machine half of a record.** `Admit` holds one bare shell command,
    with no placeholders and no backticks, because it is the command a binary runs and not prose a
    human reads; a cell that chains commands, or leaves a value for its author to fill in, is refused
-   rather than guessed at. `Digest` holds the `sha256:` digest of that command's normalized output, so
-   the record can be re-executed and compared byte for byte. A row that pins neither is refused by
+   rather than guessed at. `Digest` holds the `sha256:` digest of that command's canonical output, so
+   the record can be re-executed and compared byte for byte. A pin means something only over output
+   that holds still, so the command is run twice and a row whose two observations disagree is refused
+   as unstable instead of pinned. When part of an output legitimately moves, declare it in the optional
+   `Normalize` cell as a Go regular expression whose every match becomes `X` before hashing — as narrow
+   as the moving part, because a pattern broad enough to swallow the output turns the pin into
+   decoration. A row that pins no digest, or whose output cannot be pinned, is refused by
    `rdd-plus plan admit`.
 
 ## Record template

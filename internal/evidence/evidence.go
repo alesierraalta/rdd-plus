@@ -64,6 +64,8 @@ const (
 	ReasonHasRedirection    = "admit-has-redirection"
 	ReasonHasPlaceholder    = "admit-has-placeholder"
 	ReasonMalformedRow      = "malformed-row"
+	ReasonNormalizeInvalid  = "normalize-invalid"
+	ReasonUnstableOutput    = "unstable-output"
 	ReasonCommandFailed     = "command-failed"
 	ReasonTimeout           = "timeout"
 	ReasonEmptyOutput       = "empty-output"
@@ -199,6 +201,15 @@ func admitRow(row plan.LedgerRow, opts Options, deps Deps, record bool) RowResul
 		return refused(result, reason, markerDetail(row.ID, command, marker, reason))
 	}
 
+	// A row whose Normalize expression does not compile is a defect in the row, not in the command, so it
+	// is reported before anything is spawned: discovering it after a run would spend the run to learn
+	// something the row already said.
+	if err := compileNormalize(row.Normalize); err != nil {
+		return refused(result, ReasonNormalizeInvalid, fmt.Sprintf(
+			"evidence %s declares Normalize %q, which does not compile: %v; a Normalize expression is a Go regular expression whose every match becomes X before hashing",
+			row.ID, row.Normalize, err))
+	}
+
 	result.Command = command
 	if !opts.Execute {
 		result.Verdict = VerdictWouldRun
@@ -206,19 +217,29 @@ func admitRow(row plan.LedgerRow, opts Options, deps Deps, record bool) RowResul
 		return result
 	}
 
-	ctx := context.Background()
-	if opts.Timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, opts.Timeout)
-		defer cancel()
+	// The command runs twice under --execute. The second run is the stability probe, and it is the reason a
+	// pin means anything: a pin recorded over output that moves is not a pin, it is a trap for the next
+	// honest run. Both runs get the full timeout, so --timeout still bounds one command as documented.
+	runOnce := func() (string, error) {
+		ctx := context.Background()
+		if opts.Timeout > 0 {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, opts.Timeout)
+			defer cancel()
+		}
+		return deps.Run(ctx, opts.Dir, command)
 	}
-	output, err := deps.Run(ctx, opts.Dir, command)
-	if err != nil {
+	runFailure := func(err error, suffix string) RowResult {
 		if errors.Is(err, context.DeadlineExceeded) {
 			return refused(result, ReasonTimeout, fmt.Sprintf(
-				"evidence %s hit the %s timeout: %v", row.ID, opts.Timeout, err))
+				"evidence %s hit the %s timeout%s: %v", row.ID, opts.Timeout, suffix, err))
 		}
-		return refused(result, ReasonCommandFailed, fmt.Sprintf("evidence %s failed to run: %v", row.ID, err))
+		return refused(result, ReasonCommandFailed, fmt.Sprintf("evidence %s failed to run%s: %v", row.ID, suffix, err))
+	}
+
+	output, err := runOnce()
+	if err != nil {
+		return runFailure(err, "")
 	}
 
 	// The command produced output, so the fresh observation is carried whether or not the row is
@@ -227,8 +248,28 @@ func admitRow(row plan.LedgerRow, opts Options, deps Deps, record bool) RowResul
 		return refused(result, ReasonEmptyOutput, fmt.Sprintf(
 			"evidence %s produced no output, so there is nothing to observe", row.ID))
 	}
-	fresh := Digest(output)
-	result.Digest, result.Lines = fresh, lineCount(output)
+	fresh, err := Digest(output, row.Normalize)
+	if err != nil {
+		return refused(result, ReasonNormalizeInvalid, fmt.Sprintf(
+			"evidence %s declares Normalize %q, which does not compile: %v", row.ID, row.Normalize, err))
+	}
+
+	again, err := runOnce()
+	if err != nil {
+		return runFailure(err, " on its second run")
+	}
+	second, err := Digest(again, row.Normalize)
+	if err != nil {
+		return refused(result, ReasonNormalizeInvalid, fmt.Sprintf(
+			"evidence %s declares Normalize %q, which does not compile: %v", row.ID, row.Normalize, err))
+	}
+	if second != fresh {
+		return refused(result, ReasonUnstableOutput, fmt.Sprintf(
+			"evidence %s produced two different digests (%s then %s): the output moves between two identical runs, so the row cannot be pinned as it stands; declare a Normalize expression for the part that moves, or make the command deterministic",
+			row.ID, fresh, second))
+	}
+
+	result.Digest, result.Lines = fresh, lineCount(output, row.Normalize)
 
 	switch {
 	case record:
@@ -370,24 +411,59 @@ func commandPlaceholder(command string) string {
 	return varPlaceholder.FindString(command)
 }
 
-// Digest returns "sha256:<hex>" over the observed output after one normalization, so a run is never
-// refused for a formatting accident and a digest pinned on one platform stays comparable on another:
+// Digest returns "sha256:<hex>" over the observed output after two passes, so a run is never refused for a
+// formatting accident, a digest pinned on one platform stays comparable on another, and a row whose output
+// moves in a declared way can still be pinned:
 //
-//   - split on "\n"
-//   - strip a trailing "\r" and trailing spaces and tabs from every line
-//   - drop trailing empty lines
-//   - join with "\n"
+//  1. the structural pass, which forgives formatting and nothing else
+//     - split on "\n"
+//     - strip a trailing "\r" and trailing spaces and tabs from every line
+//     - drop trailing empty lines
+//     - join with "\n"
+//  2. the row's own expression, when its Normalize cell declares one: every match becomes a single "X"
 //
-// The digest covers exactly those normalized bytes. Content, order, and line count are untouched: only
-// trailing whitespace inside a line and blank lines at the very end are forgiven.
-func Digest(output string) string {
-	sum := sha256.Sum256([]byte(normalize(output)))
-	return "sha256:" + hex.EncodeToString(sum[:])
+// The digest covers exactly what those two passes leave. The structural pass cannot hide a changed
+// observation, because only trailing whitespace and trailing blank lines are forgiven. The row's own
+// expression can hide one, and that is the row author's promise to keep: a pattern broad enough to swallow
+// the whole output turns the pin into decoration, and no reader of the plan can tell by looking. The
+// stability probe is what keeps the promise honest, because a pin that would only hide a moving output is
+// refused instead of written.
+func Digest(output, normalize string) (string, error) {
+	text, err := canonical(output, normalize)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256([]byte(text))
+	return "sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
-// normalize is the byte string Digest hashes and lineCount counts, so a result's line count and its
-// digest always describe the same observation.
-func normalize(output string) string {
+// compileNormalize reports whether a row's expression can be used at all. It exists so the row can be
+// refused before its command is spawned rather than after a run has been spent on a row defect.
+func compileNormalize(normalize string) error {
+	if normalize == "" {
+		return nil
+	}
+	_, err := regexp.Compile(normalize)
+	return err
+}
+
+// canonical is the text Digest hashes and lineCount counts, so a result's line count and its digest always
+// describe the same observation. The structural pass runs first and the row's expression runs over its
+// result, so a pattern sees the text the digest is actually taken over.
+func canonical(output, normalize string) (string, error) {
+	text := normalizeOutput(output)
+	if normalize == "" {
+		return text, nil
+	}
+	expr, err := regexp.Compile(normalize)
+	if err != nil {
+		return "", err
+	}
+	return expr.ReplaceAllString(text, "X"), nil
+}
+
+// normalizeOutput is the structural pass: the byte string the row's expression then rewrites.
+func normalizeOutput(output string) string {
 	lines := strings.Split(output, "\n")
 	for i, line := range lines {
 		lines[i] = strings.TrimRight(line, "\r \t")
@@ -398,13 +474,13 @@ func normalize(output string) string {
 	return strings.Join(lines, "\n")
 }
 
-// lineCount counts the lines of the normalized output: the ones the digest covers.
-func lineCount(output string) int {
-	normalized := normalize(output)
-	if normalized == "" {
+// lineCount counts the lines of the text the digest covers, so the two always describe one observation.
+func lineCount(output, normalize string) int {
+	text, err := canonical(output, normalize)
+	if err != nil || text == "" {
 		return 0
 	}
-	return strings.Count(normalized, "\n") + 1
+	return strings.Count(text, "\n") + 1
 }
 
 // idSet turns an id list into a lookup, keeping the empty list empty so it never filters.

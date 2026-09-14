@@ -71,8 +71,8 @@ func TestCheckAcceptsACompliantPlan(t *testing.T) {
 		"| Id | Finding (path:line, one line) | Severity (consequence class) | Data safe? | Evidence id | Pinning test (suite path :: test name) | Status | Verdict by / date | Reason | Cited-files fingerprint at verdict |\n|---|---|---|---|---|---|---|---|---|---|\n",
 		"| F1 | `src/a.js:5` drops a quoted comma | data loss | yes | E1 | tests/a.test.js :: keeps a quoted comma | fixed | me / 2026-09-10 | - | abc123 |\n")
 	plan = replaceFixture(t, plan, "the Evidence ledger header",
-		"| Id | Claim | Executed | Admit | Inputs and parameters | Observed | Digest | Mutation or negative control → result | Reproduction | Label (`observado` / `razonado`, literal) |\n|---|---|---|---|---|---|---|---|---|---|\n",
-		"| E1 | it drops the comma | `node --test` | node --test | `a,\"b,c\"` | 3 fields | sha256:7eada7a897497315d39d2541f5058a9631e80828245781b3c9c96205d9d759ed | reverted → red | same input | observado |\n")
+		"| Id | Claim | Executed | Admit | Inputs and parameters | Observed | Digest | Normalize | Mutation or negative control → result | Reproduction | Label (`observado` / `razonado`, literal) |\n|---|---|---|---|---|---|---|---|---|---|---|\n",
+		"| E1 | it drops the comma | `node --test` | node --test | `a,\"b,c\"` | 3 fields | sha256:7eada7a897497315d39d2541f5058a9631e80828245781b3c9c96205d9d759ed | | reverted → red | same input | observado |\n")
 	if plan == string(body) {
 		t.Fatal("the fixture replaced nothing, so this test would read the untouched template as a compliant plan")
 	}
@@ -693,5 +693,59 @@ func TestSplitHonoursEscapedPipes(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("cell %d = %q, want %q", i, got[i], want[i])
 		}
+	}
+}
+
+// The ledger's machine columns are resolved by name, and the row's own Normalize expression is one of them.
+// A header that carries it must resolve it, and a header that does not must leave the field empty rather
+// than borrowing the cell of the column beside it.
+func TestLedgerResolvesTheNormalizeColumnByName(t *testing.T) {
+	head := "## Evidence ledger\n\n" +
+		"| Id | Claim | Executed | Admit | Inputs and parameters | Observed | Digest | Normalize | Mutation or negative control → result | Reproduction | Label (`observado` / `razonado`, literal) |\n" +
+		"|---|---|---|---|---|---|---|---|---|---|---|\n"
+	rows := Ledger(head + "| E1 | c | prose | go test ./... | i | o | sha256:aa | [0-9]+s | m | r | observado |\n")
+	if len(rows) != 1 {
+		t.Fatalf("ledger = %#v, want the one row", rows)
+	}
+	got := rows[0]
+	if got.Normalize != "[0-9]+s" || got.Digest != "sha256:aa" || got.Admit != "go test ./..." || got.Label != "observado" {
+		t.Fatalf("row = %#v, want the Normalize cell read as its own column", got)
+	}
+	if got.Cells != 11 || got.HeaderCells != 11 {
+		t.Fatalf("row has %d cells against a %d-cell header, want 11 and 11", got.Cells, got.HeaderCells)
+	}
+
+	// The previous header has no Normalize column. The field stays empty, and every other column still
+	// resolves to its own cell rather than shifting by one.
+	old := "## Evidence ledger\n\n" +
+		"| Id | Claim | Executed | Admit | Inputs and parameters | Observed | Digest | Mutation or negative control → result | Reproduction | Label (`observado` / `razonado`, literal) |\n" +
+		"|---|---|---|---|---|---|---|---|---|---|\n" +
+		"| E1 | c | prose | go test ./... | i | o | sha256:aa | m | r | observado |\n"
+	rows = Ledger(old)
+	if len(rows) != 1 {
+		t.Fatalf("ledger = %#v, want the one row", rows)
+	}
+	got = rows[0]
+	if got.Normalize != "" || got.Digest != "sha256:aa" || got.Mutation != "m" || got.Reproduction != "r" || got.Label != "observado" {
+		t.Fatalf("row = %#v, want no Normalize column with every other field still resolved", got)
+	}
+
+	// A row that lost a cell is reported by the count, not read from the wrong column. The document carries
+	// only a ledger, so Check also reports the Findings section it does not have; the breach this asserts is
+	// the cell count, named against the ledger.
+	dir := t.TempDir()
+	short := write(t, dir, "short.md", head+"| E1 | c | prose | go test ./... | i | o | sha256:aa | [0-9]+s | m | r |\n")
+	problems, err := Check(short)
+	if err != nil {
+		t.Fatalf("Check(%s) failed: %v", short, err)
+	}
+	reported := false
+	for _, p := range problems {
+		if strings.Contains(p, "Evidence ledger") && strings.Contains(p, "11") {
+			reported = true
+		}
+	}
+	if !reported {
+		t.Fatalf("Check(%s) = %v, want the lost cell reported against the ledger", short, problems)
 	}
 }

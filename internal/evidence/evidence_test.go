@@ -34,6 +34,32 @@ func fakeRun(output string, err error, calls *[]call) func(context.Context, stri
 	}
 }
 
+// fakeRuns returns each output in turn and repeats the last one, so a test can drive the stability
+// probe: the first call is the observation, the second is the same command run again to see whether the
+// output held still. Like fakeRun it starts no process, touches no network, and writes no file.
+func fakeRuns(outputs []string, err error, calls *[]call) func(context.Context, string, string) (string, error) {
+	seen := 0
+	return func(_ context.Context, dir, command string) (string, error) {
+		*calls = append(*calls, call{dir: dir, command: command})
+		output := outputs[len(outputs)-1]
+		if seen < len(outputs) {
+			output = outputs[seen]
+			seen++
+		}
+		return output, err
+	}
+}
+
+// digest is Digest with the error a test cannot recover from flattened into a failure.
+func digest(t *testing.T, output, normalize string) string {
+	t.Helper()
+	got, err := Digest(output, normalize)
+	if err != nil {
+		t.Fatalf("Digest(%q, %q) failed: %v", output, normalize, err)
+	}
+	return got
+}
+
 // want is the part of a RowResult a case asserts.
 type want struct {
 	id      string
@@ -195,7 +221,7 @@ func TestAdmitRunsACommandThatIsOnlyOneCommand(t *testing.T) {
 func TestAdmitDryRunNeverRunsAnything(t *testing.T) {
 	called := false
 	got := Admit(
-		[]plan.LedgerRow{row("E1", "go test ./...", Digest("out\n"), "observado")},
+		[]plan.LedgerRow{row("E1", "go test ./...", digest(t, "out\n", ""), "observado")},
 		Options{Execute: false, Dir: t.TempDir()},
 		Deps{Run: func(context.Context, string, string) (string, error) {
 			called = true
@@ -212,8 +238,8 @@ func TestAdmitDryRunNeverRunsAnything(t *testing.T) {
 // unexpected digest, and a row that pins nothing each get their own reason.
 func TestAdmitJudgesTheObservedOutput(t *testing.T) {
 	const output = "alpha\nbeta\n"
-	fresh := Digest(output)
-	other := Digest("something else\n")
+	fresh := digest(t, output, "")
+	other := digest(t, "something else\n", "")
 
 	cases := []struct {
 		name    string
@@ -328,12 +354,28 @@ func TestAdmitJudgesTheObservedOutput(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			got, calls := admit(t, tc.rows, tc.opts, tc.output, tc.runErr)
 			assertRows(t, got, tc.want)
-			if len(calls) != len(tc.wantRun) {
-				t.Fatalf("runner saw %v, want %v", calls, tc.wantRun)
+			// A row refused at its first run never reaches the probe, so it is run once. Any row whose first
+			// observation stood up is run a second time, because a pin over a moving output is not a pin.
+			wantRuns := 2 * len(tc.wantRun)
+			if len(tc.want) == 1 {
+				switch tc.want[0].reason {
+				case ReasonCommandFailed, ReasonTimeout, ReasonEmptyOutput:
+					wantRuns = len(tc.wantRun)
+				}
+			}
+			if len(calls) != wantRuns {
+				t.Fatalf("runner saw %d calls %v, want %d", len(calls), calls, wantRuns)
 			}
 			for i, command := range tc.wantRun {
 				if calls[i].command != command || calls[i].dir != tc.opts.Dir {
 					t.Fatalf("run %d = %#v, want command %q in dir %q", i, calls[i], command, tc.opts.Dir)
+				}
+			}
+			// The probe is the same command in the same directory as the observation it checks, or the two
+			// outputs would not be comparable.
+			for i := len(tc.wantRun); i < len(calls); i++ {
+				if calls[i] != calls[i-len(tc.wantRun)] {
+					t.Fatalf("probe run = %#v, want it identical to the observation it checks", calls[i])
 				}
 			}
 		})
@@ -408,7 +450,7 @@ func TestDigestIgnoresTrailingWhitespaceAndBlankLines(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := Digest(tc.left) == Digest(tc.right); got != tc.same {
+			if got := digest(t, tc.left, "") == digest(t, tc.right, ""); got != tc.same {
 				t.Fatalf("Digest(%q) == Digest(%q) = %v, want %v", tc.left, tc.right, got, tc.same)
 			}
 		})
@@ -421,11 +463,11 @@ func TestDigestIgnoresTrailingWhitespaceAndBlankLines(t *testing.T) {
 func TestDigestIsASha256OfTheNormalizedOutput(t *testing.T) {
 	const empty = "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 	for _, in := range []string{"", "\n", "  \n\t\n"} {
-		if got := Digest(in); got != empty {
+		if got := digest(t, in, ""); got != empty {
 			t.Fatalf("Digest(%q) = %q, want the sha256 of no bytes: %q", in, got, empty)
 		}
 	}
-	if got, again := Digest("alpha\n"), Digest("alpha\n"); got != again {
+	if got, again := digest(t, "alpha\n", ""), digest(t, "alpha\n", ""); got != again {
 		t.Fatalf("Digest is not stable: %q then %q", got, again)
 	}
 }
@@ -441,11 +483,11 @@ func TestAdmitStripsASingleWrappingSpan(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.cell, func(t *testing.T) {
-			fresh := Digest("out\n")
+			fresh := digest(t, "out\n", "")
 			got, calls := admit(t, []plan.LedgerRow{row("E1", tc.cell, fresh, "observado")}, Options{Execute: true}, "out\n", nil)
 			assertRows(t, got, []want{{id: "E1", verdict: VerdictAdmitted, command: tc.want, digest: fresh, lines: 1}})
-			if len(calls) != 1 || calls[0].command != tc.want {
-				t.Fatalf("runner saw %v, want the stripped command %q", calls, tc.want)
+			if len(calls) != 2 || calls[0].command != tc.want || calls[1] != calls[0] {
+				t.Fatalf("runner saw %v, want the stripped command %q run twice identically", calls, tc.want)
 			}
 		})
 	}
@@ -614,14 +656,106 @@ func TestAdmitReadsRowsThePlanLedgerParsed(t *testing.T) {
 	doc := "## Evidence ledger\n\n" +
 		"| Id | Claim | Executed | Admit | Inputs and parameters | Observed | Digest | Mutation or negative control → result | Reproduction | Label (`observado` / `razonado`, literal) |\n" +
 		"|---|---|---|---|---|---|---|---|---|---|\n" +
-		"| E1 | the plan package passes | prose | `go test ./internal/plan` | none | ok | " + Digest(output) + " | reverted → red | rerun it | observado |\n"
+		"| E1 | the plan package passes | prose | `go test ./internal/plan` | none | ok | " + digest(t, output, "") + " | reverted → red | rerun it | observado |\n"
 	rows := plan.Ledger(doc)
 	if len(rows) != 1 {
 		t.Fatalf("ledger = %#v, want the one row", rows)
 	}
 	got, calls := admit(t, rows, Options{Execute: true, Dir: t.TempDir()}, output, nil)
-	assertRows(t, got, []want{{id: "E1", verdict: VerdictAdmitted, command: "go test ./internal/plan", digest: Digest(output), lines: 1}})
-	if len(calls) != 1 || calls[0].command != "go test ./internal/plan" {
-		t.Fatalf("runner saw %v, want the admit cell with its one wrapping span stripped", calls)
+	assertRows(t, got, []want{{id: "E1", verdict: VerdictAdmitted, command: "go test ./internal/plan", digest: digest(t, output, ""), lines: 1}})
+	// Two calls, not one: the second run is the stability probe, and it is handed the same command in the
+	// same directory as the first, so the two observations are comparable.
+	if len(calls) != 2 || calls[0].command != "go test ./internal/plan" || calls[1] != calls[0] {
+		t.Fatalf("runner saw %v, want the admit cell with its one wrapping span stripped, run twice", calls)
+	}
+}
+
+// admitRuns drives the admission with a runner that returns each output in turn, so a case can decide
+// what the second run sees. No process runs here either.
+func admitRuns(t *testing.T, rows []plan.LedgerRow, opts Options, outputs []string, err error) ([]RowResult, []call) {
+	t.Helper()
+	var calls []call
+	return Admit(rows, opts, Deps{Run: fakeRuns(outputs, err, &calls)}), calls
+}
+
+// The defect this reproduces was measured, not imagined: `go test ./internal/plan -count=1` was run four
+// times and produced four digests, and the only byte that moved was the elapsed time. A row pinned from
+// any of those runs failed against the next one, so a pin over a moving output is not a pin at all.
+func TestAdmitRefusesOutputThatChangesBetweenTwoRuns(t *testing.T) {
+	rows := []plan.LedgerRow{{ID: "E1", Admit: "go test ./internal/plan", Label: "observado"}}
+	got, calls := admitRuns(t, rows, Options{Execute: true}, []string{"ok\t0.056s\n", "ok\t0.059s\n"}, nil)
+	assertRows(t, got, []want{{id: "E1", verdict: VerdictRefused, reason: "unstable-output",
+		command: "go test ./internal/plan",
+		detail:  []string{"sha256:", "Normalize", "deterministic"}}})
+	if len(calls) != 2 {
+		t.Fatalf("runner saw %d calls, want the two the probe owes", len(calls))
+	}
+}
+
+// A stable row is admitted, and the runner is handed the same command in the same directory both times:
+// the second run is only a probe if it is the same run.
+func TestAdmitAdmitsAStableRowAndRunsItTwice(t *testing.T) {
+	rows := []plan.LedgerRow{{ID: "E1", Admit: "printf one", Digest: digest(t, "one\n", ""), Label: "observado"}}
+	got, calls := admitRuns(t, rows, Options{Execute: true, Dir: "/w"}, []string{"one\n"}, nil)
+	assertRows(t, got, []want{{id: "E1", verdict: VerdictAdmitted, command: "printf one", digest: digest(t, "one\n", ""), lines: 1}})
+	if len(calls) != 2 || calls[0] != calls[1] {
+		t.Fatalf("runner saw %v, want one command run twice identically", calls)
+	}
+	if calls[0].dir != "/w" || calls[0].command != "printf one" {
+		t.Fatalf("runner saw %v, want the row's command in the configured directory", calls)
+	}
+}
+
+// The whole point of the Normalize column: a row that cannot hold still becomes pinnable once the part
+// that moves is declared, and a third run whose duration differs again lands on the same pin.
+func TestAdmitAdmitsAVolatileRowOnceNormalizeTamesIt(t *testing.T) {
+	const duration = `[0-9]+\.[0-9]+s`
+	rows := []plan.LedgerRow{{ID: "E1", Admit: "go test ./internal/plan", Normalize: duration, Label: "observado"}}
+	got, _ := admitRuns(t, rows, Options{Execute: true, Record: []string{"E1"}}, []string{"ok\t0.056s\n", "ok\t0.059s\n"}, nil)
+	assertRows(t, got, []want{{id: "E1", verdict: VerdictAdmitted, command: "go test ./internal/plan",
+		digest: digest(t, "ok\t0.056s\n", duration), lines: 1}})
+
+	rows[0].Digest = digest(t, "ok\t0.056s\n", duration)
+	got, _ = admitRuns(t, rows, Options{Execute: true}, []string{"ok\t9.999s\n", "ok\t1.234s\n"}, nil)
+	assertRows(t, got, []want{{id: "E1", verdict: VerdictAdmitted, command: "go test ./internal/plan",
+		digest: digest(t, "ok\t9.999s\n", duration), lines: 1}})
+}
+
+// An expression that does not compile is a defect in the row, so it is reported before the row's command
+// is ever spawned rather than after a run has been spent discovering it.
+func TestAdmitRefusesARowWhoseNormalizeDoesNotCompile(t *testing.T) {
+	rows := []plan.LedgerRow{{ID: "E1", Admit: "printf one", Normalize: "[", Label: "observado"}}
+	got, calls := admitRuns(t, rows, Options{Execute: true}, []string{"one\n"}, nil)
+	assertRows(t, got, []want{{id: "E1", verdict: VerdictRefused, reason: "normalize-invalid", detail: []string{"["}}})
+	assertNoRun(t, calls)
+}
+
+// Recording must not turn a moving output into a pin, or the next honest run would be refused by the
+// tool's own mistake.
+func TestRecordDoesNotPinAnUnstableRow(t *testing.T) {
+	rows := []plan.LedgerRow{{ID: "E1", Admit: "printf one", Label: "observado"}}
+	got, _ := admitRuns(t, rows, Options{Execute: true, Record: []string{"E1"}}, []string{"one\n", "two\n"}, nil)
+	assertRows(t, got, []want{{id: "E1", verdict: VerdictRefused, reason: "unstable-output",
+		command: "printf one", detail: []string{"Normalize"}}})
+}
+
+// A digest over a rewritten output is a different digest from the raw one: the expression has to change
+// what is hashed, or the column is decoration.
+func TestDigestRewritesEveryMatchBeforeHashing(t *testing.T) {
+	const duration = `[0-9]+\.[0-9]+s`
+	if digest(t, "ok\t0.056s\n", duration) != digest(t, "ok\t9.999s\n", duration) {
+		t.Fatal("a duration-normalized digest must not move when only the duration moved")
+	}
+	if digest(t, "ok\t0.056s\n", duration) == digest(t, "ok\t0.056s\n", "") {
+		t.Fatal("a normalized digest must differ from the raw one, or the expression did nothing")
+	}
+	if digest(t, "a1b", "[0-9]") != digest(t, "aXb", "") {
+		t.Fatal("every match must become a single X")
+	}
+}
+
+func TestDigestRefusesAnExpressionThatDoesNotCompile(t *testing.T) {
+	if _, err := Digest("x", "["); err == nil {
+		t.Fatal("an expression that does not compile must be an error, not a silent pass")
 	}
 }

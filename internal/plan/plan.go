@@ -138,6 +138,7 @@ type LedgerRow struct {
 	Inputs       string
 	Observed     string
 	Digest       string
+	Normalize    string
 	Mutation     string
 	Reproduction string
 	Label        string
@@ -155,10 +156,10 @@ func Ledger(doc string) []LedgerRow {
 		return nil
 	}
 	// Column names are matched by substring, so each name below is the whole word the header cell
-	// carries and shares it with no other column: `admit` never resolves to `Executed` and `digest`
-	// never resolves to `Observed` or to the mutation column.
+	// carries and shares it with no other column: `admit` never resolves to `Executed`, `digest` never
+	// resolves to `Observed` or to the mutation column, and `normalize` resolves to nothing else.
 	index := map[string]int{}
-	for _, name := range []string{"claim", "executed", "admit", "inputs", "observed", "digest", "mutation", "reproduction"} {
+	for _, name := range []string{"claim", "executed", "admit", "inputs", "observed", "digest", "normalize", "mutation", "reproduction"} {
 		index[name] = columnIndex(header, name)
 	}
 	ledger := make([]LedgerRow, 0, len(rows))
@@ -174,6 +175,7 @@ func Ledger(doc string) []LedgerRow {
 			{"inputs", &r.Inputs},
 			{"observed", &r.Observed},
 			{"digest", &r.Digest},
+			{"normalize", &r.Normalize},
 			{"mutation", &r.Mutation},
 			{"reproduction", &r.Reproduction},
 		} {

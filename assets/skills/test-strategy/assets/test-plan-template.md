@@ -76,14 +76,21 @@ Statuses: open · confirmed · fixed · rejected · wontfix.
 One row per `observado` conclusion (`references/evidence.md`). `razonado` items go under
 "Hypotheses" below, never here.
 
-| Id | Claim | Executed | Admit | Inputs and parameters | Observed | Digest | Mutation or negative control → result | Reproduction | Label (`observado` / `razonado`, literal) |
-|---|---|---|---|---|---|---|---|---|---|
+| Id | Claim | Executed | Admit | Inputs and parameters | Observed | Digest | Normalize | Mutation or negative control → result | Reproduction | Label (`observado` / `razonado`, literal) |
+|---|---|---|---|---|---|---|---|---|---|---|
 
 `Admit` holds ONE bare shell command, with no backticks and no placeholders, because `Executed` is
-prose a human reads and `Admit` is the command the binary runs. `Digest` holds the `sha256:` digest of
-the normalized output; `plan admit` prints the digest it observed and writes nothing, so this cell is
-filled by copying what it printed. `plan check` requires neither column; `plan admit` refuses a row
-whose `Admit` is absent or whose `Digest` is unpinned.
+prose a human reads and `Admit` is the command the binary runs. `Digest` holds the `sha256:` digest of the
+canonical output, written by `rdd-plus plan admit --execute --record <id>` rather than by hand.
+
+A pin only means something over output that holds still, so `--execute` runs each admitted command twice:
+the second run is the probe, and a row whose two observations disagree is refused as unstable instead of
+pinned. `Normalize` is the escape hatch for the part of an output that legitimately moves, such as an
+elapsed time: it holds a Go regular expression whose every match becomes `X` before hashing. Leave it empty
+the first time and fill it only when the probe names what moves, keeping it as narrow as that part — a
+pattern broad enough to swallow the output turns the pin into decoration. `plan check` requires none of
+these columns; `plan admit` refuses a row whose `Admit` is absent, whose `Digest` is unpinned, or whose
+output does not hold still.
 
 ### Hypotheses (razonado)
 
