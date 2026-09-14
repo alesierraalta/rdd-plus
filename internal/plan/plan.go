@@ -4,6 +4,7 @@
 package plan
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -139,6 +140,7 @@ type LedgerRow struct {
 	Observed     string
 	Digest       string
 	Normalize    string
+	Mode         string
 	Mutation     string
 	Reproduction string
 	Label        string
@@ -159,7 +161,7 @@ func Ledger(doc string) []LedgerRow {
 	// carries and shares it with no other column: `admit` never resolves to `Executed`, `digest` never
 	// resolves to `Observed` or to the mutation column, and `normalize` resolves to nothing else.
 	index := map[string]int{}
-	for _, name := range []string{"claim", "executed", "admit", "inputs", "observed", "digest", "normalize", "mutation", "reproduction"} {
+	for _, name := range []string{"claim", "executed", "admit", "inputs", "observed", "digest", "normalize", "mode", "mutation", "reproduction"} {
 		index[name] = columnIndex(header, name)
 	}
 	ledger := make([]LedgerRow, 0, len(rows))
@@ -176,6 +178,7 @@ func Ledger(doc string) []LedgerRow {
 			{"observed", &r.Observed},
 			{"digest", &r.Digest},
 			{"normalize", &r.Normalize},
+			{"mode", &r.Mode},
 			{"mutation", &r.Mutation},
 			{"reproduction", &r.Reproduction},
 		} {
@@ -190,20 +193,46 @@ func Ledger(doc string) []LedgerRow {
 // recorded cell is always comparable to a fresh observation and a typo can never be pinned.
 var digestRe = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
-// RecordDigest returns doc with the named ledger row's Digest cell replaced by digest, every other
-// byte of the document unchanged. It is the one writer in this package: Check, Ledger and Gaps only
-// read, so this is where a wrong splice could corrupt a plan.
-//
-// The ledger is located exactly where Check and Ledger locate it, and the Digest column is resolved by
-// the same substring match Ledger resolves it with, so the writer and the readers can never disagree
-// about which column is which. The row is found by its first cell and the cell is spliced by byte
-// offset: a row may carry a backslash-escaped pipe in any cell, so the cell is cut where split cuts it
-// rather than by re-rendering the row, which would rewrite escapes and spacing nobody asked to touch.
-// Recording the digest a cell already holds is a no-op, so a rerun rewrites nothing.
+// modeRe is the only shape a recorded Mode may take. The mode is part of what a pin means because the same
+// command digests differently in a container than on the host, so a row that pins a digest without pinning
+// the mode it was taken in would fail its next check with a digest mismatch that says nothing about why.
+var modeRe = regexp.MustCompile(`^(host|sandbox)$`)
+
+// ErrNoColumn reports that the ledger's header does not name the column a writer was asked to fill. A caller
+// branches on it instead of reading the message when it knows the column is optional: an empty Mode cell
+// already means the host, so a host recording into a plan written before that column existed is still true.
+var ErrNoColumn = errors.New("the Evidence ledger header names no such column")
+
+// RecordDigest returns doc with the named ledger row's Digest cell replaced by digest, every other byte of
+// the document unchanged. It is the one writer in this package: Check, Ledger and Gaps only read, so this is
+// where a wrong splice could corrupt a plan.
 func RecordDigest(doc, id, digest string) (string, error) {
 	if !digestRe.MatchString(digest) {
 		return "", fmt.Errorf("digest %q is not a sha256 digest: a Digest cell carries sha256:<64 lowercase hex>, the form a fresh observation takes", digest)
 	}
+	return recordCell(doc, id, "digest", "Digest", digest)
+}
+
+// RecordMode returns doc with the named ledger row's Mode cell replaced by mode, every other byte of the
+// document unchanged. Recording a pin records both cells: the digest says what was observed and the mode
+// says where, and a row that carries one without the other cannot be checked honestly in either mode.
+func RecordMode(doc, id, mode string) (string, error) {
+	if !modeRe.MatchString(mode) {
+		return "", fmt.Errorf("mode %q is not an execution mode: a Mode cell carries host or sandbox, the two places a row's command can be observed", mode)
+	}
+	return recordCell(doc, id, "mode", "Mode", mode)
+}
+
+// recordCell returns doc with one named column of one ledger row replaced by value, every other byte of the
+// document unchanged.
+//
+// The ledger is located exactly where Check and Ledger locate it, and the column is resolved by the same
+// substring match Ledger resolves it with, so the writer and the readers can never disagree about which
+// column is which. The row is found by its first cell and the cell is spliced by byte offset: a row may
+// carry a backslash-escaped pipe in any cell, so the cell is cut where split cuts it rather than by
+// re-rendering the row, which would rewrite escapes and spacing nobody asked to touch. Writing the value a
+// cell already holds is a no-op, so a rerun rewrites nothing.
+func recordCell(doc, id, column, label, value string) (string, error) {
 	start, end, ok := sectionBounds(doc, "Evidence ledger")
 	if !ok {
 		return "", fmt.Errorf("the document has no Evidence ledger section, so there is no row %s to record", id)
@@ -213,9 +242,9 @@ func RecordDigest(doc, id, digest string) (string, error) {
 	if header == nil {
 		return "", fmt.Errorf("the Evidence ledger section holds no table, so there is no row %s to record", id)
 	}
-	iDigest := columnIndex(header, "digest")
-	if iDigest < 0 {
-		return "", fmt.Errorf("the Evidence ledger header names no Digest column, so row %s has nowhere to record %s", id, digest)
+	iColumn := columnIndex(header, column)
+	if iColumn < 0 {
+		return "", fmt.Errorf("the Evidence ledger header names no %s column, so row %s has nowhere to record %s: %w", label, id, value, ErrNoColumn)
 	}
 
 	// The section's own lines are walked the way table walks them, so the row a reader sees is the row
@@ -245,26 +274,26 @@ func RecordDigest(doc, id, digest string) (string, error) {
 			lineStart += len(line) + 1
 			continue
 		}
-		cs, ce, ok := cellSpan(line, iDigest)
+		cs, ce, ok := cellSpan(line, iColumn)
 		if !ok {
-			// cellSpan cuts the cells split cuts, so the Digest column has no cell exactly when the row
-			// is shorter than it: one refusal, not two spellings of the same fact.
-			return "", fmt.Errorf("evidence %s has %d cells, so the Digest column (%d) has no cell in that row; restore it before recording", id, len(cells), iDigest)
+			// cellSpan cuts the cells split cuts, so the column has no cell exactly when the row is shorter
+			// than it: one refusal, not two spellings of the same fact.
+			return "", fmt.Errorf("evidence %s has %d cells, so the %s column (%d) has no cell in that row; restore it before recording", id, len(cells), label, iColumn)
 		}
 		// Replace the cell's own bytes and nothing else: a cell that holds a value keeps the spacing its
-		// author wrote around it, so a rerun with the same digest is byte-identical. A cell that holds no
-		// value has no spacing around a value to keep, so the digest is framed by one space and the row
-		// still reads as a table row instead of colliding with the next pipe.
+		// author wrote around it, so a rerun with the same value is byte-identical. A cell that holds no
+		// value has no spacing around a value to keep, so the value is framed by one space and the row still
+		// reads as a table row instead of colliding with the next pipe.
 		raw := line[cs:ce]
 		content := strings.TrimSpace(raw)
 		if content == "" {
 			if raw == "" {
-				return doc[:lineStart+cs] + digest + doc[lineStart+ce:], nil
+				return doc[:lineStart+cs] + value + doc[lineStart+ce:], nil
 			}
-			return doc[:lineStart+cs] + " " + digest + " " + doc[lineStart+ce:], nil
+			return doc[:lineStart+cs] + " " + value + " " + doc[lineStart+ce:], nil
 		}
 		first := lineStart + cs + strings.Index(raw, content)
-		return doc[:first] + digest + doc[first+len(content):], nil
+		return doc[:first] + value + doc[first+len(content):], nil
 	}
 	return "", fmt.Errorf("evidence %s is not a row in the Evidence ledger, so the plan has nothing to record against", id)
 }

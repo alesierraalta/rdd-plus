@@ -71,8 +71,8 @@ func TestCheckAcceptsACompliantPlan(t *testing.T) {
 		"| Id | Finding (path:line, one line) | Severity (consequence class) | Data safe? | Evidence id | Pinning test (suite path :: test name) | Status | Verdict by / date | Reason | Cited-files fingerprint at verdict |\n|---|---|---|---|---|---|---|---|---|---|\n",
 		"| F1 | `src/a.js:5` drops a quoted comma | data loss | yes | E1 | tests/a.test.js :: keeps a quoted comma | fixed | me / 2026-09-10 | - | abc123 |\n")
 	plan = replaceFixture(t, plan, "the Evidence ledger header",
-		"| Id | Claim | Executed | Admit | Inputs and parameters | Observed | Digest | Normalize | Mutation or negative control → result | Reproduction | Label (`observado` / `razonado`, literal) |\n|---|---|---|---|---|---|---|---|---|---|---|\n",
-		"| E1 | it drops the comma | `node --test` | node --test | `a,\"b,c\"` | 3 fields | sha256:7eada7a897497315d39d2541f5058a9631e80828245781b3c9c96205d9d759ed | | reverted → red | same input | observado |\n")
+		"| Id | Claim | Executed | Admit | Inputs and parameters | Observed | Digest | Normalize | Mode | Mutation or negative control → result | Reproduction | Label (`observado` / `razonado`, literal) |\n|---|---|---|---|---|---|---|---|---|---|---|---|\n",
+		"| E1 | it drops the comma | `node --test` | node --test | `a,\"b,c\"` | 3 fields | sha256:7eada7a897497315d39d2541f5058a9631e80828245781b3c9c96205d9d759ed | | | reverted → red | same input | observado |\n")
 	if plan == string(body) {
 		t.Fatal("the fixture replaced nothing, so this test would read the untouched template as a compliant plan")
 	}
@@ -747,5 +747,39 @@ func TestLedgerResolvesTheNormalizeColumnByName(t *testing.T) {
 	}
 	if !reported {
 		t.Fatalf("Check(%s) = %v, want the lost cell reported against the ledger", short, problems)
+	}
+}
+
+// The Mode column is resolved like the others, and recording a mode writes that one cell and nothing else:
+// the cell keeps the spacing its author wrote, and a rerun with the same mode is byte-identical.
+func TestLedgerResolvesTheModeColumnAndRecordModeWritesIt(t *testing.T) {
+	head := "## Evidence ledger\n\n" +
+		"| Id | Claim | Executed | Admit | Inputs and parameters | Observed | Digest | Normalize | Mode | Mutation or negative control → result | Reproduction | Label (`observado` / `razonado`, literal) |\n" +
+		"|---|---|---|---|---|---|---|---|---|---|---|---|\n"
+	doc := head + "| E1 | c | prose | go test ./... | i | o | sha256:aa | | sandbox | m | r | observado |\n"
+	rows := Ledger(doc)
+	if len(rows) != 1 || rows[0].Mode != "sandbox" || rows[0].Digest != "sha256:aa" || rows[0].Mutation != "m" {
+		t.Fatalf("ledger = %#v, want the Mode cell read as its own column", rows)
+	}
+	if rows[0].Cells != 12 || rows[0].HeaderCells != 12 {
+		t.Fatalf("row has %d cells against a %d-cell header, want 12 and 12", rows[0].Cells, rows[0].HeaderCells)
+	}
+
+	updated, err := RecordMode(doc, "E1", "host")
+	if err != nil {
+		t.Fatalf("RecordMode failed: %v", err)
+	}
+	if got := Ledger(updated)[0].Mode; got != "host" {
+		t.Fatalf("Mode after recording = %q, want host", got)
+	}
+	if !strings.Contains(updated, "| host | m | r | observado |") {
+		t.Fatalf("recorded document = %q, want only the Mode cell to have moved", updated)
+	}
+	if again, err := RecordMode(updated, "E1", "host"); err != nil || again != updated {
+		t.Fatalf("RecordMode is not idempotent: %v, %q", err, again)
+	}
+
+	if _, err := RecordMode(doc, "E1", "container"); err == nil || !strings.Contains(err.Error(), "is not an execution mode") {
+		t.Fatalf("RecordMode accepted a mode that is neither host nor sandbox: %v", err)
 	}
 }

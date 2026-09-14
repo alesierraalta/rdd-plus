@@ -759,3 +759,56 @@ func TestDigestRefusesAnExpressionThatDoesNotCompile(t *testing.T) {
 		t.Fatal("an expression that does not compile must be an error, not a silent pass")
 	}
 }
+
+// The mode a pin was taken in is part of the pin, because the same command digests differently in a container
+// than on this machine. A row pinned in one mode and checked in the other is refused for that reason, rather
+// than for a digest mismatch that would say nothing about why the two disagree.
+func TestAdmitRefusesARowPinnedInAnotherMode(t *testing.T) {
+	pinned := plan.LedgerRow{ID: "E1", Admit: "printf one", Digest: digest(t, "one\n", ""), Mode: ModeHost, Label: "observado"}
+	got, calls := admitRuns(t, []plan.LedgerRow{pinned}, Options{Execute: true, Mode: ModeSandbox}, []string{"one\n"}, nil)
+	assertRows(t, got, []want{{id: "E1", verdict: VerdictRefused, reason: ReasonModeMismatch,
+		detail: []string{"host", "sandbox"}}})
+	assertNoRun(t, calls)
+
+	pinned.Mode = ModeSandbox
+	got, calls = admitRuns(t, []plan.LedgerRow{pinned}, Options{Execute: true, Mode: ModeHost}, []string{"one\n"}, nil)
+	assertRows(t, got, []want{{id: "E1", verdict: VerdictRefused, reason: ReasonModeMismatch,
+		detail: []string{"sandbox", "host"}}})
+	assertNoRun(t, calls)
+
+	// An empty cell means the host, which is where every pin taken before the mode existed was taken, so a row
+	// written before the column still runs in the default mode.
+	old := plan.LedgerRow{ID: "E1", Admit: "printf one", Digest: digest(t, "one\n", ""), Label: "observado"}
+	got, _ = admitRuns(t, []plan.LedgerRow{old}, Options{Execute: true}, []string{"one\n"}, nil)
+	assertRows(t, got, []want{{id: "E1", verdict: VerdictAdmitted, command: "printf one",
+		digest: digest(t, "one\n", ""), lines: 1}})
+
+	// Recording is how a row's mode gets set, so it is exempt from the comparison it would otherwise fail.
+	got, calls = admitRuns(t, []plan.LedgerRow{old}, Options{Execute: true, Mode: ModeSandbox, Record: []string{"E1"}}, []string{"one\n"}, nil)
+	assertRows(t, got, []want{{id: "E1", verdict: VerdictAdmitted, command: "printf one",
+		digest: digest(t, "one\n", ""), lines: 1}})
+	if len(calls) != 2 {
+		t.Fatalf("runner saw %d calls, want the two the probe owes", len(calls))
+	}
+}
+
+// A runner that knows the failure is about its own environment rather than about the command says so with a
+// Refusal, and that reason is reported as it stands: a sandbox that refused a write is not a failing test, and
+// calling it one would send the reader looking in the wrong place.
+func TestAdmitReportsWhatTheRunnerRefused(t *testing.T) {
+	for _, reason := range []string{ReasonSandboxReadOnly, ReasonMisconfigured, ReasonNoNetwork} {
+		t.Run(reason, func(t *testing.T) {
+			calls := 0
+			rows := []plan.LedgerRow{{ID: "E1", Admit: "printf one", Digest: digest(t, "one\n", ""), Label: "observado"}}
+			got := Admit(rows, Options{Execute: true}, Deps{Run: func(context.Context, string, string) (string, error) {
+				calls++
+				return "the container said no", Refusal{Reason: reason, Detail: "the sandbox refused this row"}
+			}})
+			assertRows(t, got, []want{{id: "E1", verdict: VerdictRefused, reason: reason, command: "printf one",
+				detail: []string{"the sandbox refused this row"}}})
+			if calls != 1 {
+				t.Fatalf("runner saw %d calls, want the one whose refusal ends the row", calls)
+			}
+		})
+	}
+}

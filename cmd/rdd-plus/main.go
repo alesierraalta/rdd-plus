@@ -59,7 +59,7 @@ plan init [--path docs/testing/test-plan.md] [--force]
 plan check [--path docs/testing/test-plan.md]
 plan gaps  [--path docs/testing/test-plan.md]
            (swept = status done, fixed or closed; n/a, na, none and skipped leave the denominator)
-plan admit [--path docs/testing/test-plan.md] [--execute] [--timeout 120s] [--only <ids>] [--record <ids>]
+plan admit [--path docs/testing/test-plan.md] [--execute] [--sandbox] [--sandbox-image <image>] [--timeout 120s] [--only <ids>] [--record <ids>]
            (dry run by default: --execute runs each admitted row's one command through sh -c;
             --record writes the freshly observed digest back into the named rows and requires
             --execute, because a dry run makes no observation to pin; exit 1 when any row is
@@ -248,12 +248,14 @@ func runPlan(args []string) int {
 	timeout := fs.Duration("timeout", 120*time.Second, "bound one command; 0 leaves it unbounded (admit only)")
 	only := fs.String("only", "", "comma-separated evidence ids to admit; empty means every row (admit only)")
 	record := fs.String("record", "", "comma-separated evidence ids whose freshly observed digest is written into the plan (admit only; requires --execute)")
+	sandbox := fs.Bool("sandbox", false, "observe each command inside a container instead of on this machine (admit only; requires --execute)")
+	sandboxImage := fs.String("sandbox-image", sandboxImageDefault, "image the sandbox runs in (admit only; see --sandbox)")
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
 	}
 	switch args[0] {
 	case "admit":
-		return runPlanAdmit(*path, *execute, *timeout, *only, *record)
+		return runPlanAdmit(*path, *execute, *timeout, *only, *record, *sandbox, *sandboxImage)
 	case "gaps":
 		g, err := plan.GapsInFile(*path)
 		if err != nil {
@@ -300,11 +302,19 @@ func runPlan(args []string) int {
 // usage error. --record without --execute is a usage error because recording pins an observation this
 // run made: a dry run makes none, and a pinned value nobody observed is the failure this flag exists
 // to prevent.
-func runPlanAdmit(path string, execute bool, timeout time.Duration, only, record string) int {
+func runPlanAdmit(path string, execute bool, timeout time.Duration, only, record string, sandbox bool, sandboxImage string) int {
 	recordIDs := admitIDs(record)
 	if len(recordIDs) > 0 && !execute {
 		fmt.Fprintln(os.Stderr, "plan admit: --record requires --execute: recording pins the observation this run makes, and a dry run makes none")
 		return 2
+	}
+	if sandbox && !execute {
+		fmt.Fprintln(os.Stderr, "plan admit: --sandbox requires --execute: a dry run executes nothing, so there is nothing to confine")
+		return 2
+	}
+	mode := evidence.ModeHost
+	if sandbox {
+		mode = evidence.ModeSandbox
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -323,13 +333,18 @@ func runPlanAdmit(path string, execute bool, timeout time.Duration, only, record
 			return ledgerIDError(flag.name, id, ledgerRows)
 		}
 	}
+	runner := runShell
+	if sandbox {
+		runner = runShellSandboxed(sandboxImage)
+	}
 	results := evidence.Admit(ledgerRows, evidence.Options{
 		Execute: execute,
 		Dir:     feedback.RepoRoot("."),
 		Timeout: timeout,
+		Mode:    mode,
 		Only:    admitIDs(only),
 		Record:  recordIDs,
-	}, evidence.Deps{Run: runShell})
+	}, evidence.Deps{Run: runner})
 
 	admitted, wouldRun, refused := 0, 0, 0
 	for _, r := range results {
@@ -366,9 +381,22 @@ func runPlanAdmit(path string, execute bool, timeout time.Duration, only, record
 			fmt.Fprintln(os.Stderr, "plan admit:", err)
 			return 1
 		}
+		// The mode is recorded beside the digest, because a digest without the mode it was taken in is not
+		// checkable. A plan written before the Mode column existed cannot carry one; an empty cell there
+		// already means the host, so a host recording is still true and a sandbox recording is refused rather
+		// than written as a claim the plan cannot hold.
+		withMode, err := plan.RecordMode(updated, r.ID, mode)
+		if err != nil {
+			if mode != evidence.ModeHost || !errors.Is(err, plan.ErrNoColumn) {
+				fmt.Fprintln(os.Stderr, "plan admit:", err)
+				return 1
+			}
+		} else {
+			updated = withMode
+		}
 		doc = updated
 		recorded++
-		recordedLines = append(recordedLines, fmt.Sprintf("%s  RECORDED  %s\n", r.ID, r.Digest))
+		recordedLines = append(recordedLines, fmt.Sprintf("%s  RECORDED  %s  (%s mode)\n", r.ID, r.Digest, mode))
 	}
 	if recorded > 0 {
 		info, err := os.Stat(path)
@@ -660,4 +688,96 @@ func runBenchHistory(args []string) int {
 	}
 	fmt.Print(string(data))
 	return 0
+}
+
+// sandboxImageDefault is the smallest official Go image that satisfies this module's `go 1.26` directive. It
+// is a default and not a decision: the image a row needs is the image its command needs, so --sandbox-image
+// exists, and the default only spares the common case a flag.
+const sandboxImageDefault = "golang:1.26-alpine"
+
+// runShellSandboxed runs one command inside a container that cannot touch the host tree. It is the only
+// confinement this tool offers, and what it buys is narrow: the command is still arbitrary code, but a write
+// lands on a read-only mount instead of the working tree, and the network is gone.
+//
+// The invocation was measured rather than guessed, and three of its parts are load-bearing:
+//   - `--tmpfs /tmp:exec`: Docker mounts a tmpfs noexec by default, and Go then dies with
+//     `fork/exec ...: permission denied`, which reads like a repository permission bug rather than a sandbox
+//     one.
+//   - a writable `GOCACHE`: the build cache is written on every run, and the image's own cache directory sits
+//     behind --read-only. `GOTMPDIR` was measured unnecessary.
+//   - `-v <dir>:/w:ro` with `-w /w`: the command needs the tree, and the tree is the thing that must not
+//     change.
+//
+// `--read-only` and `--network none` do not change whether a command passes; they are exactly the isolation
+// this mode claims, so they are asserted here rather than relied on to make anything work.
+func runShellSandboxed(image string) func(context.Context, string, string) (string, error) {
+	return func(ctx context.Context, dir, command string) (string, error) {
+		if !filepath.IsAbs(dir) {
+			return "", evidence.Refusal{
+				Reason: evidence.ReasonMisconfigured,
+				Detail: fmt.Sprintf("the sandbox mounts the working directory by absolute path, and %q is not one", dir),
+			}
+		}
+		cmd := exec.CommandContext(ctx, "docker",
+			"run", "--rm",
+			"--network", "none",
+			"--read-only",
+			"--tmpfs", "/tmp:exec",
+			"-v", dir+":/w:ro",
+			"-w", "/w",
+			"-e", "GOCACHE=/tmp/gocache",
+			image, "sh", "-c", command,
+		)
+		var buf bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &buf, &buf
+		err := cmd.Run()
+		output := buf.String()
+		if err == nil {
+			return output, nil
+		}
+		// The caller's deadline must stay recognisable to the admission, so it is returned as it is rather
+		// than wrapped in a refusal about the sandbox.
+		if ctx.Err() != nil {
+			return output, ctx.Err()
+		}
+		return output, sandboxRefusal(image, output, err)
+	}
+}
+
+// sandboxRefusal names why a sandboxed command produced no observation. Three of these are about the sandbox
+// and not about the row, and they are told apart by the text Docker and the container emit, because neither
+// reports a machine-readable code for them. That is a heuristic and it is declared as one: naming the common
+// failures is worth more than a generic command-failed that sends the reader to the row, as long as what the
+// reader is told is what was observed.
+//
+// One failure has no signal at all and is not invented here: a command that needs a service on this machine
+// fails inside the container with an empty stderr, which is indistinguishable from a test that simply failed.
+func sandboxRefusal(image, output string, err error) error {
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && exit.ExitCode() == 125 {
+		return evidence.Refusal{
+			Reason: evidence.ReasonMisconfigured,
+			Detail: fmt.Sprintf("the sandbox could not start a container: %v; docker run itself failed, so check that the daemon is reachable and that the image %q can be pulled (its own message is above)", err, image),
+		}
+	}
+	switch {
+	case strings.Contains(output, "Read-only file system"):
+		return evidence.Refusal{
+			Reason: evidence.ReasonSandboxReadOnly,
+			Detail: "the command tried to write inside the working tree, which the sandbox mounts read-only; a row that writes is not admissible in this mode, and the write did not reach this machine",
+		}
+	case strings.Contains(output, "fork/exec") && strings.Contains(output, "permission denied"):
+		return evidence.Refusal{
+			Reason: evidence.ReasonMisconfigured,
+			Detail: "the container could not execute the binary it built: this sandbox's own configuration mounts a tmpfs without exec, which is not a statement about the row",
+		}
+	case strings.Contains(output, "no such host"), strings.Contains(output, "bad address"),
+		strings.Contains(output, "network is unreachable"), strings.Contains(output, "dial tcp"),
+		strings.Contains(output, "connection refused"), strings.Contains(output, "Temporary failure in name resolution"):
+		return evidence.Refusal{
+			Reason: evidence.ReasonNoNetwork,
+			Detail: "the command needed the network, which the sandbox removes; a row that reaches out or dials a service is not admissible in this mode",
+		}
+	}
+	return err
 }

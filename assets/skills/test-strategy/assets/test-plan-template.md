@@ -76,8 +76,8 @@ Statuses: open · confirmed · fixed · rejected · wontfix.
 One row per `observado` conclusion (`references/evidence.md`). `razonado` items go under
 "Hypotheses" below, never here.
 
-| Id | Claim | Executed | Admit | Inputs and parameters | Observed | Digest | Normalize | Mutation or negative control → result | Reproduction | Label (`observado` / `razonado`, literal) |
-|---|---|---|---|---|---|---|---|---|---|---|
+| Id | Claim | Executed | Admit | Inputs and parameters | Observed | Digest | Normalize | Mode | Mutation or negative control → result | Reproduction | Label (`observado` / `razonado`, literal) |
+|---|---|---|---|---|---|---|---|---|---|---|---|
 
 `Admit` holds ONE bare shell command, with no backticks and no placeholders, because `Executed` is
 prose a human reads and `Admit` is the command the binary runs. `Digest` holds the `sha256:` digest of the
@@ -91,6 +91,14 @@ the first time and fill it only when the probe names what moves, keeping it as n
 pattern broad enough to swallow the output turns the pin into decoration. `plan check` requires none of
 these columns; `plan admit` refuses a row whose `Admit` is absent, whose `Digest` is unpinned, or whose
 output does not hold still.
+
+`Mode` says where the observation was taken, and a pin is only comparable inside the mode it was taken in,
+because the same command digests differently in a container than on this machine. An empty cell means `host`,
+which is where every pin taken before the column existed was taken. `--sandbox` runs each command in a
+container with the tree mounted read-only and no network, and a row that tries to write is refused instead
+of admitted. `--record` writes both cells, so recording is how a row's mode gets set; a row pinned in one mode
+and checked in the other is refused as a mode mismatch, rather than as a digest mismatch that would say
+nothing about why the digests disagree.
 
 ### Hypotheses (razonado)
 

@@ -27,6 +27,10 @@ type Options struct {
 	Dir string
 	// Timeout bounds one command. Zero leaves the command unbounded rather than inventing a deadline.
 	Timeout time.Duration
+	// Mode names where this run observes the command: "" and "host" mean this machine, "sandbox" means a
+	// container. It is compared against the mode the row pinned, because the same command digests
+	// differently in the two places and a pin that does not say where it was taken cannot be checked.
+	Mode string
 	// Only, when non-empty, admits only the rows carrying these ids. Every other row is left out of the
 	// result entirely, because a narrowed run must not report rows it was never asked about.
 	Only []string
@@ -71,7 +75,38 @@ const (
 	ReasonEmptyOutput       = "empty-output"
 	ReasonDigestMismatch    = "digest-mismatch"
 	ReasonDigestMissing     = "digest-missing"
+	ReasonModeMismatch      = "mode-mismatch"
+	ReasonSandboxReadOnly   = "sandbox-read-only"
+	ReasonMisconfigured     = "sandbox-misconfigured"
+	ReasonNoNetwork         = "network-unavailable"
 )
+
+// Refusal lets a runner say why a command could not run, when the answer is about the runner's own
+// environment rather than about the command: a sandbox that refused a write, a container that never
+// started, a network the mode disables. The reason code travels with the error so this package keeps owning
+// the machine surface while the runner decides what it actually knows.
+type Refusal struct {
+	Reason string
+	Detail string
+}
+
+func (r Refusal) Error() string { return r.Detail }
+
+// ModeHost and ModeSandbox name the two places a row's command can be observed. The mode is part of what a
+// pin means, because the same command digests differently in a container than on this machine.
+const (
+	ModeHost    = "host"
+	ModeSandbox = "sandbox"
+)
+
+// modeOf names the mode a run or a row is in. An empty cell means the host, which is where every pin taken
+// before the mode existed was taken, so an old row keeps the meaning it always had.
+func modeOf(mode string) string {
+	if mode == "" {
+		return ModeHost
+	}
+	return mode
+}
 
 // RowResult is one row's outcome: a machine-stable reason for a refusal and a human sentence for stderr.
 type RowResult struct {
@@ -210,6 +245,16 @@ func admitRow(row plan.LedgerRow, opts Options, deps Deps, record bool) RowResul
 			row.ID, row.Normalize, err))
 	}
 
+	// The mode a pin was taken in is part of what the pin means, because the same command digests differently
+	// in a container than on this machine. A row pinned in one mode and checked in the other would report a
+	// digest mismatch that says nothing about why, so the mismatch is named before anything is spawned.
+	// Recording is exempt, because recording is how a row's mode is set in the first place.
+	if !record && modeOf(row.Mode) != modeOf(opts.Mode) {
+		return refused(result, ReasonModeMismatch, fmt.Sprintf(
+			"evidence %s was pinned in %s mode but this run observes in %s mode: a pin is only comparable inside the mode it was taken in, so rerun with --record %s to pin this one, or in %s mode",
+			row.ID, modeOf(row.Mode), modeOf(opts.Mode), row.ID, modeOf(row.Mode)))
+	}
+
 	result.Command = command
 	if !opts.Execute {
 		result.Verdict = VerdictWouldRun
@@ -230,6 +275,13 @@ func admitRow(row plan.LedgerRow, opts Options, deps Deps, record bool) RowResul
 		return deps.Run(ctx, opts.Dir, command)
 	}
 	runFailure := func(err error, suffix string) RowResult {
+		// A runner that knows the failure is about its own environment rather than about the command says so
+		// with a Refusal, and its reason code is reported as it stands: a sandbox that refused a write is not
+		// a failing test, and calling it one would send the reader looking in the wrong place.
+		var refusal Refusal
+		if errors.As(err, &refusal) {
+			return refused(result, refusal.Reason, fmt.Sprintf("evidence %s did not run%s: %s", row.ID, suffix, refusal.Detail))
+		}
 		if errors.Is(err, context.DeadlineExceeded) {
 			return refused(result, ReasonTimeout, fmt.Sprintf(
 				"evidence %s hit the %s timeout%s: %v", row.ID, opts.Timeout, suffix, err))
