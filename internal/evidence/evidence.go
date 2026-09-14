@@ -265,9 +265,12 @@ func admitRow(row plan.LedgerRow, opts Options, deps Deps, record bool) RowResul
 
 	// The mode a pin was taken in is part of what the pin means, because the same command digests differently
 	// in a container than on this machine. A row pinned in one mode and checked in the other would report a
-	// digest mismatch that says nothing about why, so the mismatch is named before anything is spawned.
-	// Recording is exempt, because recording is how a row's mode is set in the first place.
-	if !record && modeOf(row.Mode) != modeOf(opts.Mode) {
+	// digest mismatch that says nothing about why, so the mismatch is named before anything is spawned. Only a
+	// row that carries a pin has a mode to compare: a row with no digest was never pinned anywhere, and telling
+	// it that it "was pinned in host mode" is a sentence about a pin nobody took, one that also preempts the
+	// checks that describe the row's real state. Recording is exempt, because recording is how a row's mode is
+	// set in the first place.
+	if !record && row.Digest != "" && modeOf(row.Mode) != modeOf(opts.Mode) {
 		return refused(result, ReasonModeMismatch, fmt.Sprintf(
 			"evidence %s was pinned in %s mode but this run observes in %s mode: a pin is only comparable inside the mode it was taken in, so rerun with --record %s to pin this one, or in %s mode",
 			row.ID, modeOf(row.Mode), modeOf(opts.Mode), row.ID, modeOf(row.Mode)))

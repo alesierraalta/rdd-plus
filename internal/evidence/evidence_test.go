@@ -790,6 +790,42 @@ func TestAdmitRefusesARowPinnedInAnotherMode(t *testing.T) {
 	if len(calls) != 2 {
 		t.Fatalf("runner saw %d calls, want the two the probe owes", len(calls))
 	}
+
+	// A pin taken before the Mode column existed is a host pin, so an empty cell still carries the mode it
+	// was taken in. The regression is that the empty cell keeps that meaning only for a row that carries a
+	// pin: this one does, so it is still refused in sandbox mode, before anything is spawned.
+	got, calls = admitRuns(t, []plan.LedgerRow{old}, Options{Execute: true, Mode: ModeSandbox}, []string{"one\n"}, nil)
+	assertRows(t, got, []want{{id: "E1", verdict: VerdictRefused, reason: ReasonModeMismatch,
+		detail: []string{"host", "sandbox"}}})
+	assertNoRun(t, calls)
+}
+
+// The mode a pin was taken in is part of what the pin means, so only a row that carries a pin has a mode to
+// compare. A row with no digest was never pinned anywhere, and telling it that it "was pinned in host mode"
+// describes a pin nobody took while preempting the refusal the row actually owes: it runs, and then learns
+// it has no pin, exactly as it does in host mode today. A declared mode is not a pin either.
+func TestAdmitDoesNotCallAnUnpinnedRowPinned(t *testing.T) {
+	t.Run("no mode cell and no digest", func(t *testing.T) {
+		unpinned := plan.LedgerRow{ID: "E1", Admit: "printf one", Label: "observado"}
+		got, calls := admitRuns(t, []plan.LedgerRow{unpinned}, Options{Execute: true, Mode: ModeSandbox}, []string{"one\n"}, nil)
+		assertRows(t, got, []want{{id: "E1", verdict: VerdictRefused, reason: ReasonDigestMissing,
+			command: "printf one", digest: digest(t, "one\n", ""), lines: 1,
+			detail: []string{"pins no digest", "--record E1", "sha256:"}}})
+		if len(calls) == 0 {
+			t.Fatalf("the runner was never reached, want the row to run before it learns it has no pin")
+		}
+	})
+
+	t.Run("a mode cell but still no digest", func(t *testing.T) {
+		declared := plan.LedgerRow{ID: "E1", Admit: "printf one", Mode: ModeSandbox, Label: "observado"}
+		got, calls := admitRuns(t, []plan.LedgerRow{declared}, Options{Execute: true}, []string{"one\n"}, nil)
+		assertRows(t, got, []want{{id: "E1", verdict: VerdictRefused, reason: ReasonDigestMissing,
+			command: "printf one", digest: digest(t, "one\n", ""), lines: 1,
+			detail: []string{"pins no digest", "--record E1", "sha256:"}}})
+		if len(calls) == 0 {
+			t.Fatalf("the runner was never reached, want the row to run before it learns it has no pin")
+		}
+	})
 }
 
 // A row that declares a mutation is claiming its own command is falsifiable, and that claim is refused rather

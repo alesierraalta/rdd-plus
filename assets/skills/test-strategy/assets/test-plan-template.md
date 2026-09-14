@@ -98,7 +98,8 @@ which is where every pin taken before the column existed was taken. `--sandbox` 
 container with the tree mounted read-only and no network, and a row that tries to write is refused instead
 of admitted. `--record` writes both cells, so recording is how a row's mode gets set; a row pinned in one mode
 and checked in the other is refused as a mode mismatch, rather than as a digest mismatch that would say
-nothing about why the digests disagree.
+nothing about why the digests disagree. Only a pin has a mode: a row that carries no digest is refused for the
+missing pin, not told it was pinned somewhere.
 
 `Mutate` is the machine half of a falsifiability claim: `<old> => <new> @ <path>:<line>`, one textual edit whose
 old text must occur exactly once in that file and on that line, naming a file inside the tree. It is a value and

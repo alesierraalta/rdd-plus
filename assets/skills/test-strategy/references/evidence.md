@@ -54,10 +54,11 @@ findings. This contract applies to every testing skill routed by `test-strategy`
 9. **A pin records where it was taken.** The optional `Mode` cell holds `host` or `sandbox`, and an empty
    cell means `host`. The same command digests differently in a container than on this machine, so a row
    pinned in one mode and checked in the other is refused as a mode mismatch rather than as a digest
-   mismatch that would say nothing about why. `--sandbox` observes each command in a container with the
-   tree mounted read-only and no network: a row that tries to write is refused, and the write never reaches
-   the machine. Recording writes the digest and the mode together, because one without the other is not a
-   checkable record.
+   mismatch that would say nothing about why. Only a row that carries a pin has a mode to compare: a row
+   with no digest was never pinned anywhere, so it is refused for the missing pin rather than told it was
+   pinned in one. `--sandbox` observes each command in a container with the tree mounted read-only and no
+   network: a row that tries to write is refused, and the write never reaches the machine. Recording writes
+   the digest and the mode together, because one without the other is not a checkable record.
 10. **A falsifiability claim is a value, not a sentence.** The optional `Mutate` cell holds
     `<old> => <new> @ <path>:<line>`: one textual edit, whose old text must occur exactly once in that file and
     on that line, and which names a file inside the tree. It is checked before anything runs, and each defect is
