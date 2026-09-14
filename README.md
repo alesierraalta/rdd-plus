@@ -31,6 +31,7 @@ directory and `--dry-run` to see the plan.
 | `rdd-plus gate` | The Stop hook. Reads the hook payload on stdin, decides, logs one line, and emits Stop feedback when a session changed production source without loading the adversarial testing discipline. Always exits 0. |
 | `rdd-plus sync` | Installs the embedded skills and wires the gate. Idempotent. |
 | `rdd-plus doctor` | Reports installed skills (and whether they drift from the embedded version), whether the hook is wired, and which optional tools are on PATH with what degrades without each. `--json` for machines. Exit 1 when git, a skill, or the hook is missing. |
+| `rdd-plus plan` | Writes the plan skeleton, checks the contract, names the breadth still owed, and records one Findings row from flags. `add-finding` writes that row only: it refuses a row the checker would reject and never writes an evidence row. |
 | `rdd-plus feedback` | Records one honest process report about the testing method itself, or reads the reports back. `--template` prints a fillable skeleton, `--file <path>` records it, `--summary` (the default) answers whether the method is earning its keep. |
 | `rdd-plus version` | Prints the version. |
 
@@ -94,6 +95,7 @@ template.
 ```
 rdd-plus plan init                # write the skeleton, tables and all; never overwrites silently
 rdd-plus plan check               # exit 1 and name every breach of the contract
+rdd-plus plan add-finding ...     # write one Findings row; refuses a row the checker would reject
 ```
 
 `check` reports a Findings section that is not a table, a finding that cites no `path:line`, a
