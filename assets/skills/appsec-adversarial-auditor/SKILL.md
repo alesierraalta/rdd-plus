@@ -3,7 +3,7 @@ name: appsec-adversarial-auditor
 description: "Trigger: security audit, appsec testing, vulnerability test, IDOR, BOLA, SSRF, SAST, DAST, fuzzing, OWASP, secrets leak. Audit code and run adversarial security probes."
 license: Apache-2.0
 metadata:
-  author: gentleman-programming
+  author: "alesierraalta"
   version: "1.0"
 ---
 

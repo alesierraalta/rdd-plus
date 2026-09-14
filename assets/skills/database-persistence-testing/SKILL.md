@@ -3,7 +3,7 @@ name: database-persistence-testing
 description: "Trigger: database testing, migration testing, schema migration, up down migration, zero-downtime, expand contract, database concurrency, deadlock test, isolation level, N+1 query budget, foreign key index audit. Test data persistence, migrations, and transactional invariants."
 license: Apache-2.0
 metadata:
-  author: gentleman-programming
+  author: "alesierraalta"
   version: "1.0"
 ---
 

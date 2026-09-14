@@ -3,7 +3,7 @@ name: no-excess-tests
 description: "Trigger: writing tests, adding a test file, test cleanup, 'too many tests', reviewing a test diff before push. Keep only behavioral tests; route local-only tests to gitignored testLocales/; cut low-value tests."
 license: Apache-2.0
 metadata:
-  author: gentleman-programming
+  author: "alesierraalta"
   version: "1.0"
 ---
 

@@ -3,7 +3,7 @@ name: runtime-reliability-testing
 description: "Trigger: runtime testing, load testing, chaos testing, stress test, fault injection, p95 latency, circuit breaker, k6, toxiproxy, schemathesis, smoke test. Prove running code under operational hostility."
 license: Apache-2.0
 metadata:
-  author: gentleman-programming
+  author: "alesierraalta"
   version: "1.0"
 ---
 

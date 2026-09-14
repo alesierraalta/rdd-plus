@@ -3,7 +3,7 @@ name: clean-architecture-audit
 description: "Trigger: clean architecture, architecture audit, layer conformance, mutation testing, cognitive complexity, duplicated logic, code health, AST linting. Enforce architectural boundaries and code maintainability."
 license: Apache-2.0
 metadata:
-  author: gentleman-programming
+  author: "alesierraalta"
   version: "1.0"
 ---
 
