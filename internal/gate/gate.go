@@ -80,6 +80,16 @@ type Result struct {
 	Reason string
 	Files  []string
 	Entry  *Entry
+	// Owed and Pending are the decision itself, structured: layers assigned and never invoked, and
+	// ranked targets still pending. The operator line reads them instead of counting phrases inside
+	// Reason — prose this package writes and is free to reword, which is how the line-anchored report
+	// silently turned three owed layers into "the plan owes nothing".
+	Owed    int
+	Pending int
+	// Unreadable and Unplanned complete the decision: a cut breadth table and a plan with no layer matrix
+	// both make Gaps.Any() true without raising Owed or Pending.
+	Unreadable int
+	Unplanned  bool
 }
 
 // IsProductionSource decides what the gate protects: source by extension, outside test,
@@ -337,6 +347,8 @@ func Decide(in Input, d Deps) Result {
 			if gaps, err := plan.GapsIn(body); err == nil {
 				res.Audit = true
 				entry.Audited = true
+				res.Owed, res.Pending = len(gaps.UnsweptLayers), len(gaps.PendingTargets)
+				res.Unreadable, res.Unplanned = len(gaps.InterruptedTables), gaps.NoLayerMatrix
 				if gaps.Any() {
 					res.Reason = BuildAuditReason(plan.DefaultPath, gaps.Report())
 				} else {

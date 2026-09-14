@@ -126,11 +126,22 @@ func Run(stdin io.Reader, stdout io.Writer, logPath string, now time.Time) (code
 	return 0
 }
 
-// auditLine is what the operator sees without the model saying anything.
+// auditLine is what the operator sees without the model saying anything. It renders the decision, not
+// the reason text: breadth is owed by layers, by ranked targets, or by both, and a run that swept every
+// layer it planned still owes if its ranked targets are pending.
 func auditLine(res Result) string {
-	n := strings.Count(res.Reason, "assigned and never invoked:")
-	if n == 0 {
+	switch {
+	case res.Owed > 0 && res.Pending > 0:
+		return fmt.Sprintf("rdd-plus: %d layer(s) assigned and never invoked, %d ranked target(s) still pending. Want feedback on this run?", res.Owed, res.Pending)
+	case res.Owed > 0:
+		return fmt.Sprintf("rdd-plus: %d layer(s) assigned and never invoked. Want feedback on this run?", res.Owed)
+	case res.Pending > 0:
+		return fmt.Sprintf("rdd-plus: %d ranked target(s) still pending. Want feedback on this run?", res.Pending)
+	case res.Unreadable > 0:
+		return fmt.Sprintf("rdd-plus: %d breadth table(s) could not be read to the end, so the rows under it were never counted. Want feedback on this run?", res.Unreadable)
+	case res.Unplanned:
+		return "rdd-plus: the plan has no layer matrix, so the breadth sweep was never planned. Want feedback on this run?"
+	default:
 		return "rdd-plus: the testing plan owes nothing. Want feedback on this run?"
 	}
-	return fmt.Sprintf("rdd-plus: %d layer(s) assigned and never invoked. Want feedback on this run?", n)
 }
