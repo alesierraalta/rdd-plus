@@ -76,8 +76,8 @@ Statuses: open · confirmed · fixed · rejected · wontfix.
 One row per `observado` conclusion (`references/evidence.md`). `razonado` items go under
 "Hypotheses" below, never here.
 
-| Id | Claim | Executed | Admit | Inputs and parameters | Observed | Digest | Normalize | Mode | Mutation or negative control → result | Reproduction | Label (`observado` / `razonado`, literal) |
-|---|---|---|---|---|---|---|---|---|---|---|---|
+| Id | Claim | Executed | Admit | Inputs and parameters | Observed | Digest | Normalize | Mode | Mutate | Mutation or negative control → result | Reproduction | Label (`observado` / `razonado`, literal) |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
 
 `Admit` holds ONE bare shell command, with no backticks and no placeholders, because `Executed` is
 prose a human reads and `Admit` is the command the binary runs. `Digest` holds the `sha256:` digest of the
@@ -99,6 +99,14 @@ container with the tree mounted read-only and no network, and a row that tries t
 of admitted. `--record` writes both cells, so recording is how a row's mode gets set; a row pinned in one mode
 and checked in the other is refused as a mode mismatch, rather than as a digest mismatch that would say
 nothing about why the digests disagree.
+
+`Mutate` is the machine half of a falsifiability claim: `<old> => <new> @ <path>:<line>`, one textual edit whose
+old text must occur exactly once in that file and on that line. It is a value and not a command because a replay
+has to be able to undo exactly what it did, and an edit admits an exact inverse while a command does not. A row
+that declares one is claiming its own command goes red under the edit and green without it, so the claim is
+checked rather than believed: `plan admit` refuses a mutation it cannot parse, find, or tell apart from another,
+and refuses a row whose claim it cannot replay at all. `Mutation or negative control → result` stays prose for a
+human to read; `Mutate` is the part a binary can act on and undo.
 
 ### Hypotheses (razonado)
 

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/alesierraalta/rdd-plus/internal/assets"
@@ -141,6 +142,7 @@ type LedgerRow struct {
 	Digest       string
 	Normalize    string
 	Mode         string
+	Mutate       string
 	Mutation     string
 	Reproduction string
 	Label        string
@@ -161,7 +163,7 @@ func Ledger(doc string) []LedgerRow {
 	// carries and shares it with no other column: `admit` never resolves to `Executed`, `digest` never
 	// resolves to `Observed` or to the mutation column, and `normalize` resolves to nothing else.
 	index := map[string]int{}
-	for _, name := range []string{"claim", "executed", "admit", "inputs", "observed", "digest", "normalize", "mode", "mutation", "reproduction"} {
+	for _, name := range []string{"claim", "executed", "admit", "inputs", "observed", "digest", "normalize", "mode", "mutate", "mutation", "reproduction"} {
 		index[name] = columnIndex(header, name)
 	}
 	ledger := make([]LedgerRow, 0, len(rows))
@@ -179,6 +181,7 @@ func Ledger(doc string) []LedgerRow {
 			{"digest", &r.Digest},
 			{"normalize", &r.Normalize},
 			{"mode", &r.Mode},
+			{"mutate", &r.Mutate},
 			{"mutation", &r.Mutation},
 			{"reproduction", &r.Reproduction},
 		} {
@@ -197,6 +200,131 @@ var digestRe = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 // command digests differently in a container than on the host, so a row that pins a digest without pinning
 // the mode it was taken in would fail its next check with a digest mismatch that says nothing about why.
 var modeRe = regexp.MustCompile(`^(host|sandbox)$`)
+
+// The reason codes a Mutate cell earns when it cannot be used. They live beside the grammar rather than beside
+// the admission, because a cell that does not parse and a cell whose edit does not exist are defects of the row
+// that this package is the only one able to name. The reasons a replay earns belong to the admission, which is
+// the only place that can observe one.
+const (
+	ReasonMutationMalformed = "mutation-malformed"
+	ReasonMutationNotFound  = "mutation-not-found"
+	ReasonMutationNoLine    = "mutation-no-line"
+	ReasonMutationAmbiguous = "mutation-ambiguous"
+	ReasonMutationNoOp      = "mutation-no-op"
+)
+
+// MutationError names why a declared mutation cannot be used, with the reason code a caller reports.
+type MutationError struct {
+	Reason string
+	Detail string
+}
+
+func (e MutationError) Error() string { return e.Detail }
+
+// Mutation is a row's declared edit: the text to replace, the text that replaces it, and where. It is a value
+// and not a shell command because a replay has to be able to undo exactly what it did, and an edit admits an
+// exact inverse while a command does not.
+type Mutation struct {
+	Old  string
+	New  string
+	Path string
+	Line int
+}
+
+// ParseMutation reads the one shape a Mutate cell may take:
+//
+//	<old> => <new> @ <path>:<line>
+//
+// The parts are returned rather than interpreted: nothing here runs, and nothing here decides whether the edit
+// is present in the tree. The grammar is strict on purpose, because a cell a human reads loosely is a cell the
+// replay would apply to the wrong place.
+func ParseMutation(cell string) (Mutation, error) {
+	malformed := func(why string) error {
+		return MutationError{Reason: ReasonMutationMalformed, Detail: fmt.Sprintf(
+			"a Mutate cell is `<old> => <new> @ <path>:<line>`, and this one %s", why)}
+	}
+	trimmed := strings.TrimSpace(cell)
+	arrow := strings.Index(trimmed, "=>")
+	if arrow < 0 {
+		return Mutation{}, malformed("holds no `=>` to say what replaces what")
+	}
+	m := Mutation{Old: strings.TrimSpace(trimmed[:arrow])}
+	rest := strings.TrimSpace(trimmed[arrow+len("=>"):])
+	if m.Old == "" {
+		return Mutation{}, malformed("names no text to replace")
+	}
+
+	// The locator is cut at the LAST `@`, so an edit whose text carries one still parses: the `@` that
+	// separates the replacement from its location is the final one by construction.
+	at := strings.LastIndex(rest, "@")
+	if at < 0 {
+		return Mutation{}, malformed("holds no `@` to say where the edit lands")
+	}
+	m.New = strings.TrimSpace(rest[:at])
+	locator := strings.TrimSpace(rest[at+1:])
+
+	colon := strings.LastIndex(locator, ":")
+	if colon < 0 {
+		return Mutation{}, malformed("holds no `<path>:<line>` locator")
+	}
+	m.Path = strings.TrimSpace(locator[:colon])
+	line, err := strconv.Atoi(strings.TrimSpace(locator[colon+1:]))
+	if err != nil || line < 1 {
+		return Mutation{}, malformed("ends in a line that is not a positive number")
+	}
+	m.Line = line
+	if m.Path == "" {
+		return Mutation{}, malformed("names no file")
+	}
+	if m.Old == m.New {
+		return Mutation{}, MutationError{Reason: ReasonMutationNoOp, Detail: fmt.Sprintf(
+			"`%s` is replaced by itself, so the edit changes nothing and cannot make any command go red", m.Old)}
+	}
+	return m, nil
+}
+
+// ValidateMutation reads the file a mutation names, under root, and reports what a replay would refuse before
+// running anything. A row that claims its own command is falsifiable is making a claim about this tree, so the
+// claim is checked where the tree is: nothing here executes, and nothing here edits.
+func ValidateMutation(root string, m Mutation) error {
+	if filepath.IsAbs(m.Path) {
+		return MutationError{Reason: ReasonMutationMalformed, Detail: fmt.Sprintf(
+			"%q is an absolute path, and a mutation names a file inside the tree so the replay can copy that tree and leave this one alone", m.Path)}
+	}
+	full := filepath.Join(root, filepath.FromSlash(m.Path))
+	info, err := os.Stat(full)
+	if err != nil {
+		return MutationError{Reason: ReasonMutationNotFound, Detail: fmt.Sprintf(
+			"%s is not there, and an edit can only land on a file this tree carries: %v", m.Path, err)}
+	}
+	if info.IsDir() {
+		return MutationError{Reason: ReasonMutationNotFound, Detail: fmt.Sprintf(
+			"%s is a directory, and a mutation edits a file", m.Path)}
+	}
+	content, err := os.ReadFile(full)
+	if err != nil {
+		return MutationError{Reason: ReasonMutationNotFound, Detail: fmt.Sprintf("%s could not be read: %v", m.Path, err)}
+	}
+	lines := strings.Split(string(content), "\n")
+	if m.Line > len(lines) {
+		return MutationError{Reason: ReasonMutationNoLine, Detail: fmt.Sprintf(
+			"%s has %d lines and the cell names line %d, so there is nothing there to edit", m.Path, len(lines), m.Line)}
+	}
+	if !strings.Contains(lines[m.Line-1], m.Old) {
+		return MutationError{Reason: ReasonMutationNotFound, Detail: fmt.Sprintf(
+			"line %d of %s does not hold `%s`, so the cell points at a line the edit is not on", m.Line, m.Path, m.Old)}
+	}
+	// Exactly once, so the replay cannot land somewhere the cell did not mean.
+	switch n := strings.Count(string(content), m.Old); {
+	case n == 0:
+		return MutationError{Reason: ReasonMutationNotFound, Detail: fmt.Sprintf(
+			"`%s` does not occur in %s", m.Old, m.Path)}
+	case n > 1:
+		return MutationError{Reason: ReasonMutationAmbiguous, Detail: fmt.Sprintf(
+			"`%s` occurs %d times in %s, so an edit that names it cannot say which one it means; narrow the text until only the intended one matches", m.Old, n, m.Path)}
+	}
+	return nil
+}
 
 // ErrNoColumn reports that the ledger's header does not name the column a writer was asked to fill. A caller
 // branches on it instead of reading the message when it knows the column is optional: an empty Mode cell

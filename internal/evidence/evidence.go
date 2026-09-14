@@ -43,6 +43,21 @@ type Options struct {
 // Deps is the injected runner. Unit tests pass a fake, so no unit test starts a process.
 type Deps struct {
 	Run func(ctx context.Context, dir, command string) (output string, err error)
+	// Replay applies a row's mutation, runs the command against the mutated tree and then against the tree the
+	// edit was undone in, and returns both observations. It is nil when the caller has no tree it owns, which is
+	// every mode but a sandbox; the admission then refuses a row that declares a mutation rather than admitting it
+	// with its falsifiability claim unchecked. This package judges red and green; the caller owns how the tree was
+	// staged, how it was put back, and the deadline on each of the two runs it makes.
+	Replay func(mutation plan.Mutation, dir, command string) ReplayResult
+}
+
+// ReplayResult is the two observations a replay owes: the command against the mutated tree, which must go red,
+// and the same command against the tree the edit was undone in, which must go green.
+type ReplayResult struct {
+	MutatedOutput  string
+	MutatedErr     error
+	RestoredOutput string
+	RestoredErr    error
 }
 
 // Verdict is what a row earned.
@@ -79,6 +94,9 @@ const (
 	ReasonSandboxReadOnly   = "sandbox-read-only"
 	ReasonMisconfigured     = "sandbox-misconfigured"
 	ReasonNoNetwork         = "network-unavailable"
+	ReasonMutationNotReplay = "mutation-not-replayed"
+	ReasonMutationNotRed    = "mutation-not-red"
+	ReasonMutationNotGreen  = "mutation-not-green"
 )
 
 // Refusal lets a runner say why a command could not run, when the answer is about the runner's own
@@ -255,6 +273,28 @@ func admitRow(row plan.LedgerRow, opts Options, deps Deps, record bool) RowResul
 			row.ID, modeOf(row.Mode), modeOf(opts.Mode), row.ID, modeOf(row.Mode)))
 	}
 
+	// A row that declares a mutation is claiming its own command is falsifiable. The claim is checked where the
+	// tree is, and checked before anything is spawned: a cell that does not parse, a file that is not there, a line
+	// that does not exist, text that is absent or ambiguous, and an edit that changes nothing are defects in the
+	// row rather than in the command. A replay applies an edit and undoes it, so it needs a tree it owns, and a
+	// claim that cannot be checked is refused rather than admitted unchecked.
+	var mutation *plan.Mutation
+	if strings.TrimSpace(row.Mutate) != "" {
+		parsed, err := plan.ParseMutation(row.Mutate)
+		if err != nil {
+			return refused(result, mutationReason(err), fmt.Sprintf("evidence %s declares Mutate %q: %v", row.ID, row.Mutate, err))
+		}
+		if err := plan.ValidateMutation(opts.Dir, parsed); err != nil {
+			return refused(result, mutationReason(err), fmt.Sprintf("evidence %s declares Mutate %q: %v", row.ID, row.Mutate, err))
+		}
+		mutation = &parsed
+		if deps.Replay == nil {
+			return refused(result, ReasonMutationNotReplay, fmt.Sprintf(
+				"evidence %s declares a mutation and this run cannot replay it: a replay applies the edit and undoes it, so it needs a tree it owns, which only a sandbox provides; a row that claims its own command is falsifiable is not admitted with that claim unchecked",
+				row.ID))
+		}
+	}
+
 	result.Command = command
 	if !opts.Execute {
 		result.Verdict = VerdictWouldRun
@@ -306,9 +346,29 @@ func admitRow(row plan.LedgerRow, opts Options, deps Deps, record bool) RowResul
 			"evidence %s declares Normalize %q, which does not compile: %v", row.ID, row.Normalize, err))
 	}
 
-	again, err := runOnce()
-	if err != nil {
-		return runFailure(err, " on its second run")
+	// The second observation is either another run of the same command or the restored half of a replay. A row
+	// that declares a mutation has already earned its second run this way, so the probe it would have asked for
+	// costs nothing extra, and the two greens it compares are stronger evidence than two runs of an unedited tree:
+	// the edit was applied and undone between them.
+	var again string
+	if mutation != nil {
+		replayed := deps.Replay(*mutation, opts.Dir, command)
+		if replayed.MutatedErr == nil {
+			return refused(result, ReasonMutationNotRed, fmt.Sprintf(
+				"evidence %s declares the edit `%s` => `%s` at %s:%d and the command stayed green under it: a mutation its own row survives proves nothing about that row, so the claim is refused rather than recorded",
+				row.ID, mutation.Old, mutation.New, mutation.Path, mutation.Line))
+		}
+		if replayed.RestoredErr != nil {
+			return refused(result, ReasonMutationNotGreen, fmt.Sprintf(
+				"evidence %s declares a mutation and the command failed after the edit was undone: %v; a replay that cannot put the tree back is not evidence of anything",
+				row.ID, replayed.RestoredErr))
+		}
+		again = replayed.RestoredOutput
+	} else {
+		again, err = runOnce()
+		if err != nil {
+			return runFailure(err, " on its second run")
+		}
 	}
 	second, err := Digest(again, row.Normalize)
 	if err != nil {
@@ -347,6 +407,16 @@ func refused(result RowResult, reason, detail string) RowResult {
 	result.Reason = reason
 	result.Detail = detail
 	return result
+}
+
+// mutationReason is the reason code a mutation defect carries. The grammar and its reasons belong to the package
+// that owns the grammar, so this only names the fallback for an error that is not one of them.
+func mutationReason(err error) string {
+	var bad plan.MutationError
+	if errors.As(err, &bad) {
+		return bad.Reason
+	}
+	return plan.ReasonMutationMalformed
 }
 
 // admitSpan resolves an Admit cell to the command it declares and reports whether the whole cell was

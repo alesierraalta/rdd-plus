@@ -58,6 +58,15 @@ findings. This contract applies to every testing skill routed by `test-strategy`
    tree mounted read-only and no network: a row that tries to write is refused, and the write never reaches
    the machine. Recording writes the digest and the mode together, because one without the other is not a
    checkable record.
+10. **A falsifiability claim is a value, not a sentence.** The optional `Mutate` cell holds
+    `<old> => <new> @ <path>:<line>`: one textual edit, whose old text must occur exactly once in that file and
+    on that line. It is checked before anything runs, and each defect is named: a cell that does not parse, a
+    file that is not there, a line that does not exist, text that is absent, text that occurs more than once,
+    and an edit that changes nothing. A row that declares a mutation is claiming its own command goes red under
+    it and green without it. That claim is refused rather than admitted unchecked when it cannot be replayed,
+    because replaying an edit means applying it and putting it back, and only a tree the tool owns can be put
+    back with certainty. `Mutation or negative control → result` stays prose for a human; `Mutate` is the part a
+    binary can act on, and undo.
 
 ## Record template
 

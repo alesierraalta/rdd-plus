@@ -792,6 +792,37 @@ func TestAdmitRefusesARowPinnedInAnotherMode(t *testing.T) {
 	}
 }
 
+// A row that declares a mutation is claiming its own command is falsifiable, and that claim is refused rather
+// than admitted unchecked. A cell that does not parse, a file that is not there, a line that does not exist,
+// text that is absent or ambiguous, and an edit that changes nothing are defects in the row, and a row whose
+// claim cannot be replayed is refused because only a tree the caller owns can be edited and put back.
+func TestAdmitRefusesARowWhoseMutationCannotBeChecked(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "src.go"), []byte("package p\n\nvar x = 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name   string
+		mutate string
+		reason string
+	}{
+		{"the cell does not parse", "no arrow", "mutation-malformed"},
+		{"the edit changes nothing", "x => x @ src.go:3", "mutation-no-op"},
+		{"the file is not there", "x => y @ nope.go:3", "mutation-not-found"},
+		{"the line does not exist", "x => y @ src.go:99", "mutation-no-line"},
+		{"the text is not on that line", "var := => var = @ src.go:1", "mutation-not-found"},
+		{"a valid mutation still has no tree to replay it in", "x => y @ src.go:3", "mutation-not-replayed"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rows := []plan.LedgerRow{{ID: "E1", Admit: "printf one", Mutate: tc.mutate, Label: "observado"}}
+			got, calls := admitRuns(t, rows, Options{Execute: true, Dir: dir}, []string{"one\n"}, nil)
+			assertRows(t, got, []want{{id: "E1", verdict: VerdictRefused, reason: tc.reason}})
+			assertNoRun(t, calls)
+		})
+	}
+}
+
 // A runner that knows the failure is about its own environment rather than about the command says so with a
 // Refusal, and that reason is reported as it stands: a sandbox that refused a write is not a failing test, and
 // calling it one would send the reader looking in the wrong place.

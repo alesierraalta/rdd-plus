@@ -71,8 +71,8 @@ func TestCheckAcceptsACompliantPlan(t *testing.T) {
 		"| Id | Finding (path:line, one line) | Severity (consequence class) | Data safe? | Evidence id | Pinning test (suite path :: test name) | Status | Verdict by / date | Reason | Cited-files fingerprint at verdict |\n|---|---|---|---|---|---|---|---|---|---|\n",
 		"| F1 | `src/a.js:5` drops a quoted comma | data loss | yes | E1 | tests/a.test.js :: keeps a quoted comma | fixed | me / 2026-09-10 | - | abc123 |\n")
 	plan = replaceFixture(t, plan, "the Evidence ledger header",
-		"| Id | Claim | Executed | Admit | Inputs and parameters | Observed | Digest | Normalize | Mode | Mutation or negative control → result | Reproduction | Label (`observado` / `razonado`, literal) |\n|---|---|---|---|---|---|---|---|---|---|---|---|\n",
-		"| E1 | it drops the comma | `node --test` | node --test | `a,\"b,c\"` | 3 fields | sha256:7eada7a897497315d39d2541f5058a9631e80828245781b3c9c96205d9d759ed | | | reverted → red | same input | observado |\n")
+		"| Id | Claim | Executed | Admit | Inputs and parameters | Observed | Digest | Normalize | Mode | Mutate | Mutation or negative control → result | Reproduction | Label (`observado` / `razonado`, literal) |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|\n",
+		"| E1 | it drops the comma | `node --test` | node --test | `a,\"b,c\"` | 3 fields | sha256:7eada7a897497315d39d2541f5058a9631e80828245781b3c9c96205d9d759ed | | | | reverted → red | same input | observado |\n")
 	if plan == string(body) {
 		t.Fatal("the fixture replaced nothing, so this test would read the untouched template as a compliant plan")
 	}
@@ -781,5 +781,97 @@ func TestLedgerResolvesTheModeColumnAndRecordModeWritesIt(t *testing.T) {
 
 	if _, err := RecordMode(doc, "E1", "container"); err == nil || !strings.Contains(err.Error(), "is not an execution mode") {
 		t.Fatalf("RecordMode accepted a mode that is neither host nor sandbox: %v", err)
+	}
+}
+
+// A Mutate cell is a data field and not a command, so the grammar is strict and the parts come back rather than
+// being interpreted. These are the shapes a human writes, including the ones the grammar has to refuse before a
+// replay could apply an edit to the wrong place.
+func TestParseMutationReadsTheOneShapeACellMayTake(t *testing.T) {
+	ok := []struct {
+		cell string
+		want Mutation
+	}{
+		{">= => > @ internal/plan/plan.go:214", Mutation{Old: ">=", New: ">", Path: "internal/plan/plan.go", Line: 214}},
+		{"  a => b  @  x/y.go:7 ", Mutation{Old: "a", New: "b", Path: "x/y.go", Line: 7}},
+		{"a => b => c @ p.go:1", Mutation{Old: "a", New: "b => c", Path: "p.go", Line: 1}},
+		{"old => @ p.go:1", Mutation{Old: "old", New: "", Path: "p.go", Line: 1}},
+		{"a @ b => c @ p.go:2", Mutation{Old: "a @ b", New: "c", Path: "p.go", Line: 2}},
+	}
+	for _, tc := range ok {
+		t.Run(tc.cell, func(t *testing.T) {
+			got, err := ParseMutation(tc.cell)
+			if err != nil {
+				t.Fatalf("ParseMutation(%q) failed: %v", tc.cell, err)
+			}
+			if got != tc.want {
+				t.Fatalf("ParseMutation(%q) = %#v, want %#v", tc.cell, got, tc.want)
+			}
+		})
+	}
+
+	bad := []struct {
+		cell   string
+		reason string
+	}{
+		{"", ReasonMutationMalformed},
+		{"no arrow here", ReasonMutationMalformed},
+		{"=> > @ p.go:1", ReasonMutationMalformed},
+		{"a => b", ReasonMutationMalformed},
+		{"a => b @ p.go", ReasonMutationMalformed},
+		{"a => b @ p.go:x", ReasonMutationMalformed},
+		{"a => b @ p.go:0", ReasonMutationMalformed},
+		{"a => b @ p.go:-3", ReasonMutationMalformed},
+		{"a => b @ :1", ReasonMutationMalformed},
+		{"same => same @ p.go:1", ReasonMutationNoOp},
+	}
+	for _, tc := range bad {
+		t.Run("refuses "+tc.cell, func(t *testing.T) {
+			_, err := ParseMutation(tc.cell)
+			if err == nil {
+				t.Fatalf("ParseMutation(%q) was accepted", tc.cell)
+			}
+			bad, ok := err.(MutationError)
+			if !ok || bad.Reason != tc.reason {
+				t.Fatalf("ParseMutation(%q) = %v, want reason %s", tc.cell, err, tc.reason)
+			}
+		})
+	}
+}
+
+// The claim a Mutate cell makes is about this tree, so it is checked here: nothing here runs, and nothing here
+// edits. Every refusal is named, because each one tells the author a different thing to fix.
+func TestValidateMutationChecksTheTreeBeforeAnythingRuns(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "src/a.go", "package a\n\nvar x = 1\nvar y = 1\nvar z = 2\n")
+	write(t, dir, "src/dup.go", "a\nb\na\n")
+
+	cases := []struct {
+		name   string
+		m      Mutation
+		reason string // empty means it validates
+	}{
+		{"the text is on the named line exactly once", Mutation{Old: "var y", New: "var w", Path: "src/a.go", Line: 4}, ""},
+		{"the file is not there", Mutation{Old: "x", New: "y", Path: "src/nope.go", Line: 1}, ReasonMutationNotFound},
+		{"the line does not exist", Mutation{Old: "x", New: "y", Path: "src/a.go", Line: 99}, ReasonMutationNoLine},
+		{"the text is not on that line", Mutation{Old: "var z", New: "var q", Path: "src/a.go", Line: 3}, ReasonMutationNotFound},
+		{"the text is not in the file", Mutation{Old: "nope", New: "y", Path: "src/a.go", Line: 3}, ReasonMutationNotFound},
+		{"the text occurs twice", Mutation{Old: "a", New: "z", Path: "src/dup.go", Line: 1}, ReasonMutationAmbiguous},
+		{"the path is absolute", Mutation{Old: "x", New: "y", Path: "/etc/passwd", Line: 1}, ReasonMutationMalformed},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateMutation(dir, tc.m)
+			if tc.reason == "" {
+				if err != nil {
+					t.Fatalf("ValidateMutation = %v, want it valid", err)
+				}
+				return
+			}
+			bad, ok := err.(MutationError)
+			if !ok || bad.Reason != tc.reason {
+				t.Fatalf("ValidateMutation = %v, want reason %s", err, tc.reason)
+			}
+		})
 	}
 }
