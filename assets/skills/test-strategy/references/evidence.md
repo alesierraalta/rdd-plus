@@ -40,6 +40,13 @@ findings. This contract applies to every testing skill routed by `test-strategy`
      defends the defect and is deleted by whoever repairs it. That is a characterization test
      (rule 4); it is legitimate only under its own label, never as the pinning test.
 
+8. **`Admit` and `Digest` are the machine half of a record.** `Admit` holds one bare shell command,
+   with no placeholders and no backticks, because it is the command a binary runs and not prose a
+   human reads; a cell that chains commands, or leaves a value for its author to fill in, is refused
+   rather than guessed at. `Digest` holds the `sha256:` digest of that command's normalized output, so
+   the record can be re-executed and compared byte for byte. A row that pins neither is refused by
+   `rdd-plus plan admit`.
+
 ## Record template
 
 | Claim | Executed | Inputs and parameters | Observed | Mutation or negative control → result | Reproduction | Label |

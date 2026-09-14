@@ -31,6 +31,7 @@ directory and `--dry-run` to see the plan.
 | `rdd-plus gate` | The Stop hook. Reads the hook payload on stdin, decides, logs one line, and emits Stop feedback when a session changed production source without loading the adversarial testing discipline. Always exits 0. |
 | `rdd-plus sync` | Installs the embedded skills and wires the gate. Idempotent. |
 | `rdd-plus doctor` | Reports installed skills (and whether they drift from the embedded version), whether the hook is wired, and which optional tools are on PATH with what degrades without each. `--json` for machines. Exit 1 when git, a skill, or the hook is missing. |
+| `rdd-plus plan admit` | Reads the plan's Evidence ledger and decides every row. A dry run by default: `--execute` runs each admitted row's one command through `sh -c`, `--only <ids>` narrows the run, `--timeout` bounds one command. Writes nothing. Exit 1 when a row is refused. |
 | `rdd-plus feedback` | Records one honest process report about the testing method itself, or reads the reports back. `--template` prints a fillable skeleton, `--file <path>` records it, `--summary` (the default) answers whether the method is earning its keep. |
 | `rdd-plus version` | Prints the version. |
 
@@ -80,9 +81,8 @@ original Node hook when `node` and `~/.claude/hooks/testing-gate.mjs` are presen
 - The eval harness (`assets/skills/test-strategy/evals/run_evals.py`, `selftest.py`) and the
   calibration tools (`assets/skills/test-strategy/assets/seed-mutants.py`, `fingerprint.sh`) are
   still Python and shell. They will become subcommands.
-- Deterministic admission of evidence (re-executing a ledger row's command and re-applying its
-  mutation before a finding is accepted), plan validation, and `status --next-transition` are the
-  next binaries.
+- Replaying a ledger row's mutation before a finding is accepted, and `status --next-transition`,
+  are the next binaries.
 
 ## Plan
 

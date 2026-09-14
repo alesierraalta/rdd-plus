@@ -76,8 +76,14 @@ Statuses: open · confirmed · fixed · rejected · wontfix.
 One row per `observado` conclusion (`references/evidence.md`). `razonado` items go under
 "Hypotheses" below, never here.
 
-| Id | Claim | Executed | Inputs and parameters | Observed | Mutation or negative control → result | Reproduction | Label (`observado` / `razonado`, literal) |
-|---|---|---|---|---|---|---|---|
+| Id | Claim | Executed | Admit | Inputs and parameters | Observed | Digest | Mutation or negative control → result | Reproduction | Label (`observado` / `razonado`, literal) |
+|---|---|---|---|---|---|---|---|---|---|
+
+`Admit` holds ONE bare shell command, with no backticks and no placeholders, because `Executed` is
+prose a human reads and `Admit` is the command the binary runs. `Digest` holds the `sha256:` digest of
+the normalized output; `plan admit` prints the digest it observed and writes nothing, so this cell is
+filled by copying what it printed. `plan check` requires neither column; `plan admit` refuses a row
+whose `Admit` is absent or whose `Digest` is unpinned.
 
 ### Hypotheses (razonado)
 

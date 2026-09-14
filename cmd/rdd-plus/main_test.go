@@ -52,6 +52,8 @@ func TestCLIContract(t *testing.T) {
 		{name: "plan with an unknown subcommand exits 2", args: []string{"plan", "bogus"}, wantExit: 2, wantOut: "usage: rdd-plus"},
 		{name: "plan check on a missing file exits 1", args: []string{"plan", "check", "--path", "/nonexistent/plan.md"}, wantExit: 1, wantOut: "plan check:"},
 		{name: "plan gaps on a missing file exits 1", args: []string{"plan", "gaps", "--path", "/nonexistent/plan.md"}, wantExit: 1, wantOut: "plan gaps:"},
+		{name: "plan admit on a missing file exits 1", args: []string{"plan", "admit", "--path", "/nonexistent/plan.md"}, wantExit: 1, wantOut: "plan admit:"},
+		{name: "plan admit with an unreadable timeout exits 2", args: []string{"plan", "admit", "--timeout", "soon"}, wantExit: 2, wantOut: "invalid value"},
 		// The gate is a hook: whatever it receives, it must not break the turn.
 		{name: "gate on empty stdin exits 0", args: []string{"gate"}, stdin: "", wantExit: 0},
 		{name: "gate on malformed stdin exits 0", args: []string{"gate"}, stdin: "{not json", wantExit: 0},
@@ -78,6 +80,300 @@ func TestCLIContract(t *testing.T) {
 				t.Fatalf("output missing %q:\n%s", tc.wantOut, out)
 			}
 		})
+	}
+}
+
+// ledgerHeader is the shipped Evidence ledger header. The `Admit` and `Digest` columns are the two a
+// recording run reads and writes, so a fixture drifting from this header would test another contract.
+const ledgerHeader = "| Id | Claim | Executed | Admit | Inputs and parameters | Observed | Digest | Mutation or negative control → result | Reproduction | Label (`observado` / `razonado`, literal) |\n" +
+	"|---|---|---|---|---|---|---|---|---|---|\n"
+
+// writeLedger writes a minimal plan whose one Evidence ledger row carries the given Admit cell, so a
+// test drives the real binary over a real file rather than a string it never parsed.
+func writeLedger(t *testing.T, dir, admit string) string {
+	t.Helper()
+	path := filepath.Join(dir, "plan.md")
+	doc := "## Evidence ledger\n\n" + ledgerHeader + ledgerRow("E1", admit)
+	if err := os.WriteFile(path, []byte(doc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// ledgerRow is one ledger row with the given id and Admit cell and an empty Digest cell for a
+// recording run to fill.
+func ledgerRow(id, admit string) string {
+	return "| " + id + " | the claim | prose a human reads | " + admit + " | none | the observation | | reverted → red | rerun it | observado |\n"
+}
+
+// compliantPlan is the smallest plan `plan check` accepts, so a recording run can be followed by a
+// check that still says well formed rather than by a smaller file that merely holds a digest.
+func compliantPlan(rows ...string) string {
+	return "## Findings\n\n" +
+		"| Id | Finding | Severity | Data safe? | Evidence id | Pinning test | Status | Verdict by / date | Reason | Fingerprint |\n" +
+		"|---|---|---|---|---|---|---|---|---|---|\n" +
+		"| F1 | `src/a.js:5` drops a quoted comma | data loss | yes | E1 | tests/a.test.js :: keeps a comma | fixed | me / 2026-09-10 | - | abc123 |\n" +
+		"\n## Evidence ledger\n\n" + ledgerHeader + strings.Join(rows, "")
+}
+
+var digestRe = regexp.MustCompile(`sha256:[0-9a-f]{64}`)
+
+// --record is the flag that turns an observation into a pinned value, so the one combination that
+// would pin an observation this run never made is refused before the plan is read and before any
+// command reaches the runner.
+func TestPlanAdmitRecordRequiresExecute(t *testing.T) {
+	bin := buildCLI(t)
+	dir := t.TempDir()
+	sentinel := filepath.Join(dir, "ran")
+	path := writeLedger(t, dir, "touch "+sentinel)
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	out, code := runCLI(t, bin, "plan", "admit", "--path", path, "--record", "E1")
+	if code != 2 {
+		t.Fatalf("exit = %d, want 2\n%s", code, out)
+	}
+	if !strings.Contains(out, "--record") || !strings.Contains(out, "--execute") {
+		t.Fatalf("the usage error must name the flag that was given and the flag it needs:\n%s", out)
+	}
+	if _, err := os.Stat(sentinel); !os.IsNotExist(err) {
+		t.Fatal("a usage error ran the command anyway")
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("a usage error wrote the plan:\n%s", after)
+	}
+}
+
+// A recording run pins what it just observed and writes the plan once for the whole pass. The three
+// rows also prove the composed edit: one write leaves both digests and no rewritten bytes.
+func TestPlanAdmitRecordPinsTheObservedDigests(t *testing.T) {
+	bin := buildCLI(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "plan.md")
+	before := compliantPlan(
+		ledgerRow("E1", "`printf 'one\\n'`"),
+		ledgerRow("E2", "`printf 'two\\n'`"),
+		ledgerRow("E3", "`printf 'three\\n'`"),
+	)
+	if err := os.WriteFile(path, []byte(before), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	out, code := runCLI(t, bin, "plan", "admit", "--path", path, "--execute", "--record", "E1,E2,E3")
+	if code != 0 {
+		t.Fatalf("recording run exit = %d, want 0\n%s", code, out)
+	}
+	if n := strings.Count(out, "RECORDED"); n != 3 {
+		t.Fatalf("want one RECORDED line per row, got %d:\n%s", n, out)
+	}
+	if !strings.Contains(out, "3 recorded") {
+		t.Fatalf("the summary must count the recorded rows:\n%s", out)
+	}
+
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digests := digestRe.FindAllString(string(after), -1)
+	if len(digests) != 3 {
+		t.Fatalf("want three recorded digests, got %v:\n%s", digests, after)
+	}
+	want := before
+	for _, d := range digests {
+		want = strings.Replace(want, "| | reverted → red |", "| "+d+" | reverted → red |", 1)
+	}
+	if string(after) != want {
+		t.Fatalf("the recording run rewrote bytes outside the digest cells:\ngot  %q\nwant %q", after, want)
+	}
+	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o640 {
+		t.Fatalf("the run must preserve the plan's mode: %v %v", info.Mode(), err)
+	}
+
+	// The rows are runnable, not digest-missing: the dry run reports them as runnable, and an executed
+	// run without --record now admits the same observation instead of refusing an unpinned row.
+	out, code = runCLI(t, bin, "plan", "admit", "--path", path)
+	if code != 0 || strings.Count(out, "WOULD RUN") != 3 || strings.Contains(out, "digest-missing") {
+		t.Fatalf("dry run after recording = %d\n%s", code, out)
+	}
+	out, code = runCLI(t, bin, "plan", "admit", "--path", path, "--execute")
+	if code != 0 || strings.Count(out, "ADMITTED") != 3 {
+		t.Fatalf("an executed run after recording must admit = %d\n%s", code, out)
+	}
+	out, code = runCLI(t, bin, "plan", "check", "--path", path)
+	if code != 0 || !strings.Contains(out, "well formed") {
+		t.Fatalf("plan check after recording = %d\n%s", code, out)
+	}
+}
+
+// A refusal to splice aborts the whole write rather than skipping the row: a half-recorded ledger is
+// exactly the state this feature exists to prevent, so the file must come back byte-identical.
+func TestPlanAdmitRecordAbortsTheWholeWriteWhenTheSpliceRefuses(t *testing.T) {
+	bin := buildCLI(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "plan.md")
+	before := "## Evidence ledger\n\n" +
+		"| Id | Claim | Executed | Admit | Inputs | Observed | Mutation | Reproduction | Label |\n" +
+		"|---|---|---|---|---|---|---|---|---|\n" +
+		"| E1 | the claim | prose | `echo hi` | none | the observation | reverted → red | rerun it | observado |\n"
+	if err := os.WriteFile(path, []byte(before), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, code := runCLI(t, bin, "plan", "admit", "--path", path, "--execute", "--record", "E1")
+	if code != 1 {
+		t.Fatalf("exit = %d, want 1\n%s", code, out)
+	}
+	if !strings.Contains(out, "plan admit:") || !strings.Contains(out, "names no Digest column") {
+		t.Fatalf("the refused splice must be reported on stderr with the plan admit: prefix:\n%s", out)
+	}
+	if strings.Contains(out, "RECORDED") {
+		t.Fatalf("a refused splice must record nothing:\n%s", out)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != before {
+		t.Fatalf("a refused splice must leave the plan byte-identical:\ngot  %q\nwant %q", after, before)
+	}
+}
+
+// A dry run is the default for a reason: the runner hands the plan's cell to a shell, so reading a
+// ledger must not execute it. The sentinel file is the proof the command never reached one.
+func TestPlanAdmitDryRunRunsNothing(t *testing.T) {
+	bin := buildCLI(t)
+	dir := t.TempDir()
+	sentinel := filepath.Join(dir, "ran")
+	path := writeLedger(t, dir, "touch "+sentinel)
+
+	out, code := runCLI(t, bin, "plan", "admit", "--path", path)
+	if code != 0 {
+		t.Fatalf("dry run exit = %d, want 0\n%s", code, out)
+	}
+	if !strings.Contains(out, "WOULD RUN") {
+		t.Fatalf("a dry run must report WOULD RUN:\n%s", out)
+	}
+	if _, err := os.Stat(sentinel); !os.IsNotExist(err) {
+		t.Fatalf("the dry run executed the command: %s exists", sentinel)
+	}
+}
+
+// A row with no Admit cell is refused by name, and a refusal is exit 1: one refused row is not a clean
+// run, whatever the other rows did.
+func TestPlanAdmitRefusesARowWithoutACommand(t *testing.T) {
+	bin := buildCLI(t)
+	path := writeLedger(t, t.TempDir(), "")
+
+	out, code := runCLI(t, bin, "plan", "admit", "--path", path)
+	if code != 1 {
+		t.Fatalf("exit = %d, want 1\n%s", code, out)
+	}
+	if !strings.Contains(out, "REFUSED") || !strings.Contains(out, "no-admit-command") {
+		t.Fatalf("the refusal must be named on stdout:\n%s", out)
+	}
+}
+
+// The binary accepts a whole ledger's worth of rows and re-reads the plan file rather than trusting an
+// index: `--only` narrows the run. An id the ledger does not carry is a mistake, not a silent no-op,
+// so `--only` refuses it the same way `--record` does.
+func TestPlanAdmitOnlyKeepsTheNamedRows(t *testing.T) {
+	bin := buildCLI(t)
+	dir := t.TempDir()
+	path := writeLedger(t, dir, "touch "+filepath.Join(dir, "ran"))
+
+	out, code := runCLI(t, bin, "plan", "admit", "--path", path, "--only", "E1")
+	if code != 0 || !strings.Contains(out, "E1") || !strings.Contains(out, "WOULD RUN") {
+		t.Fatalf("--only E1 = %d\n%s", code, out)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "ran")); !os.IsNotExist(err) {
+		t.Fatal("a narrowed dry run must still run nothing")
+	}
+	out, code = runCLI(t, bin, "plan", "admit", "--path", path, "--only", "E9")
+	if code != 2 || !strings.Contains(out, "E9") || !strings.Contains(out, "available ids") {
+		t.Fatalf("--only must refuse an id the ledger does not carry = %d\n%s", code, out)
+	}
+}
+
+// An id a flag names but the ledger does not carry is a mistake the user must see: it is reported on
+// stderr with the plan admit: prefix, names the unknown id and the ids that do exist, and exits 2
+// before the plan is touched or a command is run.
+func TestPlanAdmitRefusesAnUnknownID(t *testing.T) {
+	bin := buildCLI(t)
+	dir := t.TempDir()
+	sentinel := filepath.Join(dir, "ran")
+	path := writeLedger(t, dir, "touch "+sentinel)
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name string
+		flag string
+		args []string
+	}{
+		{"an unknown --record id", "--record", []string{"plan", "admit", "--path", path, "--execute", "--record", "ZZZ"}},
+		{"an unknown --only id", "--only", []string{"plan", "admit", "--path", path, "--only", "ZZZ"}},
+		{"an unknown id beside a known one", "--only", []string{"plan", "admit", "--path", path, "--only", "E1,ZZZ"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, code := runCLI(t, bin, tc.args...)
+			if code != 2 {
+				t.Fatalf("exit = %d, want 2\n%s", code, out)
+			}
+			for _, want := range []string{"plan admit:", "ZZZ", tc.flag, "available ids", "E1"} {
+				if !strings.Contains(out, want) {
+					t.Fatalf("the refusal must carry %q:\n%s", want, out)
+				}
+			}
+		})
+	}
+	if _, err := os.Stat(sentinel); !os.IsNotExist(err) {
+		t.Fatal("a usage error ran the command anyway")
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("a usage error wrote the plan:\n%s", after)
+	}
+}
+
+// An unescaped pipe in an Admit cell splits the row: `plan check` saw a well formed table, but the
+// ledger read one command while the shell would have run another. The row is refused, not truncated.
+func TestPlanAdmitRefusesAnUnescapedPipeInARow(t *testing.T) {
+	bin := buildCLI(t)
+	dir := t.TempDir()
+	sentinel := filepath.Join(dir, "ran")
+	path := filepath.Join(dir, "plan.md")
+	row := "| E1 | the claim | prose | printf 'abc' | tr a-z A-Z > " + sentinel + " | none | the observation | | reverted → red | rerun it | observado |\n"
+	if err := os.WriteFile(path, []byte("## Evidence ledger\n\n"+ledgerHeader+row), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, code := runCLI(t, bin, "plan", "admit", "--path", path, "--execute")
+	if code != 1 {
+		t.Fatalf("exit = %d, want 1\n%s", code, out)
+	}
+	if !strings.Contains(out, "malformed-row") {
+		t.Fatalf("the truncated row must be refused as malformed:\n%s", out)
+	}
+	if strings.Contains(out, "WOULD RUN") || strings.Contains(out, "printf 'abc'") {
+		t.Fatalf("a malformed row must not report a runnable command:\n%s", out)
+	}
+	if _, err := os.Stat(sentinel); !os.IsNotExist(err) {
+		t.Fatal("the truncated cell still ran and wrote its sentinel")
 	}
 }
 
@@ -189,7 +485,7 @@ func runCLI(t *testing.T, bin string, args ...string) (string, int) {
 
 // A usage text that does not list a command it accepts sends users to the wrong place.
 func TestUsageListsEveryBenchSubcommand(t *testing.T) {
-	for _, sub := range []string{"bench run", "bench score", "bench history", "bench compare", "bench rescore", "plan init", "plan check", "plan gaps"} {
+	for _, sub := range []string{"bench run", "bench score", "bench history", "bench compare", "bench rescore", "plan init", "plan check", "plan gaps", "plan admit"} {
 		if !strings.Contains(usage, sub) {
 			t.Errorf("usage does not document %q", sub)
 		}

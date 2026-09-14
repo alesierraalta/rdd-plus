@@ -3,8 +3,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -18,6 +20,7 @@ import (
 	"github.com/alesierraalta/rdd-plus/internal/buildinfo"
 	"github.com/alesierraalta/rdd-plus/internal/check"
 	"github.com/alesierraalta/rdd-plus/internal/doctor"
+	"github.com/alesierraalta/rdd-plus/internal/evidence"
 	"github.com/alesierraalta/rdd-plus/internal/feedback"
 	"github.com/alesierraalta/rdd-plus/internal/gate"
 	"github.com/alesierraalta/rdd-plus/internal/plan"
@@ -32,7 +35,7 @@ commands:
   doctor   report installed skills, the hook wiring, and optional capabilities
   bench    run the testing skill against sealed-key fixtures and score it (run | score | history)
   plan     write the skeleton, check the contract, and name what breadth is still owed
-           (init | check | gaps)
+           (init | check | gaps | admit)
   check    say what this repository still owes, from git and the plan alone: no hook payload,
            no transcript, no host. Exit 1 when there is something to do.
   feedback record an honest process report on the method itself, or read the reports back
@@ -56,6 +59,11 @@ plan init [--path docs/testing/test-plan.md] [--force]
 plan check [--path docs/testing/test-plan.md]
 plan gaps  [--path docs/testing/test-plan.md]
            (swept = status done, fixed or closed; n/a, na, none and skipped leave the denominator)
+plan admit [--path docs/testing/test-plan.md] [--execute] [--timeout 120s] [--only <ids>] [--record <ids>]
+           (dry run by default: --execute runs each admitted row's one command through sh -c;
+            --record writes the freshly observed digest back into the named rows and requires
+            --execute, because a dry run makes no observation to pin; exit 1 when any row is
+            refused or a digest cannot be written)
 check [--cwd .]
 feedback [--config-dir <dir>] [--template] [--file <path>] [--plan <path>] [--summary]
 `
@@ -236,10 +244,16 @@ func runPlan(args []string) int {
 	fs := flag.NewFlagSet("plan", flag.ContinueOnError)
 	path := fs.String("path", plan.DefaultPath, "plan file")
 	force := fs.Bool("force", false, "replace an existing plan (init only)")
+	execute := fs.Bool("execute", false, "run each admitted command; the default is a dry run (admit only)")
+	timeout := fs.Duration("timeout", 120*time.Second, "bound one command; 0 leaves it unbounded (admit only)")
+	only := fs.String("only", "", "comma-separated evidence ids to admit; empty means every row (admit only)")
+	record := fs.String("record", "", "comma-separated evidence ids whose freshly observed digest is written into the plan (admit only; requires --execute)")
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
 	}
 	switch args[0] {
+	case "admit":
+		return runPlanAdmit(*path, *execute, *timeout, *only, *record)
 	case "gaps":
 		g, err := plan.GapsInFile(*path)
 		if err != nil {
@@ -276,6 +290,168 @@ func runPlan(args []string) int {
 		fmt.Fprint(os.Stderr, usage)
 		return 2
 	}
+}
+
+// runPlanAdmit decides every row of the plan's Evidence ledger. Without --record it reads the plan and
+// writes nothing; with it, the freshness of the observation is pinned into the named rows by rewriting
+// the plan file in one pass.
+//
+// Exit 0 when no row was refused, 1 when at least one was or a digest could not be written, 2 on a
+// usage error. --record without --execute is a usage error because recording pins an observation this
+// run made: a dry run makes none, and a pinned value nobody observed is the failure this flag exists
+// to prevent.
+func runPlanAdmit(path string, execute bool, timeout time.Duration, only, record string) int {
+	recordIDs := admitIDs(record)
+	if len(recordIDs) > 0 && !execute {
+		fmt.Fprintln(os.Stderr, "plan admit: --record requires --execute: recording pins the observation this run makes, and a dry run makes none")
+		return 2
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "plan admit:", err)
+		return 1
+	}
+	ledgerRows := plan.Ledger(string(raw))
+	// A named row that does not exist is a mistake the user must see: without this, `--record ZZZ` is a
+	// silent no-op whose exit code depends only on the other rows, and `--only ZZZ` silently narrows to
+	// nothing. Both flags are checked against the ids the ledger actually carries.
+	for _, flag := range []struct {
+		name string
+		ids  []string
+	}{{"--only", admitIDs(only)}, {"--record", recordIDs}} {
+		if id := unknownID(flag.ids, ledgerRows); id != "" {
+			return ledgerIDError(flag.name, id, ledgerRows)
+		}
+	}
+	results := evidence.Admit(ledgerRows, evidence.Options{
+		Execute: execute,
+		Dir:     feedback.RepoRoot("."),
+		Timeout: timeout,
+		Only:    admitIDs(only),
+		Record:  recordIDs,
+	}, evidence.Deps{Run: runShell})
+
+	admitted, wouldRun, refused := 0, 0, 0
+	for _, r := range results {
+		switch r.Verdict {
+		case evidence.VerdictAdmitted:
+			admitted++
+			fmt.Printf("%s  %s  %s  %s  %d lines\n", r.ID, r.Verdict, r.Command, r.Digest, r.Lines)
+		case evidence.VerdictWouldRun:
+			wouldRun++
+			fmt.Printf("%s  %s  %s\n", r.ID, r.Verdict, r.Command)
+		default:
+			// A refusal prints the human sentence beside its machine reason, so a run that stops here
+			// still says what to change and what a caller can branch on.
+			refused++
+			fmt.Printf("%s  %s  %s  [%s]\n", r.ID, r.Verdict, r.Detail, r.Reason)
+		}
+	}
+
+	// Recording applies every edit to the document in memory and writes the file once, so a run that
+	// records three rows leaves one write. A splice that refuses aborts the whole write rather than
+	// skipping the row: a half-recorded ledger is the state this feature exists to prevent.
+	recording := map[string]bool{}
+	for _, id := range recordIDs {
+		recording[id] = true
+	}
+	doc, recorded := string(raw), 0
+	var recordedLines []string
+	for _, r := range results {
+		if r.Verdict != evidence.VerdictAdmitted || !recording[r.ID] {
+			continue
+		}
+		updated, err := plan.RecordDigest(doc, r.ID, r.Digest)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "plan admit:", err)
+			return 1
+		}
+		doc = updated
+		recorded++
+		recordedLines = append(recordedLines, fmt.Sprintf("%s  RECORDED  %s\n", r.ID, r.Digest))
+	}
+	if recorded > 0 {
+		info, err := os.Stat(path)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "plan admit:", err)
+			return 1
+		}
+		if err := os.WriteFile(path, []byte(doc), info.Mode().Perm()); err != nil {
+			fmt.Fprintln(os.Stderr, "plan admit:", err)
+			return 1
+		}
+	}
+	for _, line := range recordedLines {
+		fmt.Print(line)
+	}
+	fmt.Printf("%d rows: %d admitted, %d would run, %d refused, %d recorded\n", len(results), admitted, wouldRun, refused, recorded)
+	if refused > 0 {
+		return 1
+	}
+	return 0
+}
+
+// unknownID returns the first id in ids that names no ledger row, or "" when every id names one. An
+// empty list names nothing and is never a mistake.
+func unknownID(ids []string, rows []plan.LedgerRow) string {
+	if len(ids) == 0 {
+		return ""
+	}
+	known := make(map[string]bool, len(rows))
+	for _, row := range rows {
+		known[row.ID] = true
+	}
+	for _, id := range ids {
+		if !known[id] {
+			return id
+		}
+	}
+	return ""
+}
+
+// ledgerIDError reports an id a flag named that the ledger does not carry, and lists every id it does
+// carry, so a typo is a message on stderr and exit 2 instead of a silent narrowing.
+func ledgerIDError(flag, id string, rows []plan.LedgerRow) int {
+	ids := make([]string, 0, len(rows))
+	for _, row := range rows {
+		ids = append(ids, row.ID)
+	}
+	available := "(none)"
+	if len(ids) > 0 {
+		available = strings.Join(ids, ", ")
+	}
+	fmt.Fprintf(os.Stderr, "plan admit: %s names %q, which is not a row in the Evidence ledger; available ids: %s\n", flag, id, available)
+	return 2
+}
+
+// admitIDs turns --only's comma-separated list into the ids Admit narrows to. An empty list narrows
+// nothing, which is why the empty string and a list of blanks both come back empty.
+func admitIDs(csv string) []string {
+	var ids []string
+	for _, part := range strings.Split(csv, ",") {
+		if id := strings.TrimSpace(part); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+// runShell runs one admitted command through `sh -c`, so quoting, word splitting, and redirection
+// behave the way the ledger's shell commands intend, and points both streams at one buffer so the
+// observation is the single stream a row's digest is pinned against. This runs an arbitrary shell
+// command, which is exactly why the dry run is the default: --execute is the operator's decision. The
+// deadline is classified first, so a command killed by its own timeout is reported as a timeout and
+// never as a generic command failure.
+func runShell(ctx context.Context, dir, command string) (string, error) {
+	cmd := exec.CommandContext(ctx, "sh", "-c", command)
+	cmd.Dir = dir
+	var buf bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &buf, &buf
+	err := cmd.Run()
+	if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return buf.String(), fmt.Errorf("run %q: %w", command, context.DeadlineExceeded)
+	}
+	return buf.String(), err
 }
 
 // probeHook runs the wired Stop command the way Claude Code does, with an empty payload on

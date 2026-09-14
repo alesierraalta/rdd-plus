@@ -65,7 +65,7 @@ func Check(path string) ([]string, error) {
 		return nil, err
 	}
 	doc := string(raw)
-	var problems []string
+	problems := tableProblems(doc)
 
 	findings := section(doc, "Findings")
 	if findings == "" {
@@ -120,6 +120,190 @@ func Check(path string) ([]string, error) {
 		problems = append(problems, lightProblems...)
 	}
 	return problems, nil
+}
+
+// LedgerRow is one row of the Evidence ledger, with the cells a machine reads resolved by column name
+// rather than by position. `Admit` is the single command the row declares and `Digest` the output that
+// command was observed to produce; both are empty on a plan written before those columns existed.
+//
+// Cells and HeaderCells are the number of cells the row's line and its table's header hold as the
+// table splitter reads them. The two differ exactly when an unescaped `|` cut a cell, which shifts
+// every column to its right: a reader can then refuse the row instead of reading the wrong cell as the
+// command. Both are zero for a row a caller assembled by hand rather than read from a document.
+type LedgerRow struct {
+	ID           string
+	Claim        string
+	Executed     string
+	Admit        string
+	Inputs       string
+	Observed     string
+	Digest       string
+	Mutation     string
+	Reproduction string
+	Label        string
+	Cells        int
+	HeaderCells  int
+}
+
+// Ledger reads the Evidence ledger exactly where Check reads it and resolves every machine column by
+// name. Order is the document's; ID stays the first cell and Label the last, the same reading Check
+// does, so a row with extra or truncated cells is reported rather than silently dropped. Rows the table
+// already skips, a separator or a placeholder row, stay skipped.
+func Ledger(doc string) []LedgerRow {
+	rows, header := table(section(doc, "Evidence ledger"))
+	if header == nil {
+		return nil
+	}
+	// Column names are matched by substring, so each name below is the whole word the header cell
+	// carries and shares it with no other column: `admit` never resolves to `Executed` and `digest`
+	// never resolves to `Observed` or to the mutation column.
+	index := map[string]int{}
+	for _, name := range []string{"claim", "executed", "admit", "inputs", "observed", "digest", "mutation", "reproduction"} {
+		index[name] = columnIndex(header, name)
+	}
+	ledger := make([]LedgerRow, 0, len(rows))
+	for _, row := range rows {
+		r := LedgerRow{ID: cell(row, 0), Label: cell(row, len(row)-1), Cells: len(row), HeaderCells: len(header)}
+		for _, f := range []struct {
+			name  string
+			field *string
+		}{
+			{"claim", &r.Claim},
+			{"executed", &r.Executed},
+			{"admit", &r.Admit},
+			{"inputs", &r.Inputs},
+			{"observed", &r.Observed},
+			{"digest", &r.Digest},
+			{"mutation", &r.Mutation},
+			{"reproduction", &r.Reproduction},
+		} {
+			*f.field = cell(row, index[f.name])
+		}
+		ledger = append(ledger, r)
+	}
+	return ledger
+}
+
+// digestRe is the only shape a recorded digest may take: it is exactly what Digest returns, so a
+// recorded cell is always comparable to a fresh observation and a typo can never be pinned.
+var digestRe = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+
+// RecordDigest returns doc with the named ledger row's Digest cell replaced by digest, every other
+// byte of the document unchanged. It is the one writer in this package: Check, Ledger and Gaps only
+// read, so this is where a wrong splice could corrupt a plan.
+//
+// The ledger is located exactly where Check and Ledger locate it, and the Digest column is resolved by
+// the same substring match Ledger resolves it with, so the writer and the readers can never disagree
+// about which column is which. The row is found by its first cell and the cell is spliced by byte
+// offset: a row may carry a backslash-escaped pipe in any cell, so the cell is cut where split cuts it
+// rather than by re-rendering the row, which would rewrite escapes and spacing nobody asked to touch.
+// Recording the digest a cell already holds is a no-op, so a rerun rewrites nothing.
+func RecordDigest(doc, id, digest string) (string, error) {
+	if !digestRe.MatchString(digest) {
+		return "", fmt.Errorf("digest %q is not a sha256 digest: a Digest cell carries sha256:<64 lowercase hex>, the form a fresh observation takes", digest)
+	}
+	start, end, ok := sectionBounds(doc, "Evidence ledger")
+	if !ok {
+		return "", fmt.Errorf("the document has no Evidence ledger section, so there is no row %s to record", id)
+	}
+	body := doc[start:end]
+	_, header := table(body)
+	if header == nil {
+		return "", fmt.Errorf("the Evidence ledger section holds no table, so there is no row %s to record", id)
+	}
+	iDigest := columnIndex(header, "digest")
+	if iDigest < 0 {
+		return "", fmt.Errorf("the Evidence ledger header names no Digest column, so row %s has nowhere to record %s", id, digest)
+	}
+
+	// The section's own lines are walked the way table walks them, so the row a reader sees is the row
+	// this writes, and the offset in doc is carried alongside so the splice never re-joins cells.
+	seenHeader := false
+	lineStart := start
+	for _, line := range strings.Split(body, "\n") {
+		t := strings.TrimSpace(line)
+		if !strings.HasPrefix(t, "|") {
+			if seenHeader {
+				break
+			}
+			lineStart += len(line) + 1
+			continue
+		}
+		cells := split(t)
+		if !seenHeader {
+			seenHeader = true
+			lineStart += len(line) + 1
+			continue
+		}
+		if isSeparator(cells) || len(cells) == 0 || placeholder.MatchString(cell(cells, 0)) {
+			lineStart += len(line) + 1
+			continue
+		}
+		if cell(cells, 0) != id {
+			lineStart += len(line) + 1
+			continue
+		}
+		cs, ce, ok := cellSpan(line, iDigest)
+		if !ok {
+			// cellSpan cuts the cells split cuts, so the Digest column has no cell exactly when the row
+			// is shorter than it: one refusal, not two spellings of the same fact.
+			return "", fmt.Errorf("evidence %s has %d cells, so the Digest column (%d) has no cell in that row; restore it before recording", id, len(cells), iDigest)
+		}
+		// Replace the cell's own bytes and nothing else: a cell that holds a value keeps the spacing its
+		// author wrote around it, so a rerun with the same digest is byte-identical. A cell that holds no
+		// value has no spacing around a value to keep, so the digest is framed by one space and the row
+		// still reads as a table row instead of colliding with the next pipe.
+		raw := line[cs:ce]
+		content := strings.TrimSpace(raw)
+		if content == "" {
+			if raw == "" {
+				return doc[:lineStart+cs] + digest + doc[lineStart+ce:], nil
+			}
+			return doc[:lineStart+cs] + " " + digest + " " + doc[lineStart+ce:], nil
+		}
+		first := lineStart + cs + strings.Index(raw, content)
+		return doc[:first] + digest + doc[first+len(content):], nil
+	}
+	return "", fmt.Errorf("evidence %s is not a row in the Evidence ledger, so the plan has nothing to record against", id)
+}
+
+// cellSpan returns the byte span one cell occupies in a markdown table row, cut exactly where split
+// cuts it, so RecordDigest can splice a single cell instead of re-rendering the row. A backslash-
+// escaped pipe is part of its cell, never a delimiter.
+func cellSpan(line string, i int) (start, end int, ok bool) {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return 0, 0, false
+	}
+	base := strings.Index(line, trimmed)
+	inner := trimmed
+	if strings.HasSuffix(inner, "|") {
+		inner = inner[:len(inner)-1]
+	}
+	if strings.HasPrefix(inner, "|") {
+		inner = inner[1:]
+		base++
+	}
+	cellStart, n := 0, 0
+	escaped := false
+	for j := 0; j < len(inner); j++ {
+		switch c := inner[j]; {
+		case escaped:
+			escaped = false
+		case c == '\\':
+			escaped = true
+		case c == '|':
+			if n == i {
+				return base + cellStart, base + j, true
+			}
+			n++
+			cellStart = j + 1
+		}
+	}
+	if n == i {
+		return base + cellStart, base + len(inner), true
+	}
+	return 0, 0, false
 }
 
 // LightActivated reports whether a plan declares a scoped run that passes every Light-specific rule.
@@ -208,24 +392,105 @@ func unscopedLayers(doc string) []string {
 
 // section returns the body under "## <name>" up to the next level-2 heading.
 func section(doc, name string) string {
+	start, end, ok := sectionBounds(doc, name)
+	if !ok {
+		return ""
+	}
+	return doc[start:end]
+}
+
+// sectionBounds returns the byte range the body under "## <name>" occupies in doc, up to the next
+// level-2 heading. The heading is matched exactly as section matched it, so the one locator serves both
+// the readers and the writer: RecordDigest needs the offset, and Check and Ledger need only the text.
+func sectionBounds(doc, name string) (start, end int, ok bool) {
 	lines := strings.Split(doc, "\n")
-	start := -1
+	heading := -1
 	for i, l := range lines {
 		t := strings.TrimSpace(l)
 		if strings.HasPrefix(t, "## ") && strings.EqualFold(strings.TrimSpace(strings.TrimPrefix(t, "## ")), name) {
-			start = i + 1
+			heading = i
 			break
 		}
 	}
-	if start < 0 {
-		return ""
+	if heading < 0 {
+		return 0, 0, false
 	}
-	for i := start; i < len(lines); i++ {
+	start = len(strings.Join(lines[:heading+1], "\n")) + 1
+	if start > len(doc) {
+		start = len(doc)
+	}
+	end = len(doc)
+	for i := heading + 1; i < len(lines); i++ {
 		if strings.HasPrefix(strings.TrimSpace(lines[i]), "## ") {
-			return strings.Join(lines[start:i], "\n")
+			end = len(strings.Join(lines[:i], "\n"))
+			break
 		}
 	}
-	return strings.Join(lines[start:], "\n")
+	if end < start {
+		end = start
+	}
+	return start, end, true
+}
+
+// tableProblems reports every data row in the document whose cell count disagrees with its own table's
+// header. A cell holding an unescaped `|` splits into several, so the row declares one thing and carries
+// another, and every column to the right of the cut is read from the wrong cell. Each malformed row earns
+// one breach, not one per extra cell. The rows table already skips, a separator or a placeholder, are
+// skipped here too, so nothing is said about a line that is not a conclusion.
+func tableProblems(doc string) []string {
+	var problems []string
+	name := ""
+	var header []string
+	for _, line := range strings.Split(doc, "\n") {
+		t := strings.TrimSpace(line)
+		if h, ok := headingName(t); ok {
+			name, header = h, nil
+			continue
+		}
+		if !strings.HasPrefix(t, "|") {
+			header = nil
+			continue
+		}
+		cells := split(t)
+		if header == nil {
+			header = cells
+			continue
+		}
+		if isSeparator(cells) || len(cells) == 0 || placeholder.MatchString(cell(cells, 0)) {
+			continue
+		}
+		if len(cells) != len(header) {
+			problems = append(problems, cellCountBreach(name, cell(cells, 0), len(cells), len(header)))
+		}
+	}
+	return problems
+}
+
+// headingName returns the text of a markdown heading line and whether the line is a heading at all. A `#`
+// that is not followed by a space is a tag, not a heading, so the two never read as each other.
+func headingName(t string) (string, bool) {
+	level := 0
+	for level < len(t) && t[level] == '#' {
+		level++
+	}
+	if level == 0 || level > 6 || level == len(t) || t[level] != ' ' {
+		return "", false
+	}
+	return strings.TrimSpace(t[level:]), true
+}
+
+// cellCountBreach is the one breach a malformed row earns: it names the table, the row's first cell so the
+// reader can find it, and both counts, then says plainly what the mismatch means. A row with more cells
+// was cut by an unescaped `|`; a row with fewer is simply missing one.
+func cellCountBreach(table, first string, cells, header int) string {
+	where := "an unnamed table"
+	if table != "" {
+		where = "the " + table + " table"
+	}
+	if cells > header {
+		return fmt.Sprintf("%s row %q has %d cells against the header's %d: an unescaped `|` splits a cell, so the row carries more than it declares", where, first, cells, header)
+	}
+	return fmt.Sprintf("%s row %q has %d cells against the header's %d: a cell is missing, so the row carries less than it declares", where, first, cells, header)
 }
 
 // table returns the data rows and the header of the first markdown table in a section.
