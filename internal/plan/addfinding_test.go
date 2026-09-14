@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -159,5 +161,103 @@ func TestAddFindingWritesNoEvidenceLedgerRow(t *testing.T) {
 	}
 	if want, have := strings.Join(before[bh:be], "\n"), strings.Join(after[ah:ae], "\n"); want != have {
 		t.Fatalf("the Evidence ledger moved:\nbefore:\n%s\nafter:\n%s", want, have)
+	}
+}
+
+// setUserCacheDir points the per-user cache at dir for this process, so the plan lock directory under test is a
+// test-owned one rather than the developer's real cache.
+func setUserCacheDir(t *testing.T, dir string) {
+	t.Helper()
+	t.Setenv("XDG_CACHE_HOME", dir)
+	t.Setenv("LocalAppData", dir)
+	t.Setenv("HOME", dir)
+}
+
+// Simultaneous calls used to lose rows: each one read the document, built its candidate and wrote it into place,
+// so the losers were overwritten by the last write — and the plan still checked as `well formed`, which is what
+// made the loss silent. The read, the validation and the write are one critical section held across processes,
+// so every call's distinct id survives to the checker.
+func TestAddFindingSerialisesConcurrentCalls(t *testing.T) {
+	dir := t.TempDir()
+	p := write(t, dir, "plan.md", addPlan())
+	setUserCacheDir(t, t.TempDir())
+	// The same plan reached through a relative and an absolute path is one file, so it has to be one lock: a lock
+	// keyed on the spelling rather than on the file would serialise neither spelling against the other.
+	t.Chdir(dir)
+
+	ids := []string{"F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12"}
+	start := make(chan struct{})
+	errs := make([]error, len(ids))
+	var wg sync.WaitGroup
+	for i, id := range ids {
+		wg.Add(1)
+		go func(i int, id string) {
+			defer wg.Done()
+			<-start
+			f := openFinding()
+			f.ID = id
+			path := p
+			if i%2 == 1 {
+				path = filepath.Base(p)
+			}
+			_, errs[i] = AddFinding(path, f)
+		}(i, id)
+	}
+	close(start)
+	wg.Wait()
+
+	for i, id := range ids {
+		if err := errs[i]; err != nil {
+			t.Fatalf("call %d adding %s: %v", i, id, err)
+		}
+	}
+	got, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range ids {
+		if n := strings.Count(string(got), "| "+id+" |"); n != 1 {
+			t.Fatalf("finding %s appears %d times, want exactly once:\n%s", id, n, got)
+		}
+	}
+	if problems := CheckDocument(string(got)); len(problems) != 0 {
+		t.Fatalf("a plan every concurrent call contributed to is not well formed: %v", problems)
+	}
+	// The command writes findings only, however many callers ran at once: the ledger keeps the row it had.
+	if ledger := scanSection(strings.Split(string(got), "\n"), "Evidence ledger"); len(ledger.rows) != 1 {
+		t.Fatalf("the Evidence ledger has %d rows, want the one already there", len(ledger.rows))
+	}
+	// The lock lives outside the repository and the write leaves nothing behind: the plan's own directory holds
+	// the plan and nothing else.
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := make([]string, len(entries))
+	for i, e := range entries {
+		names[i] = e.Name()
+	}
+	if len(names) != 1 || names[0] != "plan.md" {
+		t.Fatalf("the plan directory must hold the plan alone, found %v", names)
+	}
+}
+
+// The write replaces the destination through a temp file and a rename, and the temp file carries whatever mode
+// it was created with. A plan an operator tightened to 0600 must not come back 0644: the write has no licence
+// to widen a file nobody asked it to widen.
+func TestAddFindingKeepsThePlanMode(t *testing.T) {
+	p := write(t, t.TempDir(), "plan.md", addPlan())
+	if err := os.Chmod(p, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AddFinding(p, openFinding()); err != nil {
+		t.Fatalf("AddFinding: %v", err)
+	}
+	info, err := os.Stat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("the plan was written mode %o, want the 600 the operator set", perm)
 	}
 }

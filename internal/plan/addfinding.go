@@ -1,9 +1,12 @@
 package plan
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -35,9 +38,44 @@ type Finding struct {
 // AddFinding writes one Findings row into the plan at path and returns the 1-based line it landed on. Every
 // refusal leaves the file byte-identical: the candidate is held to CheckDocument — the rules `plan check`
 // runs — before a single byte moves.
-func AddFinding(path string, f Finding) (int, error) { return addFinding(path, f) }
+//
+// The whole read, validation and write runs under one lock keyed on the plan's canonical path, so two callers
+// — two processes as much as two goroutines — queue behind each other instead of each writing a candidate built
+// from the same stale read. Without it the last write wins: every other row vanishes from a plan that still
+// checks as `well formed`, which is exactly how the loss stayed silent.
+//
+// The path is canonicalised once, before anything else: a plan reached through a symlink is the file the link
+// names, and every spelling of one plan — relative, absolute, a symlink, a file under a symlinked directory —
+// has to reach the same lock and the same bytes. Writing through the spelling instead replaced the link with a
+// regular file and left the real plan untouched.
+func AddFinding(path string, f Finding) (int, error) {
+	target := canonicalPath(path)
+	lock, err := lockPlan(target)
+	if err != nil {
+		return 0, err
+	}
+	defer unlockPlan(lock)
+	return addFinding(target, f)
+}
 
-// addFinding is the read, validate and insert transaction; it returns before the write on every refusal.
+// canonicalPath turns any spelling of a plan into the path of the file itself: absolute, and with every symlink
+// resolved. EvalSymlinks needs every element to exist, which a plan the operator is about to create does not, so
+// it is best effort — the absolute spelling is what remains, and the read that follows reports a plan that is
+// not there.
+func canonicalPath(path string) string {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		abs = path
+	}
+	if real, err := filepath.EvalSymlinks(abs); err == nil {
+		return real
+	}
+	return abs
+}
+
+// addFinding is the transaction AddFinding holds the plan's lock across. The read, the candidate and the write
+// are one critical section: a candidate built from a document another writer has already replaced is a row that
+// never lands, whatever the checker later says about the file.
 func addFinding(path string, f Finding) (int, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -103,7 +141,7 @@ func addFinding(path string, f Finding) (int, error) {
 	if problems := CheckDocument(candidate); len(problems) > 0 {
 		return 0, fmt.Errorf("the row would not pass plan check: %s; the plan is unchanged", strings.Join(problems, "; "))
 	}
-	if err := os.WriteFile(path, []byte(candidate), 0o644); err != nil {
+	if err := writePlan(path, candidate); err != nil {
 		return 0, err
 	}
 	return after + 1, nil
@@ -233,4 +271,107 @@ func insertLine(lines []string, at int, row string) []string {
 	out = append(out, lines[:at]...)
 	out = append(out, row)
 	return append(out, lines[at:]...)
+}
+
+// lockPlan takes the exclusive lock that serializes every write to the plan at path and returns it.
+//
+// It is an advisory lock on a file in the user's own cache directory, keyed on the plan's canonical absolute
+// path, so every spelling of one plan is one lock. A lock is released by the kernel when the process holding it
+// exits, so a writer that crashes mid-transaction leaves no stale lock behind; a directory or PID file would
+// have to guess whether the owner is still alive, and guessing wrong blocks every later call forever. The lock
+// file is deliberately not in the repository and is never unlinked: removing a lock another process may already
+// be waiting on is how two writers end up holding two different files for one plan.
+//
+// A lock that cannot be taken is an error, never a silent write without it: an unserialized write is the lost
+// row this lock exists to prevent.
+func lockPlan(path string) (*os.File, error) {
+	name, err := planLockPath(canonicalPath(path))
+	if err != nil {
+		return nil, err
+	}
+	file, err := os.OpenFile(name, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := lockFile(file); err != nil {
+		file.Close()
+		return nil, err
+	}
+	return file, nil
+}
+
+// planLockPath is the file every writer of the plan at key locks: one name per canonical path, inside the
+// per-user lock root. Two processes reach the same file only when they derive the same name, and the name
+// depends on nothing but the plan.
+func planLockPath(key string) (string, error) {
+	root, err := lockRoot()
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256([]byte(key))
+	return filepath.Join(root, "rdd-plus-plan-"+hex.EncodeToString(sum[:])+".lock"), nil
+}
+
+// lockRoot is the private per-user directory the plan locks live in, and it is deliberately not os.TempDir().
+// A temporary directory is per-process configuration: two writers of one plan started with different TMPDIR
+// values took two locks on two different files, so neither waited for the other, every writer reported success,
+// and every row but the last was erased. A directory under the user's cache is the same directory for every
+// process of that user, whichever TMPDIR it was handed.
+//
+// The directory is created 0700 and re-tightened if it already exists, so lock names held in it are not
+// something another user can watch or replace. A root that cannot be resolved or created is an error: there is
+// no fallback that writes the plan without serialization, because that write is the defect.
+func lockRoot() (string, error) {
+	base, err := os.UserCacheDir()
+	if err != nil {
+		return "", fmt.Errorf("the plan lock needs a per-user directory that no TMPDIR changes, and none is available (%w): refusing to write without serialization", err)
+	}
+	root := filepath.Join(base, "rdd-plus", "plan-locks")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return "", fmt.Errorf("the plan lock directory %s could not be created (%w): refusing to write without serialization", root, err)
+	}
+	if err := os.Chmod(root, 0o700); err != nil {
+		return "", fmt.Errorf("the plan lock directory %s could not be made private (%w): refusing to write without serialization", root, err)
+	}
+	return root, nil
+}
+
+// unlockPlan releases the lock AddFinding held, and closes it every time the lock was taken — the write path's
+// defer, so a refusal on the read or on the candidate gives the lock back. The unlock is best effort: closing
+// the descriptor releases the lock anyway, and the kernel releases whatever a process still holds when it exits.
+func unlockPlan(file *os.File) {
+	_ = unlockFile(file)
+	_ = file.Close()
+}
+
+// writePlan replaces path through a temp file in its own directory and a rename, so a reader never sees a
+// half-written plan and a crash leaves either the old file or the new one. The mode is the plan's own: replacing
+// the destination inode must not widen a file the operator tightened, and a plan created through `plan init`
+// keeps the 0644 it was written with. File content durability across a power loss is a separate decision (an
+// fsync before the rename) and is deliberately not taken here.
+func writePlan(path, body string) error {
+	mode := os.FileMode(0o644)
+	if info, err := os.Stat(path); err == nil {
+		mode = info.Mode().Perm()
+	}
+	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	_, err = f.WriteString(body)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Chmod(tmp, mode)
+	}
+	if err == nil {
+		err = os.Rename(tmp, path)
+	}
+	if err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return nil
 }
