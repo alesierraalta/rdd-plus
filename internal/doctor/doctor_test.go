@@ -121,6 +121,26 @@ func TestDoctorOptionalCapabilityDegradesExplicitly(t *testing.T) {
 	}
 }
 
+// The sandbox is the one flow that needs a container runtime, and a machine without docker has to learn
+// that from doctor rather than from a row that ran on this machine. The tool is optional, so its absence is
+// a degradation and never a problem: the plan's rows still run, they just run unconfined.
+func TestDoctorSaysHowTheSandboxDegradesWithoutDocker(t *testing.T) {
+	cfg := synced(t)
+	noDocker := func(name string) (string, error) {
+		if name == "docker" {
+			return "", errors.New("not found")
+		}
+		return allPresent(name)
+	}
+	r := Run(cfg, noDocker)
+	if !r.Healthy {
+		t.Fatalf("an optional tool must not fail the verdict: %v", r.Problems)
+	}
+	if !strings.Contains(r.String(), "--sandbox") {
+		t.Fatal("report should say that plan admit --sandbox degrades without docker")
+	}
+}
+
 func TestDoctorJSONShape(t *testing.T) {
 	r := Run(synced(t), allPresent)
 	raw, err := json.Marshal(r)

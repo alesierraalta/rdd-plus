@@ -53,6 +53,7 @@ var capabilities = []Capability{
 	{Name: "claude", Degrades: "the eval harness cannot drive sessions"},
 	{Name: "node", Degrades: "fixtures that use node:test cannot run"},
 	{Name: "python3", Degrades: "the eval harness and seed-mutants (still Python) cannot run"},
+	{Name: "docker", Degrades: "plan admit --sandbox has no container to observe in, so a sandbox pin cannot be checked and a mutation cannot be replayed"},
 	{Name: "codegraph", Degrades: "inventory falls back to git ls-files plus grep"},
 	{Name: "rtk", Degrades: "shell output is not compacted; nothing else changes"},
 	{Name: "gentle-ai", Degrades: "no native review lifecycle; receipts are never emitted"},

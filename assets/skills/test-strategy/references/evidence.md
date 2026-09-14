@@ -57,7 +57,9 @@ findings. This contract applies to every testing skill routed by `test-strategy`
    mismatch that would say nothing about why. Only a row that carries a pin has a mode to compare: a row
    with no digest was never pinned anywhere, so it is refused for the missing pin rather than told it was
    pinned in one. `--sandbox` observes each command in a container with the tree mounted read-only and no
-   network: a row that tries to write is refused, and the write never reaches the machine. Recording writes
+   network: a row that tries to write is refused, and the write never reaches the machine. That mode needs
+   docker and the image it names (pulled on first use, a few hundred MB), and a machine without either is a
+   refusal (`sandbox-misconfigured`) rather than a silent fall back to this machine. Recording writes
    the digest and the mode together, because one without the other is not a checkable record.
 10. **A falsifiability claim is a value, not a sentence.** The optional `Mutate` cell holds
     `<old> => <new> @ <path>:<line>`: one textual edit, whose old text must occur exactly once in that file and
