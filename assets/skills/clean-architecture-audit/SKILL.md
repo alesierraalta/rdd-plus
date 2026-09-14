@@ -1,6 +1,6 @@
 ---
 name: clean-architecture-audit
-description: "Trigger: clean architecture, architecture audit, layer conformance, mutation testing, cognitive complexity, code health, AST linting. Enforce architectural boundaries and code maintainability."
+description: "Trigger: clean architecture, architecture audit, layer conformance, mutation testing, cognitive complexity, duplicated logic, code health, AST linting. Enforce architectural boundaries and code maintainability."
 license: Apache-2.0
 metadata:
   author: gentleman-programming
@@ -17,9 +17,9 @@ NOT for: strategic test allocation (`test-strategy`), pruning excessive tests (`
 
 When invoked by `test-strategy` in PLAN mode: do not execute. Return target rows for the plan:
 target (package, module, or symbol) · check (layer boundary, cycle, domain isolation, unearned
-interface, survived mutants on high-risk logic, complexity hotspot, swallowed error) · target
-depth · consequence class · why. Cover every check this skill would run on this codebase,
-including cheap static ones (dependency-cruiser / depguard / archon run, complexity scan).
+interface, survived mutants on high-risk logic, complexity hotspot, duplicated logic, swallowed
+error) · target depth · consequence class · why. Cover every check this skill would run on this
+codebase, including cheap static ones (dependency-cruiser / depguard / archon run, complexity scan).
 
 ## Hard Rules
 
@@ -27,10 +27,11 @@ including cheap static ones (dependency-cruiser / depguard / archon run, complex
 2. **Domain isolation is non-negotiable**: the domain core never imports web frameworks, ORMs, or network clients. Infrastructure depends on domain, never the reverse.
 3. **No unearned interfaces**: one production implementation and no process boundary → delete the interface, depend on the concrete type.
 4. **Behavioral testing over line coverage**: for selected high-risk domain logic use incremental mutation when meaningful; classify survivors (equivalent, unexecuted, flaky, timeout, tooling-invalid) instead of treating each as a gap.
-5. **Cognitive complexity signal**: interpret each function against a target-owned/configured threshold with recorded provenance and tolerance; without a target threshold, report a hotspot, not a blocker ([references/conformance-and-complexity.md](references/conformance-and-complexity.md)).
+5. **Cognitive complexity signal**: interpret each function against the target's configured threshold with recorded provenance and tolerance; when the target configures none, the package default of 15 defined in [references/conformance-and-complexity.md](references/conformance-and-complexity.md) applies, and it can only reach WARNING (never a blocker).
 6. **No silent error swallowing**: empty `catch`, `except: pass`, uninspected `?? []`, ignored Go errors are defects.
 7. **Evidence**: every finding carries an executed evidence record per `~/.claude/skills/test-strategy/references/evidence.md` (the conformance run, mutation run, or analyzer output); no finding from reading alone.
 8. **Stale comment audit**: a comment contradicting the code it annotates is a finding (`~/.claude/skills/test-strategy/references/comments.md`).
+9. **One invariant, one implementation**: duplicated logic is a maintainability finding, not a correctness one; report every live `path:line` site, then establish which copy actually runs with the clone procedure owned by `implementation-theater` — compare the two bodies, diff their divergence, and check which one the call graph reaches. Consolidate to one implementation, or keep the divergence and record it with the Hard Rule 7 evidence record that shows the two copies cannot disagree.
 
 ## Decision Gates
 
@@ -40,21 +41,23 @@ including cheap static ones (dependency-cruiser / depguard / archon run, complex
 | Circular dependency ($|SCC| > 1$) | **BLOCKER** | Break the cycle: shared value object, domain events, or inverted dependency. |
 | Interface with one implementation (non-I/O) | **THEATER** | Remove the interface; inject the concrete class. |
 | High-risk domain logic with survived mutants | **WARNING** | Add the behavioral assertion that kills the exact survivor. |
-| Complexity above a configured threshold | **WARNING** | Guard clauses or extracted sub-functions; report threshold provenance. No threshold → hotspot only. |
+| Complexity above a configured threshold or the default 15 | **WARNING** | Guard clauses or extracted sub-functions; report threshold provenance (configured, or the package default 15). |
 | Complexity above a configured critical limit | **BLOCKER** | Redesign before merge; same provenance report. |
+| One invariant implemented twice across two live sites | **WARNING** | Name both `path:line` sites; establish which copy runs, then consolidate to one implementation, or keep the divergence with the Hard Rule 7 evidence record that shows the two copies cannot disagree. |
 | Mock asserting only on its own return values | **THEATER** | Real in-memory collaborator, or drop to integration test. |
 | Empty catch or swallowed exception | **BLOCKER** | Log, handle explicitly, or rethrow a domain exception. |
 
 ## Execution Steps
 
 1. **Static conformance**: run layer boundary checks (`pytest tests/test_architecture.py`, `npx depcruise`, `golangci-lint` with `depguard`); verify zero framework imports in the domain and an acyclic graph.
-2. **Cognitive complexity audit** on the symbols in the diff; flag against the configured threshold; remove nesting with early returns.
+2. **Cognitive complexity audit** on the symbols in the diff; flag against the target's configured threshold, or the package default of 15 when it configures none; remove nesting with early returns.
 3. **Targeted incremental mutation** when risk-appropriate: `stryker --since origin/main` or `mutmut run --paths-to-mutate <changed_domain_files>`; classify each survivor; use contract/invariant, negative-control, differential, metamorphic, or observed-state evidence when mutation is not meaningful.
 4. **Theater audit**: use cases orchestrate and enforce invariants rather than pass through; remove 1:1 DTOs that add no filtering or transformation.
+5. **Duplication audit** on the symbols in the diff: look for one invariant implemented twice (CodeGraph callers, similarity search), then establish which copy runs with the clone procedure owned by `implementation-theater`; consolidate, or keep the divergence with the Hard Rule 7 evidence record that shows the two copies cannot disagree.
 
 ## Output Contract
 
-Report: architectural violations (file, line, rule) · mutation evidence (candidate gaps and classified survivors, with follow-up evidence) · complexity hotspots (symbol, score, threshold or explicit no-threshold, provenance, nesting breakdown, refactoring diff) · theater and accidental indirection to prune · the evidence record per finding. RDD receipt when required: [references/rdd-receipt.md](references/rdd-receipt.md).
+Report: architectural violations (file, line, rule) · mutation evidence (candidate gaps and classified survivors, with follow-up evidence) · complexity hotspots (symbol, score, threshold used and its provenance, nesting breakdown, refactoring diff) · duplication findings (every live site, which copy runs, consolidated, or kept with its evidence record) · theater and accidental indirection to prune · the evidence record per finding. RDD receipt when required: [references/rdd-receipt.md](references/rdd-receipt.md).
 
 ## References
 

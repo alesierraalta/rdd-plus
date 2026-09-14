@@ -25,9 +25,9 @@ Quantifies human mental effort. It penalizes nesting levels geometrically:
 - Level 2 `if` (nested inside `if` inside `for`): +3 (1 base + 2 nesting penalty)
 
 ### Conditional Interpretation:
-- Compare scores only with a target-owned/configured threshold or band appropriate to the language, analyzer, and version.
-- Report threshold provenance, sample and measurement conditions, tolerance, rationale, and owner alongside the score and nesting breakdown.
-- If no target threshold exists, report the score as a maintainability hotspot/limitation rather than an automatic warning or blocker; a configured critical limit may block and requires the same provenance.
+- Compare the score against the target's configured threshold or band, appropriate to the language, analyzer, and version; when the target configures none, compare it against the package default of 15.
+- Report the threshold in use and its provenance (target-configured, or the package default of 15), with the sample, measurement conditions, tolerance, rationale, and owner, alongside the score and nesting breakdown.
+- Three outcomes, one per score: above the threshold in use → WARNING; above a configured critical limit → BLOCKER; at or below the threshold in use → no classification, reported with the score and its nesting breakdown. A target that configures no critical limit has no BLOCKER outcome.
 
 ---
 
