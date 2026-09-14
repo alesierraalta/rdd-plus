@@ -32,6 +32,7 @@ directory and `--dry-run` to see the plan.
 | `rdd-plus sync` | Installs the embedded skills and wires the gate. Idempotent. |
 | `rdd-plus doctor` | Reports installed skills (and whether they drift from the embedded version), whether the hook is wired, and which optional tools are on PATH with what degrades without each. `--json` for machines. Exit 1 when git, a skill, or the hook is missing. |
 | `rdd-plus plan` | Writes the plan skeleton, checks the contract, names the breadth still owed, and records one Findings row from flags. `add-finding` writes that row only: it refuses a row the checker would reject and never writes an evidence row. |
+| `rdd-plus plan admit` | Reads the plan's Evidence ledger and decides every row. A dry run by default: `--execute` runs each admitted row's one command through `sh -c` twice, so a pin is only recorded over an output that held still, `--sandbox` observes it in a container with the tree mounted read-only and no network (it needs docker, and the default image is pulled on first use) and replays a declared `Mutate` edit against a writable copy of the tree, where the command must go red under the edit and green once the file is put back, `--only <ids>` narrows the run, `--timeout` bounds one command, and `--record <ids>` writes the observed digest into the plan together with the mode it was observed in. Exit 1 when a row is refused. |
 | `rdd-plus feedback` | Records one honest process report about the testing method itself, or reads the reports back. `--template` prints a fillable skeleton, `--file <path>` records it, `--summary` (the default) answers whether the method is earning its keep. |
 | `rdd-plus version` | Prints the version. |
 
@@ -81,9 +82,8 @@ original Node hook when `node` and `~/.claude/hooks/testing-gate.mjs` are presen
 - The eval harness (`assets/skills/test-strategy/evals/run_evals.py`, `selftest.py`) and the
   calibration tools (`assets/skills/test-strategy/assets/seed-mutants.py`, `fingerprint.sh`) are
   still Python and shell. They will become subcommands.
-- Deterministic admission of evidence (re-executing a ledger row's command and re-applying its
-  mutation before a finding is accepted), plan validation, and `status --next-transition` are the
-  next binaries.
+- Replaying a ledger row's mutation before a finding is accepted, and `status --next-transition`,
+  are the next binaries.
 
 ## Plan
 

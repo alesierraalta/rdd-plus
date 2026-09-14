@@ -48,6 +48,19 @@ func TestInitWritesTheTemplateAndRefusesToOverwrite(t *testing.T) {
 	}
 }
 
+// replaceFixture splices row in after the exact template literal old. A bare strings.Replace over a
+// template literal has no guard of its own: when the shipped template drifts, the Replace no-ops and
+// the test goes vacuously green while asserting nothing. This fails loudly instead, naming the drift
+// and the fixture that has to follow it.
+func replaceFixture(t *testing.T, doc, what, old, row string) string {
+	t.Helper()
+	out := strings.Replace(doc, old, old+row, 1)
+	if out == doc {
+		t.Fatalf("the template drifted: %s no longer holds the literal this fixture splices into, so the fixture must be updated to track the template (literal was %q)", what, old)
+	}
+	return out
+}
+
 func TestCheckAcceptsACompliantPlan(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "plan.md")
@@ -55,14 +68,15 @@ func TestCheckAcceptsACompliantPlan(t *testing.T) {
 		t.Fatal(err)
 	}
 	body, _ := os.ReadFile(p)
-	plan := strings.Replace(string(body),
+	plan := replaceFixture(t, string(body), "the Findings header",
 		"| Id | Finding (path:line, one line) | Severity (consequence class) | Data safe? | Evidence id | Pinning test (suite path :: test name) | Status | Verdict by / date | Reason | Cited-files fingerprint at verdict |\n|---|---|---|---|---|---|---|---|---|---|\n",
-		"| Id | Finding (path:line, one line) | Severity (consequence class) | Data safe? | Evidence id | Pinning test (suite path :: test name) | Status | Verdict by / date | Reason | Cited-files fingerprint at verdict |\n|---|---|---|---|---|---|---|---|---|---|\n"+
-			"| F1 | `src/a.js:5` drops a quoted comma | data loss | yes | E1 | tests/a.test.js :: keeps a quoted comma | fixed | me / 2026-09-10 | - | abc123 |\n", 1)
-	plan = strings.Replace(plan,
-		"| Id | Claim | Executed | Inputs and parameters | Observed | Mutation or negative control → result | Reproduction | Label (`observado` / `razonado`, literal) |\n|---|---|---|---|---|---|---|---|\n",
-		"| Id | Claim | Executed | Inputs and parameters | Observed | Mutation or negative control → result | Reproduction | Label (`observado` / `razonado`, literal) |\n|---|---|---|---|---|---|---|---|\n"+
-			"| E1 | it drops the comma | `node --test` | `a,\"b,c\"` | 3 fields | reverted → red | same input | observado |\n", 1)
+		"| F1 | `src/a.js:5` drops a quoted comma | data loss | yes | E1 | tests/a.test.js :: keeps a quoted comma | fixed | me / 2026-09-10 | - | abc123 |\n")
+	plan = replaceFixture(t, plan, "the Evidence ledger header",
+		"| Id | Claim | Executed | Admit | Inputs and parameters | Observed | Digest | Normalize | Mode | Mutate | Mutation or negative control → result | Reproduction | Label (`observado` / `razonado`, literal) |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|\n",
+		"| E1 | it drops the comma | `node --test` | node --test | `a,\"b,c\"` | 3 fields | sha256:7eada7a897497315d39d2541f5058a9631e80828245781b3c9c96205d9d759ed | | | | reverted → red | same input | observado |\n")
+	if plan == string(body) {
+		t.Fatal("the fixture replaced nothing, so this test would read the untouched template as a compliant plan")
+	}
 	if err := os.WriteFile(p, []byte(plan), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -121,6 +135,63 @@ func TestCheckNamesEveryContractBreach(t *testing.T) {
 			}
 			if !strings.Contains(strings.Join(problems, "\n"), tc.wantSub) {
 				t.Fatalf("problems = %v, want one containing %q", problems, tc.wantSub)
+			}
+		})
+	}
+}
+
+// A data row whose cell count disagrees with its own table's header was cut by an unescaped `|`, so every
+// column to the right of the cut shifts and the row declares one thing while carrying another. Both
+// directions earn a breach; the separator and placeholder rows table already skips earn none.
+func TestCheckReportsRowsWhoseCellsDoNotMatchTheirHeader(t *testing.T) {
+	const finding = "| F1 | `src/a.js:5` x | M | yes | E1 | t.js :: x | fixed | me | - | - |\n"
+	const ledgerRow = "| E1 | c | cmd | i | o | m | r | observado |\n"
+	cases := []struct {
+		name     string
+		plan     string
+		wantSubs []string // every substring the breach must carry; empty means the plan passes
+	}{
+		{
+			name: "a compliant plan owes no breach",
+			plan: header + finding + ledger + ledgerRow,
+		},
+		{
+			name:     "a row with more cells than its header",
+			plan:     header + "| F1 | `src/a.js:5` gate|sync | M | yes | E1 | t.js :: x | fixed | me | - | - |\n" + ledger + ledgerRow,
+			wantSubs: []string{"Findings", "F1", "11 cells", "header's 10", "unescaped"},
+		},
+		{
+			name:     "a row with fewer cells than its header",
+			plan:     header + "| F1 | `src/a.js:5` x | M | yes |\n" + ledger + ledgerRow,
+			wantSubs: []string{"Findings", "F1", "4 cells", "header's 10"},
+		},
+		{
+			name: "a separator row is not a data row",
+			plan: header + finding + "|---|---|---|---|\n" + ledger + ledgerRow,
+		},
+		{
+			name: "a placeholder row is not a data row",
+			plan: header + finding + "| - | | |\n" + ledger + ledgerRow,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := write(t, t.TempDir(), "plan.md", tc.plan)
+			problems, err := Check(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(tc.wantSubs) == 0 {
+				if len(problems) != 0 {
+					t.Fatalf("compliant plan rejected: %v", problems)
+				}
+				return
+			}
+			joined := strings.Join(problems, "\n")
+			for _, want := range tc.wantSubs {
+				if !strings.Contains(joined, want) {
+					t.Fatalf("problems = %v, want one containing %q", problems, want)
+				}
 			}
 		})
 	}
@@ -414,6 +485,26 @@ func TestCheckOnAMissingFile(t *testing.T) {
 	}
 }
 
+// The repository's own plan is the file this check exists to keep honest. It is read through the same
+// os.ReadFile path Check uses, and the only excuse for passing without reading it is that it is genuinely
+// absent, so a missing file can never masquerade as a clean report.
+func TestRepositoryPlanIsWellFormed(t *testing.T) {
+	path := filepath.Join("..", "..", "docs", "testing", "test-plan.md")
+	if _, err := os.ReadFile(path); err != nil {
+		if os.IsNotExist(err) {
+			t.Skipf("the repository plan %s is absent, so there is no checked copy to assert against", path)
+		}
+		t.Fatal(err)
+	}
+	problems, err := Check(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(problems) != 0 {
+		t.Fatalf("the repository's own plan reports breaches: %v", problems)
+	}
+}
+
 const header = "## Findings\n\n| Id | Finding | Severity | Data safe? | Evidence id | Pinning test | Status | Verdict by / date | Reason | Fingerprint |\n|---|---|---|---|---|---|---|---|---|---|\n"
 const ledger = "\n## Evidence ledger\n\n| Id | Claim | Executed | Inputs | Observed | Mutation | Reproduction | Label |\n|---|---|---|---|---|---|---|---|\n"
 
@@ -488,6 +579,249 @@ func TestCheckAcceptsTheShippedPlans(t *testing.T) {
 	}
 }
 
+// The Evidence ledger is a table a machine reads, so its machine columns are located by name. This is
+// the header the template ships: `Admit` and `Digest` are the two new cells, and neither shares a
+// substring with the columns around it.
+const machineHeader = "## Evidence ledger\n\n" +
+	"| Id | Claim | Executed | Admit | Inputs and parameters | Observed | Digest | Mutation or negative control → result | Reproduction | Label (`observado` / `razonado`, literal) |\n" +
+	"|---|---|---|---|---|---|---|---|---|---|\n"
+
+// machineColumns lists the names Ledger resolves, in the order it resolves them.
+var machineColumns = []string{"id", "claim", "executed", "admit", "inputs", "observed", "digest", "mutation", "reproduction", "label"}
+
+// Every field is filled with a value no other column shares, so a field resolved to the wrong column
+// cannot pass.
+func TestLedgerResolvesTheColumnsOfTheShippedHeader(t *testing.T) {
+	doc := machineHeader +
+		"| E1 | it keeps the comma | prose saying what was done | `node --test t.js` | `a,\"b,c\"` | 3 fields | sha256:1111 | reverted → red | rerun the command above | observado |\n"
+	got := Ledger(doc)
+	want := LedgerRow{
+		ID: "E1", Claim: "it keeps the comma", Executed: "prose saying what was done",
+		Admit: "`node --test t.js`", Inputs: "`a,\"b,c\"`", Observed: "3 fields",
+		Digest: "sha256:1111", Mutation: "reverted → red",
+		Reproduction: "rerun the command above", Label: "observado",
+		Cells: 10, HeaderCells: 10,
+	}
+	if len(got) != 1 {
+		t.Fatalf("rows = %#v, want the one ledger row", got)
+	}
+	if got[0] != want {
+		t.Fatalf("row = %#v, want %#v", got[0], want)
+	}
+}
+
+// Substring matching is all columnIndex knows, so the collisions are pinned: `Admit` must not resolve
+// to `Executed`, `Digest` must not resolve to another column, and no two names may share a column.
+func TestLedgerColumnNamesResolveToDistinctColumns(t *testing.T) {
+	_, header := table(section(machineHeader, "Evidence ledger"))
+	if header == nil {
+		t.Fatal("the shipped header has no table")
+	}
+	seen := map[int]string{}
+	for _, name := range machineColumns {
+		i := columnIndex(header, name)
+		if i < 0 {
+			t.Fatalf("columnIndex(%q) = -1: the header stopped naming that column", name)
+		}
+		if other, dup := seen[i]; dup {
+			t.Fatalf("%q and %q both resolve to column %d", name, other, i)
+		}
+		seen[i] = name
+	}
+	if a, e := columnIndex(header, "admit"), columnIndex(header, "executed"); a == e {
+		t.Fatalf("admit resolved to the executed column %d", a)
+	}
+	if d, e := columnIndex(header, "digest"), columnIndex(header, "executed"); d == e {
+		t.Fatalf("digest resolved to the executed column %d", d)
+	}
+}
+
+// The old header ships no machine columns. A plan written before them still resolves every cell it
+// has, and the two new fields stay empty rather than borrowing a neighbour.
+func TestLedgerOnTheOldHeaderLeavesTheNewColumnsEmpty(t *testing.T) {
+	got := Ledger(ledger + "| E1 | c | cmd | i | o | m | r | observado |\n")
+	want := LedgerRow{ID: "E1", Claim: "c", Executed: "cmd", Inputs: "i", Observed: "o", Mutation: "m", Reproduction: "r", Label: "observado", Cells: 8, HeaderCells: 8}
+	if len(got) != 1 {
+		t.Fatalf("rows = %#v, want the one ledger row", got)
+	}
+	if got[0] != want {
+		t.Fatalf("row = %#v, want %#v", got[0], want)
+	}
+}
+
+// ID is the first cell and Label the last, the same reading Check does, so extra cells do not move
+// them and a truncated row reads its last written cell as the label.
+func TestLedgerKeepsTheFirstCellAsIDAndTheLastAsLabel(t *testing.T) {
+	cases := []struct {
+		name string
+		doc  string
+		want LedgerRow
+	}{
+		{
+			name: "extra cells",
+			doc:  machineHeader + "| E1 | c | prose | `run x` | i | o | sha256:aa | m | r | observado | extra one | extra two |\n",
+			want: LedgerRow{ID: "E1", Claim: "c", Executed: "prose", Admit: "`run x`", Inputs: "i", Observed: "o", Digest: "sha256:aa", Mutation: "m", Reproduction: "r", Label: "extra two", Cells: 12, HeaderCells: 10},
+		},
+		{
+			name: "missing cells",
+			doc:  machineHeader + "| E1 | c | `run x` | `run x` | i |\n",
+			want: LedgerRow{ID: "E1", Claim: "c", Executed: "`run x`", Admit: "`run x`", Inputs: "i", Label: "i", Cells: 5, HeaderCells: 10},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := Ledger(tc.doc)
+			if len(got) != 1 {
+				t.Fatalf("rows = %#v, want the one ledger row", got)
+			}
+			if got[0] != tc.want {
+				t.Fatalf("row = %#v, want %#v", got[0], tc.want)
+			}
+		})
+	}
+}
+
+// Order is the document's, and the rows table already drops stay dropped: a separator line and a
+// placeholder row are not conclusions.
+func TestLedgerKeepsDocumentOrderAndSkipsWhatTheTableSkips(t *testing.T) {
+	doc := machineHeader +
+		"| E1 | first | prose | `run 1` | i | o | sha256:1 | m | r | observado |\n" +
+		"|---|---|---|---|---|---|---|---|---|---|\n" +
+		"| - | a placeholder row |  |  |  |  |  |  |  |  |\n" +
+		"| E2 | second | prose | `run 2` | i | o | sha256:2 | m | r | observado |\n"
+	got := Ledger(doc)
+	if len(got) != 2 || got[0].ID != "E1" || got[1].ID != "E2" {
+		t.Fatalf("rows = %#v, want E1 then E2 and nothing else", got)
+	}
+	if none := Ledger("## Findings\n\n| Id |\n|---|\n"); len(none) != 0 {
+		t.Fatalf("a document with no Evidence ledger returned %#v", none)
+	}
+}
+
+// recordRow is a ledger row whose Digest cell holds old digest, with a backslash-escaped pipe in
+// three cells before it and two after it. A row that re-rendered its cells would rewrite those
+// escapes, so the fixture is the proof the splice is by byte offset and not by re-joining.
+const (
+	oldDigest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+	newDigest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+)
+
+func recordRow(digest string) string {
+	return "| E1 | a claim with an escaped \\| pipe | prose a human reads | `run x` | `a\\|b` | observed \\| here | " + digest + " | mutation \\| negative | reproduction \\| again | observado |\n"
+}
+
+// RecordDigest is the one function in this package that writes: Check, Ledger and Gaps only read. It
+// replaces the bytes of exactly one cell, so an escaped pipe anywhere in the row survives, and a cell
+// the splice got wrong would move every column to its right.
+func TestRecordDigestReplacesOnlyTheNamedCell(t *testing.T) {
+	doc := machineHeader + recordRow(oldDigest)
+	got, err := RecordDigest(doc, "E1", newDigest)
+	if err != nil {
+		t.Fatalf("RecordDigest = %v", err)
+	}
+	want := strings.Replace(doc, oldDigest, newDigest, 1)
+	if got != want {
+		t.Fatalf("RecordDigest rewrote bytes outside the digest cell:\ngot  %q\nwant %q", got, want)
+	}
+	if escaped := strings.Count(got, `\|`); escaped != 5 {
+		t.Fatalf("the row has 5 escaped pipes (3 before the Digest cell, 2 after) and %d survived:\n%s", escaped, got)
+	}
+	if rows := Ledger(got); len(rows) != 1 || rows[0].Digest != newDigest {
+		t.Fatalf("the ledger reads back %#v, want the fresh digest", rows)
+	}
+}
+
+// A digest that was already recorded is the value the cell holds, so recording it again must be a
+// no-op: a rerun of a recording command may not rewrite bytes it already wrote.
+func TestRecordDigestIsIdempotent(t *testing.T) {
+	doc := machineHeader + recordRow(oldDigest)
+	once, err := RecordDigest(doc, "E1", newDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	twice, err := RecordDigest(once, "E1", newDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if twice != once {
+		t.Fatalf("recording the same digest twice changed the document:\nonce  %q\ntwice %q", once, twice)
+	}
+}
+
+// The Digest cell is located by name, so its position in the row cannot matter: a truncated row may
+// carry it as the last cell.
+func TestRecordDigestOnADigestCellThatIsTheLastCell(t *testing.T) {
+	doc := machineHeader + "| E1 | the claim | prose | `run x` | none | the observation | " + oldDigest + " |\n"
+	got, err := RecordDigest(doc, "E1", newDigest)
+	if err != nil {
+		t.Fatalf("RecordDigest = %v", err)
+	}
+	if want := strings.Replace(doc, oldDigest, newDigest, 1); got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+// Every refusal is distinct and specific, so a caller can say what to change instead of guessing why
+// nothing was written.
+func TestRecordDigestRefusesEveryReasonItCannotWrite(t *testing.T) {
+	noDigestColumn := "## Evidence ledger\n\n" +
+		"| Id | Claim | Executed | Admit | Inputs | Observed | Mutation | Reproduction | Label |\n" +
+		"|---|---|---|---|---|---|---|---|---|\n" +
+		"| E1 | the claim | prose | `run x` | none | the observation | reverted → red | rerun it | observado |\n"
+	cases := []struct {
+		name   string
+		doc    string
+		id     string
+		digest string
+		want   string // the refusal must name this
+	}{
+		{
+			name: "the id is not a row in the ledger",
+			doc:  machineHeader + recordRow(oldDigest), id: "E9", digest: newDigest,
+			want: "is not a row in the Evidence ledger",
+		},
+		{
+			name: "the header names no Digest column",
+			doc:  noDigestColumn, id: "E1", digest: newDigest,
+			want: "names no Digest column",
+		},
+		{
+			name: "the row has fewer cells than the Digest column requires",
+			doc:  machineHeader + "| E1 | the claim | `run x` |\n", id: "E1", digest: newDigest,
+			want: "so the Digest column",
+		},
+		{
+			name: "the digest is not a sha256 digest",
+			doc:  machineHeader + recordRow(oldDigest), id: "E1", digest: "deadbeef",
+			want: "is not a sha256 digest",
+		},
+		{
+			name: "the document has no Evidence ledger section",
+			doc:  "## Findings\n\n| Id |\n|---|\n", id: "E1", digest: newDigest,
+			want: "no Evidence ledger section",
+		},
+		{
+			name: "the Evidence ledger section holds no table",
+			doc:  "## Evidence ledger\n\nno rows yet\n", id: "E1", digest: newDigest,
+			want: "holds no table",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := RecordDigest(tc.doc, tc.id, tc.digest)
+			if err == nil {
+				t.Fatalf("RecordDigest recorded into a plan it cannot record into, returning %q", got)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want one naming %q", err, tc.want)
+			}
+			if got != "" {
+				t.Fatalf("a refused record must return no document, got %q", got)
+			}
+		})
+	}
+}
+
 // A backslash-escaped pipe is part of its cell. Splitting on it shifts every column to the right,
 // which moves a layer's owner out of the column a report reads.
 func TestSplitHonoursEscapedPipes(t *testing.T) {
@@ -551,6 +885,193 @@ func TestCheckNamesAStatusOutsideTheFindingsVocabulary(t *testing.T) {
 			}
 			if tc.wantNot != "" && strings.Contains(joined, tc.wantNot) {
 				t.Fatalf("problems = %v, want none containing %q", problems, tc.wantNot)
+			}
+		})
+	}
+}
+
+// The ledger's machine columns are resolved by name, and the row's own Normalize expression is one of them.
+// A header that carries it must resolve it, and a header that does not must leave the field empty rather
+// than borrowing the cell of the column beside it.
+func TestLedgerResolvesTheNormalizeColumnByName(t *testing.T) {
+	head := "## Evidence ledger\n\n" +
+		"| Id | Claim | Executed | Admit | Inputs and parameters | Observed | Digest | Normalize | Mutation or negative control → result | Reproduction | Label (`observado` / `razonado`, literal) |\n" +
+		"|---|---|---|---|---|---|---|---|---|---|---|\n"
+	rows := Ledger(head + "| E1 | c | prose | go test ./... | i | o | sha256:aa | [0-9]+s | m | r | observado |\n")
+	if len(rows) != 1 {
+		t.Fatalf("ledger = %#v, want the one row", rows)
+	}
+	got := rows[0]
+	if got.Normalize != "[0-9]+s" || got.Digest != "sha256:aa" || got.Admit != "go test ./..." || got.Label != "observado" {
+		t.Fatalf("row = %#v, want the Normalize cell read as its own column", got)
+	}
+	if got.Cells != 11 || got.HeaderCells != 11 {
+		t.Fatalf("row has %d cells against a %d-cell header, want 11 and 11", got.Cells, got.HeaderCells)
+	}
+
+	// The previous header has no Normalize column. The field stays empty, and every other column still
+	// resolves to its own cell rather than shifting by one.
+	old := "## Evidence ledger\n\n" +
+		"| Id | Claim | Executed | Admit | Inputs and parameters | Observed | Digest | Mutation or negative control → result | Reproduction | Label (`observado` / `razonado`, literal) |\n" +
+		"|---|---|---|---|---|---|---|---|---|---|\n" +
+		"| E1 | c | prose | go test ./... | i | o | sha256:aa | m | r | observado |\n"
+	rows = Ledger(old)
+	if len(rows) != 1 {
+		t.Fatalf("ledger = %#v, want the one row", rows)
+	}
+	got = rows[0]
+	if got.Normalize != "" || got.Digest != "sha256:aa" || got.Mutation != "m" || got.Reproduction != "r" || got.Label != "observado" {
+		t.Fatalf("row = %#v, want no Normalize column with every other field still resolved", got)
+	}
+
+	// A row that lost a cell is reported by the count, not read from the wrong column. The document carries
+	// only a ledger, so Check also reports the Findings section it does not have; the breach this asserts is
+	// the cell count, named against the ledger.
+	dir := t.TempDir()
+	short := write(t, dir, "short.md", head+"| E1 | c | prose | go test ./... | i | o | sha256:aa | [0-9]+s | m | r |\n")
+	problems, err := Check(short)
+	if err != nil {
+		t.Fatalf("Check(%s) failed: %v", short, err)
+	}
+	reported := false
+	for _, p := range problems {
+		if strings.Contains(p, "Evidence ledger") && strings.Contains(p, "11") {
+			reported = true
+		}
+	}
+	if !reported {
+		t.Fatalf("Check(%s) = %v, want the lost cell reported against the ledger", short, problems)
+	}
+}
+
+// The Mode column is resolved like the others, and recording a mode writes that one cell and nothing else:
+// the cell keeps the spacing its author wrote, and a rerun with the same mode is byte-identical.
+func TestLedgerResolvesTheModeColumnAndRecordModeWritesIt(t *testing.T) {
+	head := "## Evidence ledger\n\n" +
+		"| Id | Claim | Executed | Admit | Inputs and parameters | Observed | Digest | Normalize | Mode | Mutation or negative control → result | Reproduction | Label (`observado` / `razonado`, literal) |\n" +
+		"|---|---|---|---|---|---|---|---|---|---|---|---|\n"
+	doc := head + "| E1 | c | prose | go test ./... | i | o | sha256:aa | | sandbox | m | r | observado |\n"
+	rows := Ledger(doc)
+	if len(rows) != 1 || rows[0].Mode != "sandbox" || rows[0].Digest != "sha256:aa" || rows[0].Mutation != "m" {
+		t.Fatalf("ledger = %#v, want the Mode cell read as its own column", rows)
+	}
+	if rows[0].Cells != 12 || rows[0].HeaderCells != 12 {
+		t.Fatalf("row has %d cells against a %d-cell header, want 12 and 12", rows[0].Cells, rows[0].HeaderCells)
+	}
+
+	updated, err := RecordMode(doc, "E1", "host")
+	if err != nil {
+		t.Fatalf("RecordMode failed: %v", err)
+	}
+	if got := Ledger(updated)[0].Mode; got != "host" {
+		t.Fatalf("Mode after recording = %q, want host", got)
+	}
+	if !strings.Contains(updated, "| host | m | r | observado |") {
+		t.Fatalf("recorded document = %q, want only the Mode cell to have moved", updated)
+	}
+	if again, err := RecordMode(updated, "E1", "host"); err != nil || again != updated {
+		t.Fatalf("RecordMode is not idempotent: %v, %q", err, again)
+	}
+
+	if _, err := RecordMode(doc, "E1", "container"); err == nil || !strings.Contains(err.Error(), "is not an execution mode") {
+		t.Fatalf("RecordMode accepted a mode that is neither host nor sandbox: %v", err)
+	}
+}
+
+// A Mutate cell is a data field and not a command, so the grammar is strict and the parts come back rather than
+// being interpreted. These are the shapes a human writes, including the ones the grammar has to refuse before a
+// replay could apply an edit to the wrong place.
+func TestParseMutationReadsTheOneShapeACellMayTake(t *testing.T) {
+	ok := []struct {
+		cell string
+		want Mutation
+	}{
+		{">= => > @ internal/plan/plan.go:214", Mutation{Old: ">=", New: ">", Path: "internal/plan/plan.go", Line: 214}},
+		{"  a => b  @  x/y.go:7 ", Mutation{Old: "a", New: "b", Path: "x/y.go", Line: 7}},
+		{"a => b => c @ p.go:1", Mutation{Old: "a", New: "b => c", Path: "p.go", Line: 1}},
+		{"old => @ p.go:1", Mutation{Old: "old", New: "", Path: "p.go", Line: 1}},
+		{"a @ b => c @ p.go:2", Mutation{Old: "a @ b", New: "c", Path: "p.go", Line: 2}},
+	}
+	for _, tc := range ok {
+		t.Run(tc.cell, func(t *testing.T) {
+			got, err := ParseMutation(tc.cell)
+			if err != nil {
+				t.Fatalf("ParseMutation(%q) failed: %v", tc.cell, err)
+			}
+			if got != tc.want {
+				t.Fatalf("ParseMutation(%q) = %#v, want %#v", tc.cell, got, tc.want)
+			}
+		})
+	}
+
+	bad := []struct {
+		cell   string
+		reason string
+	}{
+		{"", ReasonMutationMalformed},
+		{"no arrow here", ReasonMutationMalformed},
+		{"=> > @ p.go:1", ReasonMutationMalformed},
+		{"a => b", ReasonMutationMalformed},
+		{"a => b @ p.go", ReasonMutationMalformed},
+		{"a => b @ p.go:x", ReasonMutationMalformed},
+		{"a => b @ p.go:0", ReasonMutationMalformed},
+		{"a => b @ p.go:-3", ReasonMutationMalformed},
+		{"a => b @ :1", ReasonMutationMalformed},
+		{"same => same @ p.go:1", ReasonMutationNoOp},
+	}
+	for _, tc := range bad {
+		t.Run("refuses "+tc.cell, func(t *testing.T) {
+			_, err := ParseMutation(tc.cell)
+			if err == nil {
+				t.Fatalf("ParseMutation(%q) was accepted", tc.cell)
+			}
+			bad, ok := err.(MutationError)
+			if !ok || bad.Reason != tc.reason {
+				t.Fatalf("ParseMutation(%q) = %v, want reason %s", tc.cell, err, tc.reason)
+			}
+		})
+	}
+}
+
+// The claim a Mutate cell makes is about this tree, so it is checked here: nothing here runs, and nothing here
+// edits. Every refusal is named, because each one tells the author a different thing to fix.
+func TestValidateMutationChecksTheTreeBeforeAnythingRuns(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "src/a.go", "package a\n\nvar x = 1\nvar y = 1\nvar z = 2\n")
+	write(t, dir, "src/dup.go", "a\nb\na\n")
+	// A real file outside dir, whose content would let the escaping case validate if the guard did not exist. The
+	// case must fail on the verdict, not on a different error string: without the guard this file is found, the
+	// line holds the old text exactly once, and the mutation is accepted.
+	write(t, filepath.Dir(dir), "outside.go", "package a\n\n\nvar y = 1\n\n")
+
+	cases := []struct {
+		name   string
+		m      Mutation
+		reason string // empty means it validates
+	}{
+		{"the text is on the named line exactly once", Mutation{Old: "var y", New: "var w", Path: "src/a.go", Line: 4}, ""},
+		// `..` that comes back inside is not an escape: the guard refuses a path that leaves the tree, not the token.
+		{"a path that climbs and comes back stays inside", Mutation{Old: "var y", New: "var w", Path: "src/../src/a.go", Line: 4}, ""},
+		{"the file is not there", Mutation{Old: "x", New: "y", Path: "src/nope.go", Line: 1}, ReasonMutationNotFound},
+		{"the line does not exist", Mutation{Old: "x", New: "y", Path: "src/a.go", Line: 99}, ReasonMutationNoLine},
+		{"the text is not on that line", Mutation{Old: "var z", New: "var q", Path: "src/a.go", Line: 3}, ReasonMutationNotFound},
+		{"the text is not in the file", Mutation{Old: "nope", New: "y", Path: "src/a.go", Line: 3}, ReasonMutationNotFound},
+		{"the text occurs twice", Mutation{Old: "a", New: "z", Path: "src/dup.go", Line: 1}, ReasonMutationAmbiguous},
+		{"the path is absolute", Mutation{Old: "x", New: "y", Path: "/etc/passwd", Line: 1}, ReasonMutationMalformed},
+		{"the path climbs out of the tree", Mutation{Old: "var y", New: "var w", Path: "../outside.go", Line: 4}, ReasonMutationMalformed},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateMutation(dir, tc.m)
+			if tc.reason == "" {
+				if err != nil {
+					t.Fatalf("ValidateMutation = %v, want it valid", err)
+				}
+				return
+			}
+			bad, ok := err.(MutationError)
+			if !ok || bad.Reason != tc.reason {
+				t.Fatalf("ValidateMutation = %v, want reason %s", err, tc.reason)
 			}
 		})
 	}

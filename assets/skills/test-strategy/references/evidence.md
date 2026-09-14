@@ -40,6 +40,43 @@ findings. This contract applies to every testing skill routed by `test-strategy`
      defends the defect and is deleted by whoever repairs it. That is a characterization test
      (rule 4); it is legitimate only under its own label, never as the pinning test.
 
+8. **`Admit` and `Digest` are the machine half of a record.** `Admit` holds one bare shell command,
+   with no placeholders and no backticks, because it is the command a binary runs and not prose a
+   human reads; a cell that chains commands, or leaves a value for its author to fill in, is refused
+   rather than guessed at. `Digest` holds the `sha256:` digest of that command's canonical output, so
+   the record can be re-executed and compared byte for byte. A pin means something only over output
+   that holds still, so the command is run twice and a row whose two observations disagree is refused
+   as unstable instead of pinned. When part of an output legitimately moves, declare it in the optional
+   `Normalize` cell as a Go regular expression whose every match becomes `X` before hashing — as narrow
+   as the moving part, because a pattern broad enough to swallow the output turns the pin into
+   decoration. A row that pins no digest, or whose output cannot be pinned, is refused by
+   `rdd-plus plan admit`.
+9. **A pin records where it was taken.** The optional `Mode` cell holds `host` or `sandbox`, and an empty
+   cell means `host`. The same command digests differently in a container than on this machine, so a row
+   pinned in one mode and checked in the other is refused as a mode mismatch rather than as a digest
+   mismatch that would say nothing about why. Only a row that carries a pin has a mode to compare: a row
+   with no digest was never pinned anywhere, so it is refused for the missing pin rather than told it was
+   pinned in one. `--sandbox` observes each command in a container with the tree mounted read-only and no
+   network: a row that tries to write is refused, and the write never reaches the machine. That mode needs
+   docker and the image it names (pulled on first use, a few hundred MB), and a machine without either is a
+   refusal (`sandbox-misconfigured`) rather than a silent fall back to this machine. Recording writes
+   the digest and the mode together, because one without the other is not a checkable record.
+10. **A falsifiability claim is a value, not a sentence.** The optional `Mutate` cell holds
+    `<old> => <new> @ <path>:<line>`: one textual edit, whose old text must occur exactly once in that file and
+    on that line, and which names a file inside the tree. It is checked before anything runs, and each defect is
+    named: a cell that does not parse, a path that is absolute or climbs out with `..`, a file that is not there,
+    a line that does not exist, text that is absent, text that occurs more than once, and an edit that changes
+    nothing. A row that declares a mutation is claiming its own command goes red under it and green without it.
+    Under `--sandbox` that claim is replayed: the edit lands on a copy of the tree git knows, the command must
+    fail there, the file is put back and its bytes verified, and the command must pass again. A command that
+    survives the edit (`mutation-not-red`), a restored half that fails (`mutation-not-green`), and a replay the
+    sandbox refuses or cannot complete (`mutation-not-replayed`, or the sandbox's own reason) are all refused
+    rather than admitted. Outside `--sandbox` there is no copy the tool owns, so the claim is refused there
+    instead of admitted unchecked. Two limits are stated rather than hidden: the copy carries what git knows and
+    no `.git`, and only the file the edit names is restored, so a row whose command needs repository metadata or
+    an ignored input fails its own replay — a refusal, never an admission. `Mutation or negative control →
+    result` stays prose for a human; `Mutate` is the part a binary can act on, and undo.
+
 ## Record template
 
 | Claim | Executed | Inputs and parameters | Observed | Mutation or negative control → result | Reproduction | Label |

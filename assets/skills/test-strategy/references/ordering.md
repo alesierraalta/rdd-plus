@@ -125,7 +125,8 @@ approximating them from memory degrades the method into generic advice.
 | Secret leaks in diffs, taint tracking | `appsec-adversarial-auditor` | AST taint analysis (`Semgrep`) and high-entropy secret detection (`Gitleaks`). |
 | Layer boundaries, clean architecture purity | `clean-architecture-audit` | Automated architecture conformance tests (`pytest-archon`, `dependency-cruiser`). |
 | Genuine test resistance, killed mutants on PR diff | `clean-architecture-audit` | Incremental mutation testing (`Stryker`, `Mutmut`) on the PR diff; classify survivors, no numeric target. |
-| Code readability, cognitive load ceiling | `clean-architecture-audit` | Enforce Cognitive Complexity at or below 15 and eliminate empty interface theater. |
+| Code readability, cognitive load ceiling | `clean-architecture-audit` | Flag Cognitive Complexity above 15 (package default, WARNING) or above the target's configured threshold; BLOCKER still requires a configured critical limit. |
+| Duplicated logic, one invariant implemented twice | `clean-architecture-audit` | Clone detection with CodeGraph and similarity search; establish which copy runs, then consolidate to one implementation, or keep the divergence with its evidence record. |
 | Database migrations, up/down idempotency, locks | `database-persistence-testing` | Reversible migration verification, DDL lock inspection, and expand/contract patterns. |
 | DB deadlocks, isolation, N+1 query budget | `database-persistence-testing` | Concurrency stress, pessimistic locks (`SKIP LOCKED`), and query count assertions. |
 | Infrastructure as Code, Terraform, Cloud SAST | `iac-safe-auditor` | Static linting (`tflint`), misconfiguration scans (`checkov`), and OPA Rego guardrails. |

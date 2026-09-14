@@ -4,11 +4,13 @@
 package plan
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/alesierraalta/rdd-plus/internal/assets"
@@ -87,18 +89,23 @@ func Check(path string) ([]string, error) {
 func CheckDocument(doc string) []string {
 	lines := strings.Split(doc, "\n")
 
+	// Every table is measured against its own header before anything is said about its rows: a row that
+	// lost a cell moves every column to its right, so the reader refuses the row by count rather than read
+	// a machine column out of the cell beside it.
+	problems := tableProblems(doc)
+
 	heading, end := sectionRegion(lines, "Findings")
 	if heading < 0 {
 		// Nothing to point at: a section that does not exist never gets an invented location.
-		return []string{"no Findings section"}
+		return append(problems, "no Findings section")
 	}
 	findings := scanTable(lines, heading+1, end)
 	if findings.header == nil {
 		prose := strings.Join(lines[heading+1:end], "\n")
 		if strings.Contains(prose, "###") || strings.Contains(prose, "- ") {
-			return []string{fmt.Sprintf("line %d: the Findings section is not a table: prose cannot be located, honoured, or re-scored", heading+1)}
+			return append(problems, fmt.Sprintf("line %d: the Findings section is not a table: prose cannot be located, honoured, or re-scored", heading+1))
 		}
-		return []string{fmt.Sprintf("line %d: the Findings section has no table", heading+1)}
+		return append(problems, fmt.Sprintf("line %d: the Findings section has no table", heading+1))
 	}
 	// The ledger is the one other table the check reads back. A plan without one simply has no rows to
 	// corroborate against, exactly as before: sectionRegion reports it missing and the scan returns empty.
@@ -106,7 +113,6 @@ func CheckDocument(doc string) []string {
 	ranked := scanSection(lines, "Ranked targets")
 	layers := scanSection(lines, "Layer matrix")
 
-	var problems []string
 	// A table a stray line cut in two is reported before the rows it kept: the rows under the cut were never
 	// read, so everything the check says below is said about a part of the table.
 	for _, t := range []struct {
@@ -176,6 +182,353 @@ func findingStatus(raw string) (string, string) {
 		return status, fmt.Sprintf("status \"%s\" is not one of: %s", quote(raw), FindingsStatusList)
 	}
 	return status, ""
+}
+
+// LedgerRow is one row of the Evidence ledger, with the cells a machine reads resolved by column name
+// rather than by position. `Admit` is the single command the row declares and `Digest` the output that
+// command was observed to produce; both are empty on a plan written before those columns existed.
+//
+// Cells and HeaderCells are the number of cells the row's line and its table's header hold as the
+// table splitter reads them. The two differ exactly when an unescaped `|` cut a cell, which shifts
+// every column to its right: a reader can then refuse the row instead of reading the wrong cell as the
+// command. Both are zero for a row a caller assembled by hand rather than read from a document.
+type LedgerRow struct {
+	ID           string
+	Claim        string
+	Executed     string
+	Admit        string
+	Inputs       string
+	Observed     string
+	Digest       string
+	Normalize    string
+	Mode         string
+	Mutate       string
+	Mutation     string
+	Reproduction string
+	Label        string
+	Cells        int
+	HeaderCells  int
+}
+
+// Ledger reads the Evidence ledger exactly where Check reads it and resolves every machine column by
+// name. Order is the document's; ID stays the first cell and Label the last, the same reading Check
+// does, so a row with extra or truncated cells is reported rather than silently dropped. Rows the table
+// already skips, a separator or a placeholder row, stay skipped.
+func Ledger(doc string) []LedgerRow {
+	rows, header := table(section(doc, "Evidence ledger"))
+	if header == nil {
+		return nil
+	}
+	// Column names are matched by substring, so each name below is the whole word the header cell
+	// carries and shares it with no other column: `admit` never resolves to `Executed`, `digest` never
+	// resolves to `Observed` or to the mutation column, and `normalize` resolves to nothing else.
+	index := map[string]int{}
+	for _, name := range []string{"claim", "executed", "admit", "inputs", "observed", "digest", "normalize", "mode", "mutate", "mutation", "reproduction"} {
+		index[name] = columnIndex(header, name)
+	}
+	ledger := make([]LedgerRow, 0, len(rows))
+	for _, row := range rows {
+		r := LedgerRow{ID: cell(row, 0), Label: cell(row, len(row)-1), Cells: len(row), HeaderCells: len(header)}
+		for _, f := range []struct {
+			name  string
+			field *string
+		}{
+			{"claim", &r.Claim},
+			{"executed", &r.Executed},
+			{"admit", &r.Admit},
+			{"inputs", &r.Inputs},
+			{"observed", &r.Observed},
+			{"digest", &r.Digest},
+			{"normalize", &r.Normalize},
+			{"mode", &r.Mode},
+			{"mutate", &r.Mutate},
+			{"mutation", &r.Mutation},
+			{"reproduction", &r.Reproduction},
+		} {
+			*f.field = cell(row, index[f.name])
+		}
+		ledger = append(ledger, r)
+	}
+	return ledger
+}
+
+// digestRe is the only shape a recorded digest may take: it is exactly what Digest returns, so a
+// recorded cell is always comparable to a fresh observation and a typo can never be pinned.
+var digestRe = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+
+// modeRe is the only shape a recorded Mode may take. The mode is part of what a pin means because the same
+// command digests differently in a container than on the host, so a row that pins a digest without pinning
+// the mode it was taken in would fail its next check with a digest mismatch that says nothing about why.
+var modeRe = regexp.MustCompile(`^(host|sandbox)$`)
+
+// The reason codes a Mutate cell earns when it cannot be used. They live beside the grammar rather than beside
+// the admission, because a cell that does not parse and a cell whose edit does not exist are defects of the row
+// that this package is the only one able to name. The reasons a replay earns belong to the admission, which is
+// the only place that can observe one.
+const (
+	ReasonMutationMalformed = "mutation-malformed"
+	ReasonMutationNotFound  = "mutation-not-found"
+	ReasonMutationNoLine    = "mutation-no-line"
+	ReasonMutationAmbiguous = "mutation-ambiguous"
+	ReasonMutationNoOp      = "mutation-no-op"
+)
+
+// MutationError names why a declared mutation cannot be used, with the reason code a caller reports.
+type MutationError struct {
+	Reason string
+	Detail string
+}
+
+func (e MutationError) Error() string { return e.Detail }
+
+// Mutation is a row's declared edit: the text to replace, the text that replaces it, and where. It is a value
+// and not a shell command because a replay has to be able to undo exactly what it did, and an edit admits an
+// exact inverse while a command does not.
+type Mutation struct {
+	Old  string
+	New  string
+	Path string
+	Line int
+}
+
+// ParseMutation reads the one shape a Mutate cell may take:
+//
+//	<old> => <new> @ <path>:<line>
+//
+// The parts are returned rather than interpreted: nothing here runs, and nothing here decides whether the edit
+// is present in the tree. The grammar is strict on purpose, because a cell a human reads loosely is a cell the
+// replay would apply to the wrong place.
+func ParseMutation(cell string) (Mutation, error) {
+	malformed := func(why string) error {
+		return MutationError{Reason: ReasonMutationMalformed, Detail: fmt.Sprintf(
+			"a Mutate cell is `<old> => <new> @ <path>:<line>`, and this one %s", why)}
+	}
+	trimmed := strings.TrimSpace(cell)
+	arrow := strings.Index(trimmed, "=>")
+	if arrow < 0 {
+		return Mutation{}, malformed("holds no `=>` to say what replaces what")
+	}
+	m := Mutation{Old: strings.TrimSpace(trimmed[:arrow])}
+	rest := strings.TrimSpace(trimmed[arrow+len("=>"):])
+	if m.Old == "" {
+		return Mutation{}, malformed("names no text to replace")
+	}
+
+	// The locator is cut at the LAST `@`, so an edit whose text carries one still parses: the `@` that
+	// separates the replacement from its location is the final one by construction.
+	at := strings.LastIndex(rest, "@")
+	if at < 0 {
+		return Mutation{}, malformed("holds no `@` to say where the edit lands")
+	}
+	m.New = strings.TrimSpace(rest[:at])
+	locator := strings.TrimSpace(rest[at+1:])
+
+	colon := strings.LastIndex(locator, ":")
+	if colon < 0 {
+		return Mutation{}, malformed("holds no `<path>:<line>` locator")
+	}
+	m.Path = strings.TrimSpace(locator[:colon])
+	line, err := strconv.Atoi(strings.TrimSpace(locator[colon+1:]))
+	if err != nil || line < 1 {
+		return Mutation{}, malformed("ends in a line that is not a positive number")
+	}
+	m.Line = line
+	if m.Path == "" {
+		return Mutation{}, malformed("names no file")
+	}
+	if m.Old == m.New {
+		return Mutation{}, MutationError{Reason: ReasonMutationNoOp, Detail: fmt.Sprintf(
+			"`%s` is replaced by itself, so the edit changes nothing and cannot make any command go red", m.Old)}
+	}
+	return m, nil
+}
+
+// ValidateMutation reads the file a mutation names, under root, and reports what a replay would refuse before
+// running anything. A row that claims its own command is falsifiable is making a claim about this tree, so the
+// claim is checked where the tree is: nothing here executes, and nothing here edits.
+func ValidateMutation(root string, m Mutation) error {
+	if filepath.IsAbs(m.Path) {
+		return MutationError{Reason: ReasonMutationMalformed, Detail: fmt.Sprintf(
+			"%q is an absolute path, and a mutation names a file inside the tree so the replay can copy that tree and leave this one alone", m.Path)}
+	}
+	// A path that climbs out of the tree is refused for the same reason an absolute one is: the replay edits a
+	// copy of the tree, and `..` would land the edit on a file the copy does not own.
+	if clean := filepath.Clean(filepath.FromSlash(m.Path)); clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return MutationError{Reason: ReasonMutationMalformed, Detail: fmt.Sprintf(
+			"%q climbs out of the tree with `..`, and a mutation names a file inside the tree so the replay can copy that tree and leave this one alone", m.Path)}
+	}
+	full := filepath.Join(root, filepath.FromSlash(m.Path))
+	info, err := os.Stat(full)
+	if err != nil {
+		return MutationError{Reason: ReasonMutationNotFound, Detail: fmt.Sprintf(
+			"%s is not there, and an edit can only land on a file this tree carries: %v", m.Path, err)}
+	}
+	if info.IsDir() {
+		return MutationError{Reason: ReasonMutationNotFound, Detail: fmt.Sprintf(
+			"%s is a directory, and a mutation edits a file", m.Path)}
+	}
+	content, err := os.ReadFile(full)
+	if err != nil {
+		return MutationError{Reason: ReasonMutationNotFound, Detail: fmt.Sprintf("%s could not be read: %v", m.Path, err)}
+	}
+	lines := strings.Split(string(content), "\n")
+	if m.Line > len(lines) {
+		return MutationError{Reason: ReasonMutationNoLine, Detail: fmt.Sprintf(
+			"%s has %d lines and the cell names line %d, so there is nothing there to edit", m.Path, len(lines), m.Line)}
+	}
+	if !strings.Contains(lines[m.Line-1], m.Old) {
+		return MutationError{Reason: ReasonMutationNotFound, Detail: fmt.Sprintf(
+			"line %d of %s does not hold `%s`, so the cell points at a line the edit is not on", m.Line, m.Path, m.Old)}
+	}
+	// Exactly once, so the replay cannot land somewhere the cell did not mean.
+	switch n := strings.Count(string(content), m.Old); {
+	case n == 0:
+		return MutationError{Reason: ReasonMutationNotFound, Detail: fmt.Sprintf(
+			"`%s` does not occur in %s", m.Old, m.Path)}
+	case n > 1:
+		return MutationError{Reason: ReasonMutationAmbiguous, Detail: fmt.Sprintf(
+			"`%s` occurs %d times in %s, so an edit that names it cannot say which one it means; narrow the text until only the intended one matches", m.Old, n, m.Path)}
+	}
+	return nil
+}
+
+// ErrNoColumn reports that the ledger's header does not name the column a writer was asked to fill. A caller
+// branches on it instead of reading the message when it knows the column is optional: an empty Mode cell
+// already means the host, so a host recording into a plan written before that column existed is still true.
+var ErrNoColumn = errors.New("the Evidence ledger header names no such column")
+
+// RecordDigest returns doc with the named ledger row's Digest cell replaced by digest, every other byte of
+// the document unchanged. It is the one writer in this package: Check, Ledger and Gaps only read, so this is
+// where a wrong splice could corrupt a plan.
+func RecordDigest(doc, id, digest string) (string, error) {
+	if !digestRe.MatchString(digest) {
+		return "", fmt.Errorf("digest %q is not a sha256 digest: a Digest cell carries sha256:<64 lowercase hex>, the form a fresh observation takes", digest)
+	}
+	return recordCell(doc, id, "digest", "Digest", digest)
+}
+
+// RecordMode returns doc with the named ledger row's Mode cell replaced by mode, every other byte of the
+// document unchanged. Recording a pin records both cells: the digest says what was observed and the mode
+// says where, and a row that carries one without the other cannot be checked honestly in either mode.
+func RecordMode(doc, id, mode string) (string, error) {
+	if !modeRe.MatchString(mode) {
+		return "", fmt.Errorf("mode %q is not an execution mode: a Mode cell carries host or sandbox, the two places a row's command can be observed", mode)
+	}
+	return recordCell(doc, id, "mode", "Mode", mode)
+}
+
+// recordCell returns doc with one named column of one ledger row replaced by value, every other byte of the
+// document unchanged.
+//
+// The ledger is located exactly where Check and Ledger locate it, and the column is resolved by the same
+// substring match Ledger resolves it with, so the writer and the readers can never disagree about which
+// column is which. The row is found by its first cell and the cell is spliced by byte offset: a row may
+// carry a backslash-escaped pipe in any cell, so the cell is cut where split cuts it rather than by
+// re-rendering the row, which would rewrite escapes and spacing nobody asked to touch. Writing the value a
+// cell already holds is a no-op, so a rerun rewrites nothing.
+func recordCell(doc, id, column, label, value string) (string, error) {
+	start, end, ok := sectionBounds(doc, "Evidence ledger")
+	if !ok {
+		return "", fmt.Errorf("the document has no Evidence ledger section, so there is no row %s to record", id)
+	}
+	body := doc[start:end]
+	_, header := table(body)
+	if header == nil {
+		return "", fmt.Errorf("the Evidence ledger section holds no table, so there is no row %s to record", id)
+	}
+	iColumn := columnIndex(header, column)
+	if iColumn < 0 {
+		return "", fmt.Errorf("the Evidence ledger header names no %s column, so row %s has nowhere to record %s: %w", label, id, value, ErrNoColumn)
+	}
+
+	// The section's own lines are walked the way table walks them, so the row a reader sees is the row
+	// this writes, and the offset in doc is carried alongside so the splice never re-joins cells.
+	seenHeader := false
+	lineStart := start
+	for _, line := range strings.Split(body, "\n") {
+		t := strings.TrimSpace(line)
+		if !strings.HasPrefix(t, "|") {
+			if seenHeader {
+				break
+			}
+			lineStart += len(line) + 1
+			continue
+		}
+		cells := split(t)
+		if !seenHeader {
+			seenHeader = true
+			lineStart += len(line) + 1
+			continue
+		}
+		if isSeparator(cells) || len(cells) == 0 || placeholder.MatchString(cell(cells, 0)) {
+			lineStart += len(line) + 1
+			continue
+		}
+		if cell(cells, 0) != id {
+			lineStart += len(line) + 1
+			continue
+		}
+		cs, ce, ok := cellSpan(line, iColumn)
+		if !ok {
+			// cellSpan cuts the cells split cuts, so the column has no cell exactly when the row is shorter
+			// than it: one refusal, not two spellings of the same fact.
+			return "", fmt.Errorf("evidence %s has %d cells, so the %s column (%d) has no cell in that row; restore it before recording", id, len(cells), label, iColumn)
+		}
+		// Replace the cell's own bytes and nothing else: a cell that holds a value keeps the spacing its
+		// author wrote around it, so a rerun with the same value is byte-identical. A cell that holds no
+		// value has no spacing around a value to keep, so the value is framed by one space and the row still
+		// reads as a table row instead of colliding with the next pipe.
+		raw := line[cs:ce]
+		content := strings.TrimSpace(raw)
+		if content == "" {
+			if raw == "" {
+				return doc[:lineStart+cs] + value + doc[lineStart+ce:], nil
+			}
+			return doc[:lineStart+cs] + " " + value + " " + doc[lineStart+ce:], nil
+		}
+		first := lineStart + cs + strings.Index(raw, content)
+		return doc[:first] + value + doc[first+len(content):], nil
+	}
+	return "", fmt.Errorf("evidence %s is not a row in the Evidence ledger, so the plan has nothing to record against", id)
+}
+
+// cellSpan returns the byte span one cell occupies in a markdown table row, cut exactly where split
+// cuts it, so RecordDigest can splice a single cell instead of re-rendering the row. A backslash-
+// escaped pipe is part of its cell, never a delimiter.
+func cellSpan(line string, i int) (start, end int, ok bool) {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return 0, 0, false
+	}
+	base := strings.Index(line, trimmed)
+	inner := trimmed
+	if strings.HasSuffix(inner, "|") {
+		inner = inner[:len(inner)-1]
+	}
+	if strings.HasPrefix(inner, "|") {
+		inner = inner[1:]
+		base++
+	}
+	cellStart, n := 0, 0
+	escaped := false
+	for j := 0; j < len(inner); j++ {
+		switch c := inner[j]; {
+		case escaped:
+			escaped = false
+		case c == '\\':
+			escaped = true
+		case c == '|':
+			if n == i {
+				return base + cellStart, base + j, true
+			}
+			n++
+			cellStart = j + 1
+		}
+	}
+	if n == i {
+		return base + cellStart, base + len(inner), true
+	}
+	return 0, 0, false
 }
 
 // LightActivated reports whether a plan declares a scoped run that passes every Light-specific rule.
@@ -459,24 +812,105 @@ func sectionRegion(lines []string, name string) (heading, end int) {
 
 // section returns the body under "## <name>" up to the next level-2 heading.
 func section(doc, name string) string {
+	start, end, ok := sectionBounds(doc, name)
+	if !ok {
+		return ""
+	}
+	return doc[start:end]
+}
+
+// sectionBounds returns the byte range the body under "## <name>" occupies in doc, up to the next
+// level-2 heading. The heading is matched exactly as section matched it, so the one locator serves both
+// the readers and the writer: RecordDigest needs the offset, and Check and Ledger need only the text.
+func sectionBounds(doc, name string) (start, end int, ok bool) {
 	lines := strings.Split(doc, "\n")
-	start := -1
+	heading := -1
 	for i, l := range lines {
 		t := strings.TrimSpace(l)
 		if strings.HasPrefix(t, "## ") && strings.EqualFold(strings.TrimSpace(strings.TrimPrefix(t, "## ")), name) {
-			start = i + 1
+			heading = i
 			break
 		}
 	}
-	if start < 0 {
-		return ""
+	if heading < 0 {
+		return 0, 0, false
 	}
-	for i := start; i < len(lines); i++ {
+	start = len(strings.Join(lines[:heading+1], "\n")) + 1
+	if start > len(doc) {
+		start = len(doc)
+	}
+	end = len(doc)
+	for i := heading + 1; i < len(lines); i++ {
 		if strings.HasPrefix(strings.TrimSpace(lines[i]), "## ") {
-			return strings.Join(lines[start:i], "\n")
+			end = len(strings.Join(lines[:i], "\n"))
+			break
 		}
 	}
-	return strings.Join(lines[start:], "\n")
+	if end < start {
+		end = start
+	}
+	return start, end, true
+}
+
+// tableProblems reports every data row in the document whose cell count disagrees with its own table's
+// header. A cell holding an unescaped `|` splits into several, so the row declares one thing and carries
+// another, and every column to the right of the cut is read from the wrong cell. Each malformed row earns
+// one breach, not one per extra cell. The rows table already skips, a separator or a placeholder, are
+// skipped here too, so nothing is said about a line that is not a conclusion.
+func tableProblems(doc string) []string {
+	var problems []string
+	name := ""
+	var header []string
+	for _, line := range strings.Split(doc, "\n") {
+		t := strings.TrimSpace(line)
+		if h, ok := headingName(t); ok {
+			name, header = h, nil
+			continue
+		}
+		if !strings.HasPrefix(t, "|") {
+			header = nil
+			continue
+		}
+		cells := split(t)
+		if header == nil {
+			header = cells
+			continue
+		}
+		if isSeparator(cells) || len(cells) == 0 || placeholder.MatchString(cell(cells, 0)) {
+			continue
+		}
+		if len(cells) != len(header) {
+			problems = append(problems, cellCountBreach(name, cell(cells, 0), len(cells), len(header)))
+		}
+	}
+	return problems
+}
+
+// headingName returns the text of a markdown heading line and whether the line is a heading at all. A `#`
+// that is not followed by a space is a tag, not a heading, so the two never read as each other.
+func headingName(t string) (string, bool) {
+	level := 0
+	for level < len(t) && t[level] == '#' {
+		level++
+	}
+	if level == 0 || level > 6 || level == len(t) || t[level] != ' ' {
+		return "", false
+	}
+	return strings.TrimSpace(t[level:]), true
+}
+
+// cellCountBreach is the one breach a malformed row earns: it names the table, the row's first cell so the
+// reader can find it, and both counts, then says plainly what the mismatch means. A row with more cells
+// was cut by an unescaped `|`; a row with fewer is simply missing one.
+func cellCountBreach(table, first string, cells, header int) string {
+	where := "an unnamed table"
+	if table != "" {
+		where = "the " + table + " table"
+	}
+	if cells > header {
+		return fmt.Sprintf("%s row %q has %d cells against the header's %d: an unescaped `|` splits a cell, so the row carries more than it declares", where, first, cells, header)
+	}
+	return fmt.Sprintf("%s row %q has %d cells against the header's %d: a cell is missing, so the row carries less than it declares", where, first, cells, header)
 }
 
 // table returns the data rows and the header of the first markdown table in a section.
