@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -31,8 +32,8 @@ commands:
   sync     install the embedded skills and wire the gate into settings.json
   doctor   report installed skills, the hook wiring, and optional capabilities
   bench    run the testing skill against sealed-key fixtures and score it (run | score | history)
-  plan     write the skeleton, check the contract, and name what breadth is still owed
-           (init | check | gaps)
+  plan     write the skeleton, check the contract, name what breadth is still owed, and record a
+           Findings row from flags (init | check | gaps | add-finding)
   check    say what this repository still owes, from git and the plan alone: no hook payload,
            no transcript, no host. Exit 1 when there is something to do.
   feedback record an honest process report on the method itself, or read the reports back
@@ -55,6 +56,11 @@ bench rescore [--bench-dir <dir>] <results>
 plan init [--path docs/testing/test-plan.md] [--force]
 plan check [--path docs/testing/test-plan.md]
 plan gaps  [--path docs/testing/test-plan.md]
+plan add-finding --id <id> --location <path:line> --severity <class> --data-safe <yes|no> --evidence <ids>
+           --status <open|confirmed|fixed|rejected|wontfix> [--test <suite :: name>] --verdict-by <who / date>
+           --reason <why> [--fingerprint <digest>] [--path docs/testing/test-plan.md]
+           (writes one Findings row; refuses a row plan check would reject, and never writes an
+            evidence row. A bad value exits 2; a plan that refuses the row exits 1)
            (swept = status done, fixed or closed; n/a, na, none and skipped leave the denominator)
 check [--cwd .]
 feedback [--config-dir <dir>] [--template] [--file <path>] [--plan <path>] [--summary]
@@ -236,6 +242,16 @@ func runPlan(args []string) int {
 	fs := flag.NewFlagSet("plan", flag.ContinueOnError)
 	path := fs.String("path", plan.DefaultPath, "plan file")
 	force := fs.Bool("force", false, "replace an existing plan (init only)")
+	id := fs.String("id", "", "Findings row id (add-finding)")
+	location := fs.String("location", "", "the `path:line` the finding cites (add-finding)")
+	severity := fs.String("severity", "", "consequence class (add-finding)")
+	dataSafe := fs.String("data-safe", "", "whether data is safe (add-finding)")
+	evidence := fs.String("evidence", "", "Evidence ledger ids the finding cites (add-finding)")
+	test := fs.String("test", "", "pinning test, required when the status is confirmed or fixed (add-finding)")
+	status := fs.String("status", "", "one of "+plan.FindingsStatusList+" (add-finding)")
+	verdictBy := fs.String("verdict-by", "", "who settled it and when (add-finding)")
+	reason := fs.String("reason", "", "why the verdict stands (add-finding)")
+	fingerprint := fs.String("fingerprint", "", "cited-files fingerprint at verdict, default - (add-finding)")
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
 	}
@@ -272,6 +288,36 @@ func runPlan(args []string) int {
 			fmt.Fprintf(os.Stderr, "%s: %s\n", *path, p)
 		}
 		return 1
+	case "add-finding":
+		// A flag the row cannot be built without is a usage error, not a plan-side refusal: nothing has
+		// been read yet, and the operator still holds the whole command on the line. --test is conditional
+		// on the status and is answered by the plan package, which also knows whether the table carries
+		// the column at all.
+		for _, req := range []struct{ flag, value string }{
+			{"id", *id}, {"location", *location}, {"severity", *severity}, {"data-safe", *dataSafe},
+			{"evidence", *evidence}, {"status", *status}, {"verdict-by", *verdictBy}, {"reason", *reason},
+		} {
+			if strings.TrimSpace(req.value) == "" {
+				fmt.Fprintf(os.Stderr, "plan add-finding: --%s is required\n", req.flag)
+				return 2
+			}
+		}
+		line, err := plan.AddFinding(*path, plan.Finding{
+			ID: *id, Location: *location, Severity: *severity, DataSafe: *dataSafe,
+			Evidence: *evidence, Test: *test, Status: *status, VerdictBy: *verdictBy,
+			Reason: *reason, Fingerprint: *fingerprint,
+		})
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "plan add-finding:", err)
+			// The package owns the vocabulary, so it owns the split: a value it refuses is a malformed
+			// invocation (2), anything else is the plan refusing the row (1).
+			if errors.Is(err, plan.ErrUsage) {
+				return 2
+			}
+			return 1
+		}
+		fmt.Printf("added %s to %s at line %d\n", *id, *path, line)
+		return 0
 	default:
 		fmt.Fprint(os.Stderr, usage)
 		return 2

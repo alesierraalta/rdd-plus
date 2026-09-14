@@ -189,7 +189,7 @@ func runCLI(t *testing.T, bin string, args ...string) (string, int) {
 
 // A usage text that does not list a command it accepts sends users to the wrong place.
 func TestUsageListsEveryBenchSubcommand(t *testing.T) {
-	for _, sub := range []string{"bench run", "bench score", "bench history", "bench compare", "bench rescore", "plan init", "plan check", "plan gaps"} {
+	for _, sub := range []string{"bench run", "bench score", "bench history", "bench compare", "bench rescore", "plan init", "plan check", "plan gaps", "plan add-finding"} {
 		if !strings.Contains(usage, sub) {
 			t.Errorf("usage does not document %q", sub)
 		}
@@ -254,5 +254,125 @@ func TestProbeHookRunsTheWiredCommand(t *testing.T) {
 	}
 	if err := probeHook(`"` + write("broken", "#!/bin/sh\nexit 3\n") + `"`); err == nil {
 		t.Fatal("a wired command that exits non-zero must fail the probe")
+	}
+}
+
+const cliFindingPlan = `## Findings
+
+| Id | Finding | Severity | Data safe? | Evidence id | Pinning test | Status | Verdict by / date | Reason | Fingerprint |
+|---|---|---|---|---|---|---|---|---|---|
+
+## Evidence ledger
+
+| Id | Claim |
+|---|---|
+| E1 | observed |
+`
+
+func cliFindingArgs(path, id, evidence string, status ...string) []string {
+	findingStatus := "open"
+	if len(status) > 0 {
+		findingStatus = status[0]
+	}
+	return []string{
+		"plan", "add-finding", "--path", path,
+		"--id", id, "--location", "src/a.go:1", "--severity", "bug",
+		"--data-safe", "yes", "--evidence", evidence, "--test", "",
+		"--status", findingStatus, "--verdict-by", "me / 2026-09-10", "--reason", "not pinned",
+		"--fingerprint", "",
+	}
+}
+
+func TestPlanAddFindingCLI(t *testing.T) {
+	bin := buildCLI(t)
+	path := filepath.Join(t.TempDir(), "test-plan.md")
+	if err := os.WriteFile(path, []byte(cliFindingPlan), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, code := runCLI(t, bin, cliFindingArgs(path, "F1", "E1")...)
+	if code != 0 || !strings.Contains(out, "added F1") {
+		t.Fatalf("successful insertion = %d %q", code, out)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "| F1 | src/a.go:1 | bug | yes | E1 |  | open | me / 2026-09-10 | not pinned | - |") {
+		t.Fatalf("inserted row missing:\n%s", raw)
+	}
+}
+
+func TestPlanAddFindingUsageRefusalExits2(t *testing.T) {
+	bin := buildCLI(t)
+	path := filepath.Join(t.TempDir(), "not-created.md")
+	out, code := runCLI(t, bin, cliFindingArgs(path, "", "E1")...)
+	if code != 2 || !strings.Contains(out, "--id") {
+		t.Fatalf("missing required value = %d %q", code, out)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("usage refusal must not create the plan: %v", err)
+	}
+}
+
+func TestPlanAddFindingValueRefusalExits2(t *testing.T) {
+	bin := buildCLI(t)
+	path := filepath.Join(t.TempDir(), "test-plan.md")
+	if err := os.WriteFile(path, []byte(cliFindingPlan), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	out, code := runCLI(t, bin, cliFindingArgs(path, "F1", "E1", "resolved")...)
+	if code != 2 || !strings.Contains(out, "open, confirmed, fixed, rejected, wontfix") {
+		t.Fatalf("invalid status = %d %q", code, out)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(before) != string(after) {
+		t.Fatal("value refusal must leave the plan byte-identical")
+	}
+}
+
+func TestPlanAddFindingPlanRefusalExits1(t *testing.T) {
+	bin := buildCLI(t)
+	path := filepath.Join(t.TempDir(), "test-plan.md")
+	plan := strings.Replace(cliFindingPlan, "| E1 | observed |\n", "", 1)
+	if err := os.WriteFile(path, []byte(plan), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	out, code := runCLI(t, bin, cliFindingArgs(path, "F1", "E1")...)
+	if code != 1 || !strings.Contains(out, "not a row in the Evidence ledger") {
+		t.Fatalf("plan refusal = %d %q", code, out)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(before) != string(after) {
+		t.Fatal("plan refusal must leave the plan byte-identical")
+	}
+}
+
+func TestPlanAddFindingHelp(t *testing.T) {
+	bin := buildCLI(t)
+	out, code := runCLI(t, bin, "plan", "add-finding", "--help")
+	if code != 2 {
+		t.Fatalf("help exit = %d, want 2\n%s", code, out)
+	}
+	for _, want := range []string{"-id", "-location", "-data-safe", "-fingerprint"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("help missing %q:\n%s", want, out)
+		}
 	}
 }
