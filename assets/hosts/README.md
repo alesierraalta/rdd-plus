@@ -6,6 +6,12 @@ model will read it.
 
 Two shapes cover every host seen so far.
 
+`rdd-plus sync` installs the embedded skills into every host configuration directory it finds: Claude
+Code and Pi read `~/.claude/skills`, OpenCode reads `~/.config/opencode/skills`, Gemini reads
+`~/.gemini/skills`, and Codex reads `~/.codex/skills`. The Stop hook is wired only where its transport
+is known—Claude Code's `~/.claude/settings.json`; OpenCode, Gemini, and Codex receive the skills, but
+their transports are documented rather than wired by `sync`.
+
 **Command hooks.** The host runs a command when the agent stops and reads JSON back. Claude Code
 and Pi both work this way, and Pi's payload carries the same fields Claude's does
 (`session_id`, `transcript_path`, `cwd`, `hook_event_name`, `stop_hook_active`), so

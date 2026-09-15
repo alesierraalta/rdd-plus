@@ -247,3 +247,118 @@ func TestIsPreviousGate(t *testing.T) {
 		})
 	}
 }
+
+func testAllHosts(t *testing.T) []Host {
+	t.Helper()
+	home := t.TempDir()
+	for _, dir := range []string{".claude", filepath.Join(".config", "opencode"), ".gemini", ".codex"} {
+		if err := os.MkdirAll(filepath.Join(home, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return DiscoverHosts(home, "").Hosts
+}
+
+func hostReport(t *testing.T, report Report, name string) HostReport {
+	t.Helper()
+	for _, host := range report.Hosts {
+		if host.Host.Name == name {
+			return host
+		}
+	}
+	t.Fatalf("report has no host %q: %+v", name, report.Hosts)
+	return HostReport{}
+}
+
+func TestSyncInstallsIntoEveryDiscoveredHost(t *testing.T) {
+	hosts := testAllHosts(t)
+	report, err := SyncHosts(hosts, bin, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, host := range hosts {
+		if len(hostReport(t, report, host.Name).Written) != len(assets.SkillNames()) {
+			t.Errorf("%s did not report every skill as written", host.Name)
+		}
+		for _, name := range assets.SkillNames() {
+			if _, err := os.Stat(filepath.Join(host.SkillsDir, name, "SKILL.md")); err != nil {
+				t.Errorf("%s skill %s not installed: %v", host.Name, name, err)
+			}
+		}
+	}
+}
+
+func TestSyncBacksUpADifferingCopyPerHost(t *testing.T) {
+	hosts := testAllHosts(t)
+	name := assets.SkillNames()[0]
+	for _, host := range hosts {
+		target := filepath.Join(host.SkillsDir, name)
+		if err := os.MkdirAll(target, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(target, "SKILL.md"), []byte("local edit\\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	report, err := SyncHosts(hosts, bin, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, host := range hosts {
+		backup, ok := hostReport(t, report, host.Name).BackedUp[name]
+		if !ok || !strings.Contains(backup, filepath.Join(host.SkillsDir, ".rdd-plus-backup")) {
+			t.Fatalf("%s backup = %q, want a backup under its skills dir", host.Name, backup)
+		}
+		saved, err := os.ReadFile(filepath.Join(backup, "SKILL.md"))
+		if err != nil || string(saved) != "local edit\\n" {
+			t.Fatalf("%s backup does not hold its local edit: %v %q", host.Name, err, saved)
+		}
+	}
+}
+
+func TestSyncSkipsIdenticalCopiesPerHost(t *testing.T) {
+	hosts := testAllHosts(t)
+	if _, err := SyncHosts(hosts, bin, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	report, err := SyncHosts(hosts, bin, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, host := range hosts {
+		got := hostReport(t, report, host.Name)
+		if len(got.Written) != 0 || len(got.Unchanged) != len(assets.SkillNames()) {
+			t.Errorf("%s second run wrote %v, unchanged %d", host.Name, got.Written, len(got.Unchanged))
+		}
+	}
+}
+
+func TestSyncWritesNoHookOutsideClaude(t *testing.T) {
+	hosts := testAllHosts(t)
+	before := map[string][]byte{}
+	for _, host := range hosts {
+		if host.Name == "claude" {
+			continue
+		}
+		path := filepath.Join(host.ConfigDir, "settings.json")
+		before[host.Name] = []byte(`{"hooks":{"Stop":[{"hooks":[{"command":"keep me"}]}]}}`)
+		if err := os.WriteFile(path, before[host.Name], 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := SyncHosts(hosts, bin, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, host := range hosts {
+		path := filepath.Join(host.ConfigDir, "settings.json")
+		got, err := os.ReadFile(path)
+		if host.Name == "claude" {
+			if err != nil {
+				t.Fatalf("Claude settings.json: %v", err)
+			}
+		} else if err != nil || string(got) != string(before[host.Name]) {
+			t.Fatalf("%s settings.json changed: %v %q", host.Name, err, got)
+		}
+	}
+}
