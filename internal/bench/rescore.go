@@ -71,8 +71,12 @@ func Rescore(results string, lookup func(caseName string) (string, error), suite
 	if err := os.MkdirAll(agg.Out, 0o755); err != nil {
 		return agg, err
 	}
-	writeJSON(filepath.Join(agg.Out, "aggregate.json"), agg)
-	_ = os.WriteFile(filepath.Join(agg.Out, "summary.md"), []byte(Summary(agg)), 0o644)
+	if err := writeJSON(filepath.Join(agg.Out, "aggregate.json"), agg); err != nil {
+		return agg, err
+	}
+	if err := os.WriteFile(filepath.Join(agg.Out, "summary.md"), []byte(Summary(agg)), 0o644); err != nil {
+		return agg, err
+	}
 	return agg, nil
 }
 

@@ -165,6 +165,10 @@ func defectIDs(k Key) []string {
 // ExitCostCeiling is returned when the run stopped early because the cost ceiling was reached.
 const ExitCostCeiling = 2
 
+// ExitArtifact is returned when the run finished but its record could not be written: the numbers exist and
+// nothing persisted them, which is a failure a reader has to see rather than a run that looks recorded.
+const ExitArtifact = 4
+
 // ExitPartial is returned when some case failed or was invalid: the numbers are incomplete
 // evidence and must not be read as a measurement of the whole corpus.
 const ExitPartial = 3
@@ -312,19 +316,32 @@ func Run(opts Options) (Aggregate, int) {
 		fmt.Fprintf(opts.Log, "partial: %d failed, %d invalid; recall covers valid cases only\n", agg.Failed, agg.Invalid)
 	}
 	agg.Corpus = CorpusDigest(corpus, opts.Runs)
-	writeJSON(filepath.Join(opts.Out, "aggregate.json"), agg)
-	_ = os.WriteFile(filepath.Join(opts.Out, "summary.md"), []byte(Summary(agg)), 0o644)
+	if err := writeJSON(filepath.Join(opts.Out, "aggregate.json"), agg); err != nil {
+		return unwritten(agg, opts, "aggregate.json", err)
+	}
+	if err := os.WriteFile(filepath.Join(opts.Out, "summary.md"), []byte(Summary(agg)), 0o644); err != nil {
+		return unwritten(agg, opts, "summary.md", err)
+	}
 	if !opts.DryRun && opts.BenchDir != "" {
-		_ = AppendHistory(opts.BenchDir, HistoryEntry{
+		if err := AppendHistory(opts.BenchDir, HistoryEntry{
 			TS: agg.TS, Out: opts.Out, Model: opts.Model, Cases: len(caseDirs), Defects: agg.Defects,
 			Found: agg.Found, Recall: agg.Recall, Caught: agg.Caught, RecallCaught: agg.RecallCaught,
 			FalsePositives: agg.FalsePositives, CostUSD: agg.CostUSD,
 			Failed: agg.Failed, Invalid: agg.Invalid, NoPlan: agg.NoPlan, Kind: KindRun,
 			SkillVersion: SkillVersion(opts.SkillFile), Corpus: agg.Corpus,
 			LightActivated: agg.LightActivated, Runs: opts.Runs,
-		})
+		}); err != nil {
+			return unwritten(agg, opts, "the history row", err)
+		}
 	}
 	return agg, code
+}
+
+// unwritten reports a record the run could not persist: the numbers are returned so a caller can still read
+// them, and the code says the run did not finish as a recorded one.
+func unwritten(agg Aggregate, opts Options, artifact string, err error) (Aggregate, int) {
+	fmt.Fprintf(opts.Log, "%s could not be written: %v; the run's numbers are not recorded\n", artifact, err)
+	return agg, ExitArtifact
 }
 
 func runOnce(caseDir string, key Key, run int, opts Options) Result {
@@ -393,6 +410,7 @@ func writeAgentLog(dir string, attempt int, ar AgentResult, err error) {
 	fmt.Fprintf(&b, "attempt %d exit_code=%d is_error=%v timed_out=%v err=%v\n", attempt+1, ar.ExitCode, ar.IsError, ar.TimedOut, err)
 	b.WriteString(ar.Raw)
 	b.WriteString("\n")
+	// A diagnostic log is not a record: a case whose log cannot be written is not a case that failed.
 	f, e := os.OpenFile(filepath.Join(dir, "agent.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if e == nil {
 		_, _ = f.WriteString(b.String())
@@ -412,10 +430,19 @@ func merge(res, scored Result) Result {
 
 func finish(res Result, opts Options, keepWS bool) Result {
 	dir := filepath.Dir(res.Workspace)
-	writeJSON(filepath.Join(dir, "result.json"), res)
+	if err := writeJSON(filepath.Join(dir, "result.json"), res); err != nil {
+		// The case ran, and its record is its evidence: a case whose result cannot be written is reported as
+		// failed rather than counted from a file that is not there. Marking it failed also keeps the
+		// workspace, which is the only copy of what the case produced.
+		res.Failed, res.FailReason = true, fmt.Sprintf("result.json could not be written: %v", err)
+	}
 	// The plan is the run's deliverable: keep it beside result.json so a later scorer can re-read it.
 	if data, err := os.ReadFile(filepath.Join(res.Workspace, PlanPath)); err == nil {
-		_ = os.WriteFile(filepath.Join(dir, "test-plan.md"), data, 0o644)
+		if err := os.WriteFile(filepath.Join(dir, "test-plan.md"), data, 0o644); err != nil {
+			// The case is still scored from result.json; what is lost is rescoring it later, so the note
+			// travels with the case instead of failing a measurement that did happen.
+			res.Notes = append(res.Notes, "the plan could not be kept beside the result: "+err.Error())
+		}
 	}
 	if !opts.Keep && !keepWS && !res.Invalid && !res.Failed {
 		_ = os.RemoveAll(res.Workspace)
@@ -473,13 +500,15 @@ func listCases(glob string) ([]string, error) {
 	return dirs, nil
 }
 
-func writeJSON(path string, v any) {
-	_ = os.MkdirAll(filepath.Dir(path), 0o755)
+func writeJSON(path string, v any) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
 	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
-		return
+		return err
 	}
-	_ = os.WriteFile(path, append(data, '\n'), 0o644)
+	return os.WriteFile(path, append(data, '\n'), 0o644)
 }
 
 // Summary renders the aggregate as the markdown table written to summary.md.

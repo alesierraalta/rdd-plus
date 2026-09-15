@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -477,5 +478,73 @@ func TestRunRecordsCorpusInHistory(t *testing.T) {
 	}
 	if row.Corpus != want {
 		t.Fatalf("history row corpus = %q, want %q", row.Corpus, want)
+	}
+}
+
+// A run whose record cannot be written must say so: the numbers exist and nothing persisted them, which is a
+// failure a reader has to see rather than a run that looks recorded.
+func TestRunReportsTheRecordItCouldNotWrite(t *testing.T) {
+	requireNodeAndGit(t)
+	root := t.TempDir()
+	caseDir := fakeCaseNamed(t, root, "case-a")
+
+	for _, artifact := range []string{"aggregate.json", "summary.md"} {
+		t.Run(artifact, func(t *testing.T) {
+			out := t.TempDir()
+			// A directory where the file has to go: this write fails and nothing else in the run does.
+			if err := os.MkdirAll(filepath.Join(out, artifact), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			var log strings.Builder
+			agg, code := Run(Options{CasesGlob: caseDir, Runs: 1, DryRun: true, Out: out,
+				BenchDir: t.TempDir(), SuiteTimeout: time.Minute, Log: &log})
+			if code != ExitArtifact {
+				t.Fatalf("code = %d, want %d: the %s was not written", code, ExitArtifact, artifact)
+			}
+			if !strings.Contains(log.String(), artifact) {
+				t.Fatalf("the log does not name %s: %q", artifact, log.String())
+			}
+			if agg.Out != out {
+				t.Fatalf("the numbers walked away with the failure: %+v", agg)
+			}
+		})
+	}
+}
+
+// The history row is the measurement's own record: a run that cannot append it must not exit as recorded.
+// A dry run records nothing, so this one runs for real with an agent that does nothing.
+func TestRunReportsAHistoryRowItCouldNotAppend(t *testing.T) {
+	requireNodeAndGit(t)
+	caseDir := fakeCaseNamed(t, t.TempDir(), "case-a")
+	benchDir := t.TempDir()
+	// A directory where the jsonl file has to go: appending the row fails.
+	if err := os.MkdirAll(filepath.Join(benchDir, "history.jsonl"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	agent := func(ctx context.Context, ws string, key Key, opts Options) (AgentResult, error) {
+		return AgentResult{Result: "nothing found", CostUSD: 0.01, Turns: 2}, nil
+	}
+	var log strings.Builder
+	_, code := Run(Options{CasesGlob: caseDir, Runs: 1, Out: t.TempDir(), Agent: agent,
+		BenchDir: benchDir, Timeout: time.Minute, SuiteTimeout: time.Minute, Log: &log})
+	if code != ExitArtifact {
+		t.Fatalf("code = %d, want %d: the history row was not written", code, ExitArtifact)
+	}
+	if !strings.Contains(log.String(), "history") {
+		t.Fatalf("the log does not name the history: %q", log.String())
+	}
+}
+
+// The per-case result is the evidence the aggregate reads: a case whose record cannot be written is reported
+// as failed rather than counted from a file that is not there.
+func TestACaseWhoseResultCannotBeWrittenIsReportedFailed(t *testing.T) {
+	out := t.TempDir()
+	res := Result{Case: "case-a", Run: 1, Total: 2, Workspace: filepath.Join(out, "case-a", "1", "ws")}
+	if err := os.MkdirAll(filepath.Join(out, "case-a", "1", "result.json"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got := finish(res, Options{Out: out, Log: io.Discard}, false)
+	if !got.Failed || !strings.Contains(got.FailReason, "result.json") {
+		t.Fatalf("finish = %+v, want the case failed with the reason naming result.json", got)
 	}
 }

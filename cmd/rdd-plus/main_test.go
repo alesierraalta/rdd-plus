@@ -901,3 +901,24 @@ func TestPlanGapsUsesTheDeclaredRun(t *testing.T) {
 		t.Fatalf("--all did not force whole-document counts = %d\n%s", code, out)
 	}
 }
+
+// The results line is a promise about a file: when the run could not write its record, pointing the operator
+// at summary.md sends them to a path that does not exist.
+func TestBenchDoesNotPrintAResultsPathItCouldNotWrite(t *testing.T) {
+	bin := buildCLI(t)
+	out := t.TempDir()
+	// A directory where aggregate.json has to go: the record cannot be written.
+	if err := os.MkdirAll(filepath.Join(out, "aggregate.json"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got, code := runCLI(t, bin, "bench", "run", "--cases", "nope*", "--dry-run", "--out", out, "--bench-dir", t.TempDir())
+	if code == 0 {
+		t.Fatalf("a run that matched no case exited 0\n%s", got)
+	}
+	if strings.Contains(got, "results:") {
+		t.Fatalf("the CLI points at a summary nobody wrote:\n%s", got)
+	}
+	if _, err := os.Stat(filepath.Join(out, "summary.md")); err == nil {
+		t.Fatal("the test's premise is wrong: something wrote a summary")
+	}
+}

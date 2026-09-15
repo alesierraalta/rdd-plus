@@ -735,7 +735,12 @@ func runBenchRun(args []string) int {
 		ConfigDir: cfgDir, BinDir: selfDir(), Workers: *workers,
 		DryRun: *dryRun, Keep: *keep, Retries: *retries, RetryDelay: *retryDelay, Log: os.Stdout,
 	})
-	fmt.Printf("results: %s\n", filepath.Join(*out, "summary.md"))
+	// The results line is a promise about a file: a run that matched no case, or one whose record could not be
+	// written, has no summary to point at, and the operator is sent to a path that does not exist.
+	summaryPath := filepath.Join(*out, "summary.md")
+	if _, err := os.Stat(summaryPath); err == nil {
+		fmt.Printf("results: %s\n", summaryPath)
+	}
 	return code
 }
 

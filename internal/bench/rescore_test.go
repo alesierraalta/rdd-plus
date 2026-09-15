@@ -105,3 +105,19 @@ func TestRescore(t *testing.T) {
 	}
 	_ = casesRoot
 }
+
+// A rescore whose aggregate cannot be written must not return as if it had recorded one.
+func TestRescoreReportsTheAggregateItCouldNotWrite(t *testing.T) {
+	results := t.TempDir()
+	if err := writeJSON(filepath.Join(results, "aggregate.json"), Aggregate{TS: "t0", Model: "m", Runs: 1}); err != nil {
+		t.Fatal(err)
+	}
+	// A directory where the rescored summary has to go: reading the source works, writing fails.
+	if err := os.MkdirAll(filepath.Join(results, "rescored", "summary.md"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	noLookup := func(name string) (string, error) { return "", fmt.Errorf("unexpected case lookup: %s", name) }
+	if _, err := Rescore(results, noLookup, time.Minute); err == nil {
+		t.Fatal("Rescore returned as if it had recorded the rescored aggregate")
+	}
+}
