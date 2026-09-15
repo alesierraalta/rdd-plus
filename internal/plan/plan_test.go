@@ -644,11 +644,41 @@ func TestLedgerResolvesTheColumnsOfTheShippedHeader(t *testing.T) {
 	}
 }
 
+// A fenced example before the real ledger is documentation. The old section reader took its first pipe row as
+// the header and stopped at the closing fence, so the machine read an example row instead of the ledger.
+func TestLedgerSkipsFencedExamplesBeforeTheRealTable(t *testing.T) {
+	doc := "## Evidence ledger\n\n```markdown\n| Example | Value |\n|---|---|\n| not-a-row | documentation |\n```\n\n" +
+		strings.TrimPrefix(machineHeader, "## Evidence ledger\n\n") +
+		"| E1 | claim | executed | admit | inputs | observed | sha256:1111 | mutation | reproduction | observado |\n"
+
+	got := Ledger(doc)
+	if len(got) != 1 || got[0].ID != "E1" {
+		t.Fatalf("ledger rows = %#v, want the real E1 row after the fenced example", got)
+	}
+}
+
+// RecordDigest must splice the real ledger row after documentation, not refuse because the example supplied the
+// first header. The write is still byte-preserving: only the named Digest cell may change.
+func TestRecordDigestSkipsFencedExamplesBeforeTheRealTable(t *testing.T) {
+	doc := "## Evidence ledger\n\n```markdown\n| Example | Value |\n|---|---|\n| not-a-row | documentation |\n```\n\n" +
+		strings.TrimPrefix(machineHeader, "## Evidence ledger\n\n") + recordRow(oldDigest)
+
+	got, err := RecordDigest(doc, "E1", newDigest)
+	if err != nil {
+		t.Fatalf("RecordDigest = %v", err)
+	}
+	want := strings.Replace(doc, oldDigest, newDigest, 1)
+	if got != want {
+		t.Fatalf("RecordDigest rewrote bytes outside the real ledger cell:\ngot  %q\nwant %q", got, want)
+	}
+}
+
 // Historical column names use substring matching, so the collisions are pinned: `Admit` must not resolve
 // to `Executed`, `Digest` must not resolve to another column, and no two names may share a column. The Run
 // column is the deliberate exact-match exception because `Target rung` contains the same substring.
 func TestLedgerColumnNamesResolveToDistinctColumns(t *testing.T) {
-	_, header := table(section(machineHeader, "Evidence ledger"))
+	scan := scanSection(strings.Split(machineHeader, "\n"), "Evidence ledger")
+	header := scan.header
 	if header == nil {
 		t.Fatal("the shipped header has no table")
 	}

@@ -223,8 +223,8 @@ type LedgerRow struct {
 // does, so a row with extra or truncated cells is reported rather than silently dropped. Rows the table
 // already skips, a separator or a placeholder row, stay skipped.
 func Ledger(doc string) []LedgerRow {
-	rows, header := table(section(doc, "Evidence ledger"))
-	if header == nil {
+	scan := scanSection(strings.Split(doc, "\n"), "Evidence ledger")
+	if scan.header == nil {
 		return nil
 	}
 	// Column names are matched by substring, so each name below is the whole word the header cell
@@ -232,11 +232,12 @@ func Ledger(doc string) []LedgerRow {
 	// resolves to `Observed` or to the mutation column, and `normalize` resolves to nothing else.
 	index := map[string]int{}
 	for _, name := range []string{"claim", "executed", "admit", "inputs", "observed", "digest", "normalize", "mode", "mutate", "mutation", "reproduction"} {
-		index[name] = columnIndex(header, name)
+		index[name] = columnIndex(scan.header, name)
 	}
-	ledger := make([]LedgerRow, 0, len(rows))
-	for _, row := range rows {
-		r := LedgerRow{ID: cell(row, 0), Label: cell(row, len(row)-1), Cells: len(row), HeaderCells: len(header)}
+	ledger := make([]LedgerRow, 0, len(scan.rows))
+	for _, scanned := range scan.rows {
+		row := scanned.cells
+		r := LedgerRow{ID: cell(row, 0), Label: cell(row, len(row)-1), Cells: len(row), HeaderCells: len(scan.header)}
 		for _, f := range []struct {
 			name  string
 			field *string
@@ -435,58 +436,39 @@ func RecordMode(doc, id, mode string) (string, error) {
 // re-rendering the row, which would rewrite escapes and spacing nobody asked to touch. Writing the value a
 // cell already holds is a no-op, so a rerun rewrites nothing.
 func recordCell(doc, id, column, label, value string) (string, error) {
-	start, end, ok := sectionBounds(doc, "Evidence ledger")
-	if !ok {
+	lines := strings.Split(doc, "\n")
+	heading, end := sectionRegion(lines, "Evidence ledger")
+	if heading < 0 {
 		return "", fmt.Errorf("the document has no Evidence ledger section, so there is no row %s to record", id)
 	}
-	body := doc[start:end]
-	_, header := table(body)
-	if header == nil {
+	scan := scanTable(lines, heading+1, end)
+	if scan.header == nil {
 		return "", fmt.Errorf("the Evidence ledger section holds no table, so there is no row %s to record", id)
 	}
-	iColumn := columnIndex(header, column)
+	iColumn := columnIndex(scan.header, column)
 	if iColumn < 0 {
 		return "", fmt.Errorf("the Evidence ledger header names no %s column, so row %s has nowhere to record %s: %w", label, id, value, ErrNoColumn)
 	}
 
-	// The section's own lines are walked the way table walks them, so the row a reader sees is the row
-	// this writes, and the offset in doc is carried alongside so the splice never re-joins cells.
-	seenHeader := false
-	lineStart := start
-	for _, line := range strings.Split(body, "\n") {
-		t := strings.TrimSpace(line)
-		if !strings.HasPrefix(t, "|") {
-			// A blank line inside the section is not the end of its table, and table skips it too: stopping
-			// here refused a row the reader can see.
-			if t == "" {
-				lineStart += len(line) + 1
-				continue
-			}
-			if seenHeader {
-				break
-			}
-			lineStart += len(line) + 1
+	// scanTable carries the exact source line beside the cells it read, so the row a reader sees is the row
+	// this writes. Line starts preserve the original bytes; the splice still uses cellSpan rather than joining
+	// cells back together, so escaped pipes and the author's spacing survive.
+	lineStarts := make([]int, len(lines))
+	for i := 1; i < len(lines); i++ {
+		lineStarts[i] = lineStarts[i-1] + len(lines[i-1]) + 1
+	}
+	for _, scanned := range scan.rows {
+		if cell(scanned.cells, 0) != id {
 			continue
 		}
-		cells := split(t)
-		if !seenHeader {
-			seenHeader = true
-			lineStart += len(line) + 1
-			continue
-		}
-		if isSeparator(cells) || len(cells) == 0 || placeholder.MatchString(cell(cells, 0)) {
-			lineStart += len(line) + 1
-			continue
-		}
-		if cell(cells, 0) != id {
-			lineStart += len(line) + 1
-			continue
-		}
+		lineIndex := scanned.line - 1
+		line := lines[lineIndex]
+		lineStart := lineStarts[lineIndex]
 		cs, ce, ok := cellSpan(line, iColumn)
 		if !ok {
 			// cellSpan cuts the cells split cuts, so the column has no cell exactly when the row is shorter
 			// than it: one refusal, not two spellings of the same fact.
-			return "", fmt.Errorf("evidence %s has %d cells, so the %s column (%d) has no cell in that row; restore it before recording", id, len(cells), label, iColumn)
+			return "", fmt.Errorf("evidence %s has %d cells, so the %s column (%d) has no cell in that row; restore it before recording", id, len(scanned.cells), label, iColumn)
 		}
 		// Replace the cell's own bytes and nothing else: a cell that holds a value keeps the spacing its
 		// author wrote around it, so a rerun with the same value is byte-identical. A cell that holds no
@@ -820,52 +802,6 @@ func sectionRegion(lines []string, name string) (heading, end int) {
 	return -1, -1
 }
 
-// section and table are the readers gaps.go still uses. The Light rules read their tables through
-// sectionRegion and scanTable instead, so a Light breach can name the row it blames; when the gaps sweep
-// moves onto the same scanner these two go with it.
-
-// section returns the body under "## <name>" up to the next level-2 heading.
-func section(doc, name string) string {
-	start, end, ok := sectionBounds(doc, name)
-	if !ok {
-		return ""
-	}
-	return doc[start:end]
-}
-
-// sectionBounds returns the byte range the body under "## <name>" occupies in doc, up to the next
-// level-2 heading. The heading is matched exactly as section matched it, so the one locator serves both
-// the readers and the writer: RecordDigest needs the offset, and Check and Ledger need only the text.
-func sectionBounds(doc, name string) (start, end int, ok bool) {
-	lines := strings.Split(doc, "\n")
-	heading := -1
-	for i, l := range lines {
-		t := strings.TrimSpace(l)
-		if strings.HasPrefix(t, "## ") && strings.EqualFold(strings.TrimSpace(strings.TrimPrefix(t, "## ")), name) {
-			heading = i
-			break
-		}
-	}
-	if heading < 0 {
-		return 0, 0, false
-	}
-	start = len(strings.Join(lines[:heading+1], "\n")) + 1
-	if start > len(doc) {
-		start = len(doc)
-	}
-	end = len(doc)
-	for i := heading + 1; i < len(lines); i++ {
-		if strings.HasPrefix(strings.TrimSpace(lines[i]), "## ") {
-			end = len(strings.Join(lines[:i], "\n"))
-			break
-		}
-	}
-	if end < start {
-		end = start
-	}
-	return start, end, true
-}
-
 // tableProblems reports every data row in the document whose cell count disagrees with its own table's
 // header. A cell holding an unescaped `|` splits into several, so the row declares one thing and carries
 // another, and every column to the right of the cut is read from the wrong cell. Each malformed row earns
@@ -946,31 +882,6 @@ func cellCountBreach(table, first string, cells, header int) string {
 		return fmt.Sprintf("%s row %q has %d cells against the header's %d: an unescaped `|` splits a cell, so the row carries more than it declares", where, first, cells, header)
 	}
 	return fmt.Sprintf("%s row %q has %d cells against the header's %d: a cell is missing, so the row carries less than it declares", where, first, cells, header)
-}
-
-// table returns the data rows and the header of the first markdown table in a section.
-func table(sec string) (rows [][]string, header []string) {
-	for _, l := range strings.Split(sec, "\n") {
-		t := strings.TrimSpace(l)
-		if !strings.HasPrefix(t, "|") {
-			// A blank line inside the section is not the end of its table. scanTable tolerates one, so stopping
-			// here dropped rows the checker had just validated, and dropped them without saying so.
-			if t != "" && header != nil {
-				break
-			}
-			continue
-		}
-		cells := split(t)
-		if header == nil {
-			header = cells
-			continue
-		}
-		if isSeparator(cells) || len(cells) == 0 || placeholder.MatchString(cell(cells, 0)) {
-			continue
-		}
-		rows = append(rows, cells)
-	}
-	return rows, header
 }
 
 // split cuts a markdown row into cells. A backslash-escaped pipe belongs to the cell it sits in;
