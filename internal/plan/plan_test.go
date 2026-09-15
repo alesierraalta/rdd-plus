@@ -197,6 +197,40 @@ func TestCheckReportsRowsWhoseCellsDoNotMatchTheirHeader(t *testing.T) {
 	}
 }
 
+// An example table inside a code fence is documentation: the rows the checker validates are the ones outside
+// it. A second reader with rules of its own invented a breach about a table nobody reads.
+func TestCheckDoesNotBlameRowsInsideAFencedExample(t *testing.T) {
+	const finding = "| F1 | `src/a.js:5` x | M | yes | E1 | t.js :: x | fixed | me | - | - |\n"
+	const ledgerRow = "| E1 | c | cmd | i | o | m | r | observado |\n"
+	plan := header + finding + ledger + ledgerRow +
+		"\n## How a row looks\n\n```markdown\n| a | b | c |\n|---|---|---|\n| only one |\n```\n"
+	p := write(t, t.TempDir(), "plan.md", plan)
+	problems, err := Check(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(problems) != 0 {
+		t.Fatalf("a fenced example owes no breach: %v", problems)
+	}
+}
+
+// A blank line inside a table does not restart it, which is what the row readers already know. Reading the
+// document with a private loop made this row the next table's header, so the count mismatch that moves every
+// column to its right was never reported and only its symptoms were.
+func TestCheckBlamesTheCellCountWhenABlankLineSplitsTheTable(t *testing.T) {
+	const ledgerRow = "| E1 | c | cmd | i | o | m | r | observado |\n"
+	plan := header + "\n| F1 | `src/a.js:5` x | M | yes |\n" + ledger + ledgerRow
+	p := write(t, t.TempDir(), "plan.md", plan)
+	problems, err := Check(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(problems, "\n")
+	if !strings.Contains(joined, "4 cells") || !strings.Contains(joined, "header's 10") {
+		t.Fatalf("the count mismatch is the breach that explains the rest: %v", problems)
+	}
+}
+
 // scopedPlan is the smallest compliant plan with a ranked target and a layer matrix, so a test varies
 // only what the scoped-run rule reads: the `Light:` declaration, whether the plan corroborates the
 // target it names, and the reason a skipped layer carries.

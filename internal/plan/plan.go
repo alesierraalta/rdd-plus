@@ -869,35 +869,56 @@ func sectionBounds(doc, name string) (start, end int, ok bool) {
 // tableProblems reports every data row in the document whose cell count disagrees with its own table's
 // header. A cell holding an unescaped `|` splits into several, so the row declares one thing and carries
 // another, and every column to the right of the cut is read from the wrong cell. Each malformed row earns
-// one breach, not one per extra cell. The rows table already skips, a separator or a placeholder, are
-// skipped here too, so nothing is said about a line that is not a conclusion.
+// one breach, not one per extra cell. It reads the document through the same scanner the row readers use,
+// so a breach is reported exactly where a row would be read: an example inside a code fence is documentation,
+// and a blank line inside a table does not restart it. A loop with rules of its own is how the checker came
+// to invent a breach about a line nobody reads and to miss the count that explains the rows it did read.
 func tableProblems(doc string) []string {
+	lines := strings.Split(doc, "\n")
 	var problems []string
-	name := ""
-	var header []string
-	for _, line := range strings.Split(doc, "\n") {
-		t := strings.TrimSpace(line)
-		if h, ok := headingName(t); ok {
-			name, header = h, nil
-			continue
-		}
-		if !strings.HasPrefix(t, "|") {
-			header = nil
-			continue
-		}
-		cells := split(t)
-		if header == nil {
-			header = cells
-			continue
-		}
-		if isSeparator(cells) || len(cells) == 0 || placeholder.MatchString(cell(cells, 0)) {
-			continue
-		}
-		if len(cells) != len(header) {
-			problems = append(problems, cellCountBreach(name, cell(cells, 0), len(cells), len(header)))
+	for _, region := range headingRegions(lines) {
+		for start := region.start; start < region.end; {
+			scan := scanTable(lines, start, region.end)
+			if scan.header != nil {
+				for _, r := range scan.rows {
+					if len(r.cells) != len(scan.header) {
+						problems = append(problems, cellCountBreach(region.name, cell(r.cells, 0), len(r.cells), len(scan.header)))
+					}
+				}
+			}
+			// The block closed at a line inside this region: the next table of the same section may follow it.
+			if scan.ended == 0 || scan.ended <= start || scan.ended >= region.end {
+				break
+			}
+			start = scan.ended
 		}
 	}
 	return problems
+}
+
+// headingRegion is one heading and the lines it owns: the line under it up to the next heading of any level,
+// which is where another table of the same section may start.
+type headingRegion struct {
+	name  string
+	start int // 0-based, first line under the heading
+	end   int // 0-based, exclusive
+}
+
+// headingRegions returns the region each heading opens, in order. Text before the first heading belongs to no
+// region: no reader reads a table there, so the checker does not measure one either.
+func headingRegions(lines []string) []headingRegion {
+	var regions []headingRegion
+	for i, l := range lines {
+		name, ok := headingName(strings.TrimSpace(l))
+		if !ok {
+			continue
+		}
+		if n := len(regions); n > 0 {
+			regions[n-1].end = i
+		}
+		regions = append(regions, headingRegion{name: name, start: i + 1, end: len(lines)})
+	}
+	return regions
 }
 
 // headingName returns the text of a markdown heading line and whether the line is a heading at all. A `#`
