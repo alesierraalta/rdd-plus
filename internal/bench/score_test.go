@@ -3,7 +3,10 @@ package bench
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	plancheck "github.com/alesierraalta/rdd-plus/internal/plan"
 )
 
 const findingsHeader = "| Id | Finding (path:line, one line) | Severity | Data safe? | Evidence id | Status | Verdict | Reason | Fingerprint |\n|---|---|---|---|---|---|---|---|---|\n"
@@ -170,11 +173,11 @@ func TestSamePath(t *testing.T) {
 
 func TestSectionAndRows(t *testing.T) {
 	doc := "## Findings\n\ntext\n\n| a | b |\n|---|---|\n| 1 | x |\n| (none) | |\n\nafter\n\n## Next\n\n| z |\n|---|\n| 9 |\n"
-	rows := dataRows(sectionText(doc, "Findings"))
+	_, rows := plancheck.Table(doc, "Findings")
 	if len(rows) != 1 || rows[0][0] != "1" {
 		t.Fatalf("rows = %v", rows)
 	}
-	if got := dataRows(sectionText(doc, "Missing")); got != nil {
+	if _, got := plancheck.Table(doc, "Missing"); got != nil {
 		t.Fatalf("missing section yielded rows: %v", got)
 	}
 }
@@ -199,5 +202,21 @@ func TestScoreReadsTheRowsUnderABlankLineInsideATable(t *testing.T) {
 	}
 	if r.Found != 2 {
 		t.Fatalf("found = %d of 2: the row under the blank line was never scored", r.Found)
+	}
+}
+
+func TestScoreReadsTheRealFindingsTableAfterAFencedExample(t *testing.T) {
+	key := Key{ID: "f43", Defects: []Defect{{
+		ID: "D1", File: "src/real.js", Line: 12, Keywords: []string{"real"},
+	}}}
+	findings := "| F1 | src/real.js:12 real finding | M | yes | E1 | open | me | - | - |\n"
+	ledger := "| E1 | claim | cmd | inputs | observed | mutation | reproduction | observado |\n"
+	doc := plan(findings, ledger)
+	example := "```markdown\n| Example | Value |\n|---|---|\n| F9 | src/fenced.js:1 documentation |\n```\n\n"
+	doc = strings.Replace(doc, findingsHeader, example+findingsHeader, 1)
+
+	r := Score(doc, key)
+	if r.Found != 1 || r.FindingRows != 1 || r.Defects[0].ID != "D1" {
+		t.Fatalf("score = %+v, want the real findings row after the fenced example", r)
 	}
 }

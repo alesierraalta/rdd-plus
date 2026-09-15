@@ -659,6 +659,40 @@ func scanSection(lines []string, name string) tableScan {
 	return scanTable(lines, heading+1, end)
 }
 
+// Section returns the body under the `## <name>` heading, up to the next level-2 heading, through the same
+// locator the row readers use. A caller outside this package reads the region the checker validates instead of
+// finding the heading with a walk of its own, so a heading this package stops at cannot be one the caller's walk
+// runs past. The empty string means the section is not there.
+func Section(doc, name string) string {
+	lines := strings.Split(doc, "\n")
+	heading, end := sectionRegion(lines, name)
+	if heading < 0 {
+		return ""
+	}
+	return strings.Join(lines[heading+1:end], "\n")
+}
+
+// Table reads the first markdown table of the `## <section>` section the way every reader in this package reads
+// it: a fence is documentation, a blank line does not end the table, and separators and placeholder rows stay
+// skipped. Header is nil when the section carries no table.
+func Table(doc, section string) (header []string, rows [][]string) {
+	scan := scanSection(strings.Split(doc, "\n"), section)
+	if scan.header == nil {
+		return nil, nil
+	}
+	for i := range scan.header {
+		header = append(header, cell(scan.header, i))
+	}
+	for _, scanned := range scan.rows {
+		row := make([]string, len(scanned.cells))
+		for i := range scanned.cells {
+			row[i] = cell(scanned.cells, i)
+		}
+		rows = append(rows, row)
+	}
+	return header, rows
+}
+
 // scanTable reads the table of lines[start:end] (0-based, end exclusive), carrying the line each row sits
 // on. A blank line is skipped exactly like the separator row, so a blank inserted inside a table no longer
 // drops every row under it. Once the block has closed, a `|` line is recorded as the proof that a table was

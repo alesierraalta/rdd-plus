@@ -100,12 +100,12 @@ func ScorePlanFile(path string, key Key) Result {
 // is a false positive.
 func Score(plan string, key Key) Result {
 	r := Result{Case: key.ID, Total: len(key.Defects), LightActivated: plancheck.LightActivated(plan)}
-	findings := sectionText(plan, "Findings")
-	rows := dataRows(findings)
+	findings := plancheck.Section(plan, "Findings")
+	findingsHeader, rows := plancheck.Table(plan, "Findings")
 	r.FindingRows = len(rows)
 	// The pinning column exists only in plans written under rule 13; find it by its header so
 	// its position can move.
-	pinCol := columnIndex(headerCells(findings), "pinning test")
+	pinCol := columnIndex(findingsHeader, "pinning test")
 	r.PlanFormat = planFormat(findings, rows)
 	if r.PlanFormat == FormatProse {
 		r.Notes = append(r.Notes, "findings are not in the template table; nothing in this plan can be located or re-scored")
@@ -115,7 +115,7 @@ func Score(plan string, key Key) Result {
 			r.FindingsWithEvidence++
 		}
 	}
-	ledgerRows := dataRows(sectionText(plan, "Evidence ledger"))
+	_, ledgerRows := plancheck.Table(plan, "Evidence ledger")
 	r.LedgerRows = len(ledgerRows)
 	ledgerByID := map[string]string{}
 	for _, lr := range ledgerRows {
@@ -302,105 +302,6 @@ func citations(text string) []citation {
 	return out
 }
 
-// sectionText returns the body under "## <name>" up to the next level-2 heading.
-func sectionText(doc, name string) string {
-	lines := strings.Split(doc, "\n")
-	start := -1
-	for i, l := range lines {
-		if strings.HasPrefix(strings.TrimSpace(l), "## ") && strings.EqualFold(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(l), "## ")), name) {
-			start = i + 1
-			break
-		}
-	}
-	if start < 0 {
-		return ""
-	}
-	end := len(lines)
-	for i := start; i < len(lines); i++ {
-		if strings.HasPrefix(strings.TrimSpace(lines[i]), "## ") {
-			end = i
-			break
-		}
-	}
-	return strings.Join(lines[start:end], "\n")
-}
-
-// dataRows parses the first markdown table of a section: cells of every row after the header
-// and separator, skipping placeholder rows whose id cell is empty or a "no rows" marker.
-func dataRows(section string) [][]string {
-	var rows [][]string
-	inTable, headerSeen := false, false
-	for _, l := range strings.Split(section, "\n") {
-		t := strings.TrimSpace(l)
-		if !strings.HasPrefix(t, "|") {
-			// A blank line inside the section is not the end of its table. The plan's own reader skips one, so
-			// stopping here dropped rows the plan reports as table rows, and dropped them without saying so.
-			if t != "" && inTable {
-				break
-			}
-			continue
-		}
-		inTable = true
-		cells := splitCells(t)
-		if !headerSeen {
-			headerSeen = true
-			continue
-		}
-		if isSeparator(cells) {
-			continue
-		}
-		if len(cells) == 0 || placeholderRe.MatchString(strings.TrimSpace(cells[0])) {
-			continue
-		}
-		rows = append(rows, cells)
-	}
-	return rows
-}
-
-// splitCells cuts a markdown row into cells. A backslash-escaped pipe belongs to the cell it sits
-// in; splitting on it shifts every column to its right, and the columns are what the score reads.
-func splitCells(row string) []string {
-	row = strings.TrimSpace(row)
-	row = strings.TrimPrefix(row, "|")
-	row = strings.TrimSuffix(row, "|")
-	var parts []string
-	var cur strings.Builder
-	escaped := false
-	for _, r := range row {
-		switch {
-		case escaped:
-			if r != '|' {
-				cur.WriteRune('\\')
-			}
-			cur.WriteRune(r)
-			escaped = false
-		case r == '\\':
-			escaped = true
-		case r == '|':
-			parts = append(parts, strings.TrimSpace(cur.String()))
-			cur.Reset()
-		default:
-			cur.WriteRune(r)
-		}
-	}
-	if escaped {
-		cur.WriteRune('\\')
-	}
-	return append(parts, strings.TrimSpace(cur.String()))
-}
-
-func isSeparator(cells []string) bool {
-	if len(cells) == 0 {
-		return false
-	}
-	for _, c := range cells {
-		if strings.Trim(c, "-: ") != "" {
-			return false
-		}
-	}
-	return true
-}
-
 // citedEvidenceIDs reads the ids in a finding row's evidence cell ("E1, E2", "E1/E3").
 func citedEvidenceIDs(row []string) []string {
 	if len(row) <= 4 {
@@ -426,16 +327,6 @@ func linkedLedgerText(row []string, ledgerByID map[string]string) []string {
 		}
 	}
 	return out
-}
-
-// headerCells returns the header row of the first markdown table in a section.
-func headerCells(section string) []string {
-	for _, l := range strings.Split(section, "\n") {
-		if t := strings.TrimSpace(l); strings.HasPrefix(t, "|") {
-			return splitCells(t)
-		}
-	}
-	return nil
 }
 
 // columnIndex finds the column whose header contains name, case-insensitively.

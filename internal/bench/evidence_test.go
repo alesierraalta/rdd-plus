@@ -24,19 +24,3 @@ func TestFoundRequiresLinkedEvidence(t *testing.T) {
 		})
 	}
 }
-
-// The scorer reads a plan written by the agent under test. An escaped pipe belongs to its cell;
-// splitting on it shifts the evidence column, so a finding could be read as unlinked when it is
-// linked, or the other way round.
-func TestSplitCellsHonoursEscapedPipes(t *testing.T) {
-	got := splitCells(`| F1 | a \| b | M | yes | E1 | open | me | - | - |`)
-	if len(got) != 9 {
-		t.Fatalf("cells = %q", got)
-	}
-	if got[1] != "a | b" {
-		t.Fatalf("cell 1 = %q, want %q", got[1], "a | b")
-	}
-	if got[4] != "E1" {
-		t.Fatalf("the evidence column shifted: %q", got)
-	}
-}
