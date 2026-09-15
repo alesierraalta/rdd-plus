@@ -10,7 +10,7 @@ import (
 )
 
 var expected = []string{
-	"appsec-adversarial-auditor", "clean-architecture-audit", "database-persistence-testing",
+	"appsec-adversarial-auditor", "ask-or-research", "clean-architecture-audit", "database-persistence-testing",
 	"dependency-legitimacy", "docker-test-containers", "exploit-testing", "implementation-theater",
 	"no-excess-tests", "real-run-validation", "runtime-reliability-testing", "silent-degradation",
 	"test-strategy",
