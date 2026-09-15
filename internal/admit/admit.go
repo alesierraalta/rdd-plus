@@ -28,7 +28,9 @@ type Request struct {
 	Dir     string
 }
 
-// Deps are the process boundaries injected by the caller.
+// Deps are the process boundaries injected by the caller. Out and Err must be non-nil; Run must be non-nil
+// whenever a row can execute, and SandboxRunner and Replay are only reached when the request asks for the
+// sandbox, so a host-mode caller may leave both empty.
 type Deps struct {
 	Run           Runner
 	SandboxRunner func(image, mount string) Runner
@@ -37,7 +39,9 @@ type Deps struct {
 	Err           io.Writer
 }
 
-// Run admits the requested Evidence rows and returns the process exit code.
+// Run admits the requested Evidence rows and returns the process exit code: 0 when no row was refused, 1 when
+// a row was refused or the plan could not be read or written, and 2 when a flag precondition or a named id is
+// wrong. It writes the row lines and the summary to deps.Out and every refusal to deps.Err.
 func Run(req Request, deps Deps) int {
 	onlyIDs := admitIDs(req.Only)
 	recordIDs := admitIDs(req.Record)
@@ -144,6 +148,19 @@ func Run(req Request, deps Deps) int {
 		recordedLines = append(recordedLines, fmt.Sprintf("%s  RECORDED  %s  (%s mode)\n", r.ID, r.Digest, mode))
 	}
 	if recorded > 0 {
+		// The document was read before the rows ran, and a row can take minutes. The digests this run observed
+		// belong to the plan it read, so writing them over a file another writer has changed since would erase
+		// that edit and pin a claim against a plan that no longer exists. The run refuses instead of
+		// overwriting a document it did not read.
+		now, err := os.ReadFile(req.Path)
+		if err != nil {
+			fmt.Fprintln(deps.Err, "plan admit:", err)
+			return 1
+		}
+		if string(now) != string(raw) {
+			fmt.Fprintf(deps.Err, "plan admit: %s changed while the rows ran; nothing was written (the digests this run observed belong to the plan it read, not to the one on disk now)\n", req.Path)
+			return 1
+		}
 		info, err := os.Stat(req.Path)
 		if err != nil {
 			fmt.Fprintln(deps.Err, "plan admit:", err)

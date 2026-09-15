@@ -688,9 +688,10 @@ func runBenchHistory(args []string) int {
 const sandboxImageDefault = "golang:1.26-alpine"
 
 // sandboxRunner returns a runner that observes one command inside a container. mount is how the container sees
-// dir: read-only for a row's own command, writable for a replay, which edits a copy it owns. It is the only
-// confinement this tool offers, and what it buys is narrow: the command is still arbitrary code, but a write
-// lands on a read-only mount instead of the working tree, and the network is gone.
+// dir, and it is what decides how narrow the confinement is: with a read-only mount a write lands on the mount
+// instead of the working tree, while a replay's writable mount is a copy this tool owns and never the tree the
+// user is looking at. The network is gone in both. It is the only confinement this tool offers, and the command
+// inside it is still arbitrary code.
 //
 // The invocation was measured rather than guessed, and three of its parts are load-bearing:
 //   - `--tmpfs /tmp:exec`: Docker mounts a tmpfs noexec by default, and Go then dies with
