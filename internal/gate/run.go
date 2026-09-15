@@ -112,15 +112,18 @@ func Run(stdin io.Reader, stdout io.Writer, logPath string, now time.Time) (code
 	}()
 	raw, _ := io.ReadAll(stdin)
 	payload := strings.TrimSpace(string(raw))
-	var in Input
+	// A pointer, not a struct: the JSON literal `null` unmarshals into a zero value without an error, and a
+	// hook that took that for a readable payload would decide against a repository nobody named.
+	var parsed *Input
 	// An empty payload and a malformed one are the same fact to this hook: it ran and could not read what it
 	// was handed. One label says that once, instead of inventing a difference the reader cannot act on.
-	if payload == "" || json.Unmarshal([]byte(payload), &in) != nil {
+	if payload == "" || json.Unmarshal([]byte(payload), &parsed) != nil || parsed == nil {
 		// A payload the hook cannot read is a decision it has to record: it ran, and it decided nothing. The
 		// log is the only place that distinction survives — the turn itself must never break.
 		appendEntry(logPath, unreadablePayloadEntry(now))
 		return 0
 	}
+	in := *parsed
 	res := Decide(in, RealDeps(now))
 	if res.Entry != nil {
 		appendEntry(logPath, res.Entry)

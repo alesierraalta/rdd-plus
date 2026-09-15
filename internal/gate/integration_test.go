@@ -606,4 +606,14 @@ func TestTheHookLogsThePayloadItCouldNotRead(t *testing.T) {
 	if len(empty.entries) != 1 || empty.entries[0]["skipped"] != "unreadable_payload" {
 		t.Fatalf("empty payload entries = %v, want one line naming it", empty.entries)
 	}
+
+	// The JSON literal `null` unmarshals into a zero struct without an error, so a check that only looks at
+	// the error takes it for a readable payload and decides against a repository nobody named.
+	null := runBinary(t, binaryPath, dir, "null")
+	if len(null.entries) != 1 || null.entries[0]["skipped"] != "unreadable_payload" {
+		t.Fatalf("null payload entries = %v, want one line naming it", null.entries)
+	}
+	if null.out != "" {
+		t.Fatalf("a null payload must not make the hook speak: %q", null.out)
+	}
 }
