@@ -32,7 +32,7 @@ const usage = `usage: rdd-plus <command> [flags]
 
 commands:
   gate     Stop hook: read the hook payload on stdin, decide, log, emit feedback
-  sync     install the embedded skills and wire the gate into settings.json
+  sync     install the embedded skills into discovered hosts and wire Claude's Stop hook
   doctor   report installed skills, the hook wiring, and optional capabilities
   bench    run the testing skill against sealed-key fixtures and score it (run | score | history)
   plan     write the skeleton, check the contract, name what breadth is still owed, record a
@@ -45,6 +45,10 @@ commands:
 
 flags shared by gate, sync, doctor, feedback:
   --config-dir <dir>   Claude config directory (default: ~/.claude)
+
+flags for sync:
+  --hosts <a,b,...>    limit installation to named hosts (claude, opencode, gemini, codex)
+  --dry-run            print the plan and write nothing
 
 bench run [--cases <glob>] [--runner pi|claude] [--model <m>] [--runs N] [--max-turns N] [--timeout 30m]
           [--max-cost-usd N] [--out <dir>] [--bench-dir <dir>] [--dry-run] [--keep]
@@ -126,21 +130,81 @@ func runGate(args []string) int {
 func runSync(args []string) int {
 	fs := flag.NewFlagSet("sync", flag.ContinueOnError)
 	configDir := fs.String("config-dir", defaultConfigDir(), "Claude config directory")
+	hostsFlag := fs.String("hosts", "", "comma-separated hosts to install into")
 	dryRun := fs.Bool("dry-run", false, "print the plan and write nothing")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
+
+	selected, err := parseSyncHosts(*hostsFlag, flagSet(fs, "hosts"))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "sync:", err)
+		return 2
+	}
+	home, homeErr := os.UserHomeDir()
+	if homeErr != nil {
+		home = ""
+	}
+	var discovery sync.Discovery
+	if flagSet(fs, "config-dir") {
+		discovery = sync.DiscoverHosts(home, *configDir)
+	} else {
+		discovery = sync.DiscoverHosts(home)
+	}
+	if homeErr != nil {
+		discovery.Problems = append(discovery.Problems, fmt.Sprintf("cannot determine home directory: %v", homeErr))
+	}
+	if flagSet(fs, "config-dir") {
+		discovery.Hosts = filterSyncHosts(discovery.Hosts, map[string]bool{"claude": true})
+	}
+	if selected != nil {
+		discovery.Hosts = filterSyncHosts(discovery.Hosts, selected)
+	}
+
 	bin, err := os.Executable()
 	if err == nil {
 		bin, _ = filepath.Abs(bin)
 	}
-	report, err := sync.Sync(*configDir, bin, sync.Options{DryRun: *dryRun})
+	report, err := sync.SyncHosts(discovery.Hosts, bin, sync.Options{DryRun: *dryRun})
+	report.LookedFor = discovery.LookedFor
+	report.DiscoveryErrors = discovery.Problems
+	report.ClaudeConfigDir = discovery.ClaudeConfigDir
 	fmt.Print(report.String())
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "sync:", err)
 		return 1
 	}
 	return 0
+}
+
+func parseSyncHosts(raw string, explicit bool) (map[string]bool, error) {
+	if !explicit {
+		return nil, nil
+	}
+	selected := map[string]bool{}
+	known := sync.KnownHosts()
+	knownSet := make(map[string]bool, len(known))
+	for _, name := range known {
+		knownSet[name] = true
+	}
+	for _, value := range strings.Split(raw, ",") {
+		name := strings.TrimSpace(value)
+		if !knownSet[name] {
+			return nil, fmt.Errorf("unknown host %q; known hosts: %s", name, strings.Join(known, ", "))
+		}
+		selected[name] = true
+	}
+	return selected, nil
+}
+
+func filterSyncHosts(hosts []sync.Host, selected map[string]bool) []sync.Host {
+	filtered := make([]sync.Host, 0, len(hosts))
+	for _, host := range hosts {
+		if selected[host.Name] {
+			filtered = append(filtered, host)
+		}
+	}
+	return filtered
 }
 
 func runDoctor(args []string) int {
