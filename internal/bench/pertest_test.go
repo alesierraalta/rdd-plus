@@ -65,6 +65,53 @@ func TestPerTestCommand(t *testing.T) {
 	}
 }
 
+// A test that goes green once the bug is back asserts the defective behaviour instead of demanding the
+// fix, and a test that is red everywhere proves nothing: the two are counted apart, because the first is
+// what a human has to be told about. Only a suite the splitter can read per test shows either.
+func TestDiscriminateNamesTheTestThatPinsTheDefect(t *testing.T) {
+	if testing.Short() {
+		t.Skip("runs node")
+	}
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node not installed")
+	}
+	caseDir, key := nodeCase(t)
+	ws := agentWorkspace(t, caseDir, map[string]string{
+		"tests/agent.test.js": "const test = require('node:test'); const assert = require('node:assert'); const s = require('../src.js');\n" +
+			"test('demands the fix', () => { assert.equal(s.d1(), 'ok'); });\n" +
+			"test('pins the bug', () => { assert.equal(s.d1(), 'bug'); });\n" +
+			"test('always broken', () => { assert.equal(1, 2); });\n",
+	})
+	got := Discriminate(caseDir, ws, key, 2*time.Minute)
+	if !got.Checked {
+		t.Fatalf("not checked: %v", got.Notes)
+	}
+	if !got.Caught["D1"] || got.Caught["D2"] {
+		t.Fatalf("caught = %v notes=%v", got.Caught, got.Notes)
+	}
+	if got.InvertedTests != 1 {
+		t.Fatalf("inverted tests = %d, want 1: %v", got.InvertedTests, got.InvertedBy)
+	}
+	if names := got.InvertedBy["D1"]; len(names) != 1 || !strings.Contains(names[0], "pins the bug") {
+		t.Fatalf("inverted_by[D1] = %v, want the one test that pins the bug", got.InvertedBy)
+	}
+	if got.BrokenTests != 2 {
+		t.Fatalf("broken tests = %d, want 2 (the inverted one and the one that fails everywhere)", got.BrokenTests)
+	}
+	var inverted, ignored bool
+	for _, n := range got.Notes {
+		if strings.Contains(n, "pin the defective behaviour") {
+			inverted = true
+		}
+		if strings.Contains(n, "were ignored") {
+			ignored = true
+		}
+	}
+	if !inverted || !ignored {
+		t.Fatalf("both notes must be reported, got %v", got.Notes)
+	}
+}
+
 // A real node case: one broken agent test must not hide the test that catches D1.
 func TestDiscriminatePerTestSurvivesABrokenTest(t *testing.T) {
 	if testing.Short() {

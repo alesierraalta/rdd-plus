@@ -96,63 +96,31 @@ func Discriminate(caseDir, ws string, key Key, timeout time.Duration) CatchResul
 		return res
 	}
 	for _, d := range key.Defects {
-		overlay := filepath.Join(caseDir, FixDir, "keep-"+d.ID)
-		if len(key.Defects) == 1 {
-			overlay = "" // the pristine fixture is the code where the only defect remains
-		} else if st, err := os.Stat(overlay); err != nil || !st.IsDir() {
-			res.Notes = append(res.Notes, fmt.Sprintf("%s: no fix/keep-%s directory; not checkable", d.ID, d.ID))
+		got := discriminateDefect(caseDir, fixture, ws, key, d, tests, trusted, red, timeout)
+		if got.note != "" {
+			res.Notes = append(res.Notes, got.note)
+		}
+		if got.attempts > 0 {
+			if res.Attempts == nil {
+				res.Attempts = map[string]int{}
+			}
+			res.Attempts[d.ID] = got.attempts
+		}
+		if !got.checked {
 			continue
 		}
-		// A defect that only manifests on an unlucky interleaving is not observed on every run:
-		// one red attempt proves the test can distinguish it, while a green run proves nothing.
-		attempts := attemptsForDefect(d)
-		if res.Attempts == nil {
-			res.Attempts = map[string]int{}
-		}
-		res.Attempts[d.ID] = attempts
-		redOnKeep, ranOnKeep := map[string]bool{}, map[string]bool{}
-		var lastErr error
-		for a := 0; a < attempts; a++ {
-			outcomes, _, _, err := testsOn(fixture, overlay, ws, tests, key.Suite, timeout)
-			if err != nil {
-				lastErr = err
-				continue
+		if len(got.caughtBy) > 0 {
+			if res.CaughtBy == nil {
+				res.CaughtBy = map[string][]string{}
 			}
-			for name, passed := range outcomes {
-				ranOnKeep[name] = true
-				if !passed {
-					redOnKeep[name] = true
-				}
-			}
+			res.CaughtBy[d.ID] = got.caughtBy
 		}
-		if len(ranOnKeep) == 0 {
-			if lastErr != nil {
-				res.Notes = append(res.Notes, d.ID+": "+lastErr.Error())
+		res.Caught[d.ID] = len(got.caughtBy) > 0
+		if len(got.invertedBy) > 0 {
+			if res.InvertedBy == nil {
+				res.InvertedBy = map[string][]string{}
 			}
-			continue
-		}
-		onKeep := map[string]bool{}
-		for name := range ranOnKeep {
-			onKeep[name] = !redOnKeep[name]
-		}
-		for _, name := range trusted {
-			if passed, ran := onKeep[name]; ran && !passed {
-				if res.CaughtBy == nil {
-					res.CaughtBy = map[string][]string{}
-				}
-				res.CaughtBy[d.ID] = append(res.CaughtBy[d.ID], name)
-			}
-		}
-		res.Caught[d.ID] = len(res.CaughtBy[d.ID]) > 0
-		// A test red on the fix and green while the defect stands asserts the defective
-		// behaviour: it resists the fix instead of demanding it.
-		for _, name := range red {
-			if passed, ran := onKeep[name]; ran && passed {
-				if res.InvertedBy == nil {
-					res.InvertedBy = map[string][]string{}
-				}
-				res.InvertedBy[d.ID] = append(res.InvertedBy[d.ID], name)
-			}
+			res.InvertedBy[d.ID] = got.invertedBy
 		}
 	}
 	res.InvertedTests = countDistinct(res.InvertedBy)
@@ -163,6 +131,71 @@ func Discriminate(caseDir, ws string, key Key, timeout time.Duration) CatchResul
 		res.Notes = append(res.Notes, fmt.Sprintf("%d test(s) red on the fully fixed code were ignored", other))
 	}
 	return res
+}
+
+// defectOutcome is what the case's code said about one defect when only that defect was left in place.
+type defectOutcome struct {
+	checked    bool     // the variant was observed at least once, so its verdict means something
+	attempts   int      // how many times the variant ran; zero when it was never reachable
+	caughtBy   []string // trusted tests that turn red once only this defect remains
+	invertedBy []string // tests that failed on the fixed code and are green while this defect stands
+	note       string   // the one thing worth recording, empty when nothing went wrong
+}
+
+// discriminateDefect runs the case with only d left defective and reports which of the agent's trusted
+// tests turn red, and which tests that failed on the fixed code are green here. A defect whose variant
+// directory is missing is not checkable, and a variant that never ran says so: "nothing distinguished it"
+// and "nobody looked" are different answers.
+func discriminateDefect(caseDir, fixture, ws string, key Key, d Defect, tests, trusted, red []string, timeout time.Duration) defectOutcome {
+	overlay := filepath.Join(caseDir, FixDir, "keep-"+d.ID)
+	if len(key.Defects) == 1 {
+		overlay = "" // the pristine fixture is the code where the only defect remains
+	} else if st, err := os.Stat(overlay); err != nil || !st.IsDir() {
+		return defectOutcome{note: fmt.Sprintf("%s: no fix/keep-%s directory; not checkable", d.ID, d.ID)}
+	}
+	// A defect that only manifests on an unlucky interleaving is not observed on every run: one red
+	// attempt proves the test can distinguish it, while a green run proves nothing.
+	attempts := attemptsForDefect(d)
+	redOnKeep, ranOnKeep := map[string]bool{}, map[string]bool{}
+	var lastErr error
+	for a := 0; a < attempts; a++ {
+		outcomes, _, _, err := testsOn(fixture, overlay, ws, tests, key.Suite, timeout)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		for name, passed := range outcomes {
+			ranOnKeep[name] = true
+			if !passed {
+				redOnKeep[name] = true
+			}
+		}
+	}
+	if len(ranOnKeep) == 0 {
+		got := defectOutcome{attempts: attempts}
+		if lastErr != nil {
+			got.note = d.ID + ": " + lastErr.Error()
+		}
+		return got
+	}
+	onKeep := map[string]bool{}
+	for name := range ranOnKeep {
+		onKeep[name] = !redOnKeep[name]
+	}
+	got := defectOutcome{checked: true, attempts: attempts}
+	for _, name := range trusted {
+		if passed, ran := onKeep[name]; ran && !passed {
+			got.caughtBy = append(got.caughtBy, name)
+		}
+	}
+	// A test red on the fix and green while the defect stands asserts the defective behaviour: it
+	// resists the fix instead of demanding it.
+	for _, name := range red {
+		if passed, ran := onKeep[name]; ran && passed {
+			got.invertedBy = append(got.invertedBy, name)
+		}
+	}
+	return got
 }
 
 // countDistinct counts the distinct test names across every defect's list.
