@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -634,55 +635,6 @@ func TestPlanAddFindingUsageRefusalExits2(t *testing.T) {
 	}
 }
 
-func TestPlanAddFindingValueRefusalExits2(t *testing.T) {
-	bin := buildCLI(t)
-	path := filepath.Join(t.TempDir(), "test-plan.md")
-	if err := os.WriteFile(path, []byte(cliFindingPlan), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	before, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	out, code := runCLI(t, bin, cliFindingArgs(path, "F1", "E1", "resolved")...)
-	if code != 2 || !strings.Contains(out, "open, confirmed, fixed, rejected, wontfix") {
-		t.Fatalf("invalid status = %d %q", code, out)
-	}
-	after, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(before) != string(after) {
-		t.Fatal("value refusal must leave the plan byte-identical")
-	}
-}
-
-func TestPlanAddFindingPlanRefusalExits1(t *testing.T) {
-	bin := buildCLI(t)
-	path := filepath.Join(t.TempDir(), "test-plan.md")
-	plan := strings.Replace(cliFindingPlan, "| E1 | observed |\n", "", 1)
-	if err := os.WriteFile(path, []byte(plan), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	before, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	out, code := runCLI(t, bin, cliFindingArgs(path, "F1", "E1")...)
-	if code != 1 || !strings.Contains(out, "not a row in the Evidence ledger") {
-		t.Fatalf("plan refusal = %d %q", code, out)
-	}
-	after, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(before) != string(after) {
-		t.Fatal("plan refusal must leave the plan byte-identical")
-	}
-}
-
 func TestPlanAddFindingHelp(t *testing.T) {
 	bin := buildCLI(t)
 	out, code := runCLI(t, bin, "plan", "add-finding", "--help")
@@ -710,5 +662,119 @@ func TestSandboxRunnerNamesADockerThatIsNotOnPath(t *testing.T) {
 	}
 	if !strings.Contains(refusal.Detail, "docker") {
 		t.Fatalf("detail = %q, want it to name the missing docker", refusal.Detail)
+	}
+}
+
+// The plan add-finding refusal split: a malformed invocation exits 2 — the class `feedback` and
+// `bench score` already use — and a plan that refuses the row exits 1, the `plan check` class. One
+// case per refusal, and every refusal must leave the plan byte-for-byte unchanged.
+const cliFindingHeader = "## Findings\n\n| Id | Finding | Severity | Data safe? | Evidence id | Pinning test | Status | Verdict by / date | Reason | Fingerprint |\n|---|---|---|---|---|---|---|---|---|---|\n"
+
+const cliEvidenceLedger = "\n## Evidence ledger\n\n| Id | Claim |\n|---|---|\n| E1 | c |\n"
+
+// findingArgs builds the happy-path invocation, with one flag overridden per case. An override to the
+// empty string is what the CLI sees for `--flag ""`.
+func findingArgs(path string, over map[string]string) []string {
+	values := map[string]string{
+		"id": "F1", "location": "src/a.js:5", "severity": "data loss", "data-safe": "yes",
+		"evidence": "E1", "test": "", "status": "open", "verdict-by": "me / 2026-09-10",
+		"reason": "not pinned", "fingerprint": "",
+	}
+	for k, v := range over {
+		values[k] = v
+	}
+	args := []string{"plan", "add-finding", "--path", path}
+	for _, k := range []string{"id", "location", "severity", "data-safe", "evidence", "test", "status", "verdict-by", "reason", "fingerprint"} {
+		args = append(args, "--"+k, values[k])
+	}
+	return args
+}
+
+// seedLedgerRow adds one evidence row to a fixture by hand: the command under test writes findings
+// only, and a finding citing evidence the plan does not carry is refused rather than propped up.
+func seedLedgerRow(t *testing.T, doc string) string {
+	t.Helper()
+	lines := strings.Split(doc, "\n")
+	for i, l := range lines {
+		if strings.HasPrefix(l, "| Id | Claim") {
+			row := "| E1 | it drops the comma | `node --test` | `a,b` | 3 fields | reverted -> red | same input | observado |"
+			// The separator follows the header, so the new row goes after it.
+			rest := append([]string{lines[i+1], row}, lines[i+2:]...)
+			return strings.Join(append(lines[:i+1], rest...), "\n")
+		}
+	}
+	t.Fatal("the fixture moved: the Evidence ledger header was not found")
+	return ""
+}
+
+func TestPlanAddFindingExitCodes(t *testing.T) {
+	bin := buildCLI(t)
+	valid := cliFindingHeader + cliEvidenceLedger
+	cases := []struct {
+		name     string
+		plan     string
+		over     map[string]string
+		missing  bool // the plan path does not exist: the plan cannot be read
+		wantExit int
+		wantOut  string
+	}{
+		// Exit 2: the invocation's own data is wrong.
+		{name: "an empty required flag", plan: valid, over: map[string]string{"id": ""}, wantExit: 2, wantOut: "--id"},
+		{name: "an empty severity", plan: valid, over: map[string]string{"severity": ""}, wantExit: 2, wantOut: "--severity"},
+		{name: "a status outside the vocabulary", plan: valid, over: map[string]string{"status": "resolved"}, wantExit: 2, wantOut: "open, confirmed, fixed, rejected, wontfix"},
+		{name: "an empty status", plan: valid, over: map[string]string{"status": ""}, wantExit: 2, wantOut: "--status"},
+		{name: "a settled status with no pinning test", plan: valid, over: map[string]string{"status": "confirmed"}, wantExit: 2, wantOut: "--test"},
+		{name: "a settled status with a placeholder pinning test", plan: valid, over: map[string]string{"status": "fixed", "test": "-"}, wantExit: 2, wantOut: "--test"},
+		{name: "a value carrying a newline", plan: valid, over: map[string]string{"reason": "first\nsecond"}, wantExit: 2, wantOut: "newline"},
+		{name: "a placeholder id", plan: valid, over: map[string]string{"id": "-"}, wantExit: 2, wantOut: "placeholder"},
+		{name: "a location that is not path:line", plan: valid, over: map[string]string{"location": "src/a.js"}, wantExit: 2, wantOut: "path:line"},
+
+		// Exit 1: the plan refuses the row.
+		{name: "the plan cannot be read", plan: valid, missing: true, wantExit: 1, wantOut: "add-finding"},
+		{name: "no Findings section", plan: cliEvidenceLedger, wantExit: 1, wantOut: "no ## Findings section"},
+		{name: "a Findings section that is not a table", plan: "## Findings\n\nprose, not a table\n\n" + cliEvidenceLedger, wantExit: 1, wantOut: "no table"},
+		{name: "a Findings table cut by prose", plan: cliFindingHeader + "| F0 | `src/b.js:9` | M | yes | E1 |  | open | me | - | - |\n" + "a sentence that closes the table\n" + "| F2 | `src/c.js:1` | M | yes | E1 |  | open | me | - | - |\n" + cliEvidenceLedger, wantExit: 1, wantOut: "interrupted"},
+		{name: "a Findings region ending inside a fence", plan: cliFindingHeader + "\n```markdown\n| Id | Finding |\n|---|---|\n", wantExit: 1, wantOut: "code fence opened"},
+		{name: "a header with no Id column", plan: "## Findings\n\n| Finding | Severity | Data safe? | Evidence id | Pinning test | Status | Verdict by / date | Reason | Fingerprint |\n|---|---|---|---|---|---|---|---|---|\n" + cliEvidenceLedger, wantExit: 1, wantOut: "no Id column"},
+		{name: "a header without a column the row needs", plan: "## Findings\n\n| Id | Finding | Data safe? | Evidence id | Status | Verdict by / date | Reason | Fingerprint |\n|---|---|---|---|---|---|---|---|\n" + cliEvidenceLedger, wantExit: 1, wantOut: "Severity"},
+		{name: "a duplicate id", plan: cliFindingHeader + "| F1 | `src/b.js:9` | M | yes | E1 |  | open | me | - | - |\n" + cliEvidenceLedger, wantExit: 1, wantOut: "already row"},
+		{name: "a dangling evidence id", plan: valid, over: map[string]string{"evidence": "E9"}, wantExit: 1, wantOut: "E9"},
+		{name: "a plan the checker already rejects", plan: cliFindingHeader + "| F0 | no path here | M | yes | E1 |  | open | me | - | - |\n" + cliEvidenceLedger, wantExit: 1, wantOut: "would not pass plan check"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			p := filepath.Join(dir, "plan.md")
+			var before []byte
+			if tc.missing {
+				p = filepath.Join(dir, "missing", "plan.md")
+			} else {
+				if err := os.WriteFile(p, []byte(tc.plan), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				var err error
+				before, err = os.ReadFile(p)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			out, code := runCLI(t, bin, findingArgs(p, tc.over)...)
+			if code != tc.wantExit {
+				t.Fatalf("exit = %d, want %d\n%s", code, tc.wantExit, out)
+			}
+			if !strings.Contains(out, tc.wantOut) {
+				t.Fatalf("output missing %q:\n%s", tc.wantOut, out)
+			}
+			if tc.missing {
+				return
+			}
+			after, err := os.ReadFile(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(before, after) {
+				t.Fatal("a refusal must leave the plan byte-identical")
+			}
+		})
 	}
 }

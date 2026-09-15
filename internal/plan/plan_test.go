@@ -1230,3 +1230,196 @@ func TestCheckAcceptsASubheadingThatOpensItsOwnTable(t *testing.T) {
 		t.Fatalf("the shipped template must stay well formed: %v", problems)
 	}
 }
+
+// The fix must not narrow the checker: this repository's own plan and both shipped fixtures keep
+// passing, and a fenced example placed after the separator leaves every real row readable.
+func TestCheckAcceptsTheShippedPlansWithAFencedExample(t *testing.T) {
+	files := []string{
+		filepath.Join("..", "..", "docs", "testing", "test-plan.md"),
+		filepath.Join("..", "..", "assets", "skills", "test-strategy", "evals", "fixtures", "plans", "clean.md"),
+		filepath.Join("..", "..", "assets", "skills", "test-strategy", "evals", "fixtures", "plans", "rejected.md"),
+	}
+	for _, f := range files {
+		t.Run(filepath.Base(f), func(t *testing.T) {
+			raw, err := os.ReadFile(f)
+			if err != nil {
+				t.Fatal(err)
+			}
+			doc := string(raw)
+			if problems := CheckDocument(doc); len(problems) != 0 {
+				t.Fatalf("the unmodified plan is not well formed: %v", problems)
+			}
+			sample, ok := insertFencedExample(doc)
+			if !ok {
+				t.Fatal("the Findings separator was not found")
+			}
+			if problems := CheckDocument(sample); len(problems) != 0 {
+				t.Fatalf("a fenced example after the separator is documentation, not an interruption: %v", problems)
+			}
+		})
+	}
+}
+
+// The Evidence ledger legitimately carries its own `### Hypotheses` table. The region scan stops at that
+// heading, so the ledger's table is never read as an interrupted Findings table and the shipped
+// template stays clean.
+func TestCheckAcceptsTheShippedTemplateWithItsHypothesesTable(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "plan.md")
+	if err := Init(p, false); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A data row under the hypotheses table is where a scan that ran past the `###` heading would
+	// report an interruption it invented.
+	const hypotheses = "| Hypothesis | Probe that would settle it |\n|---|---|\n"
+	plan := strings.Replace(string(body), hypotheses, hypotheses+"| a claim that needs a probe | run it |\n", 1)
+	if plan == string(body) {
+		t.Fatal("the template moved: the hypotheses table was never placed")
+	}
+	if err := os.WriteFile(p, []byte(plan), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	problems, err := Check(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(problems) != 0 {
+		t.Fatalf("the shipped template must stay well formed: %v", problems)
+	}
+}
+
+// A fenced block inside another table's region is inert too: an example under Ranked targets must not
+// read as the resumed half of a cut table.
+func TestCheckIgnoresAFencedBlockInRankedTargets(t *testing.T) {
+	doc := header + ledger + "| E1 | c | cmd | i | o | m | r | observado |\n" +
+		"## Ranked targets\n\n| Target | Blast radius | Status |\n|---|---|---|\n" +
+		"| 1. token refresh | every session | done |\n" +
+		"\nA target row looks like this:\n\n" +
+		"```markdown\n| Target | Status |\n|---|---|\n| 9. an example | done |\n```\n"
+	if problems := CheckDocument(doc); len(problems) != 0 {
+		t.Fatalf("a fenced example inside Ranked targets is documentation: %v", problems)
+	}
+}
+
+// The Evidence ledger may sit under a `###`; capping the scan at the first `###` left it unread and reported every finding citing it as missing a row.
+func TestCheckReadsALedgerUnderASubheading(t *testing.T) {
+	doc := header + "| F1 | `src/a.js:1` x | M | yes | E1 | t.js :: x | open | me | - | - |\n" +
+		"## Evidence ledger\n\n### Recorded observations\n\n| Id | Claim |\n|---|---|\n| E1 | c |\n"
+	if problems := CheckDocument(doc); len(problems) != 0 {
+		t.Fatalf("a ledger under a subheading is still the ledger: %v", problems)
+	}
+}
+
+// A `###` cut is not a table of its own when the first pipe row under it only reaches a later delimiter across
+// a blank line: GFM's header and its delimiter are adjacent, so a row separated from the delimiter that way
+// belongs to the table the subheading cut. The lookahead used to keep walking over blank lines and prose, read
+// the later delimiter as the separator of a new table, and report `well formed` while the row between them was
+// never read.
+func TestCheckReportsASubheadingCutFollowedByABlankLine(t *testing.T) {
+	// `### Notes` sits on line 5, the row it hides on line 6, and the delimiter it is separated from on line 8.
+	plan := header +
+		"### Notes\n" +
+		"| F1 | `src/a.go:1` x | M | yes | E99 | t :: x | open | me | r | - |\n" +
+		"\n" +
+		"|---|---|---|---|---|---|---|---|---|---|\n" +
+		ledger + "| E1 | c | cmd | i | o | m | r | observado |\n"
+	problems := CheckDocument(plan)
+	joined := strings.Join(problems, "\n")
+	if !strings.Contains(joined, "line 5: the Findings table is interrupted at line 5") {
+		t.Fatalf("a `###` cut followed by a blank line must be reported at its line: %v", problems)
+	}
+	if !strings.Contains(joined, "### Notes") {
+		t.Fatalf("the interruption must quote the subheading: %v", problems)
+	}
+	if !strings.Contains(joined, "(the next table row is at line 6)") {
+		t.Fatalf("the report must name the row whose reading was skipped: %v", problems)
+	}
+	if strings.Contains(joined, "E99") {
+		t.Fatalf("rows under an interruption were never read, and must not be judged: %v", problems)
+	}
+
+	// The same shape with the blank line replaced by another data row: the first row is still not a header,
+	// because a header is followed by its delimiter and this one is followed by a row.
+	twoRows := header +
+		"### Notes\n" +
+		"| F1 | `src/a.go:1` x | M | yes | E99 | t :: x | open | me | r | - |\n" +
+		"| F2 | `src/b.go:2` y | M | yes | E99 | t :: y | open | me | r | - |\n" +
+		"|---|---|---|---|---|---|---|---|---|---|\n" +
+		ledger + "| E1 | c | cmd | i | o | m | r | observado |\n"
+	problems = CheckDocument(twoRows)
+	joined = strings.Join(problems, "\n")
+	if !strings.Contains(joined, "line 5: the Findings table is interrupted at line 5") || !strings.Contains(joined, "(the next table row is at line 6)") {
+		t.Fatalf("a `###` cut whose first row is followed by another row must be an interruption: %v", problems)
+	}
+	if strings.Contains(joined, "E99") {
+		t.Fatalf("rows under an interruption were never read, and must not be judged: %v", problems)
+	}
+}
+
+// A `###` cut is only ever a table of its own when its own header and separator follow. The lookahead used
+// to keep looking for a later `|` row and skip whatever prose sat between, so `### Notes`, a data row, prose
+// and then a delimiter read as a subheading that opened a table: the data row was never read and the plan
+// still reported `well formed`, which is the silent half of the defect the subheading rule exists for.
+func TestCheckReportsASubheadingCutWithInterveningProse(t *testing.T) {
+	// `### Notes` sits on line 6, the data row it hides on line 7, and the delimiter three lines later is
+	// what the lookahead used to mistake for that row's separator.
+	plan := header +
+		"| F1 | `src/a.js:5` x | M | yes | E1 | t.js :: x | fixed | me | - | - |\n" +
+		"### Notes\n" +
+		"| F2 | `src/b.js:9` y | M | yes | E9 | t.js :: y | fixed | me | - | - |\n" +
+		"a sentence between the row and its delimiter\n" +
+		"|---|---|---|---|---|---|---|---|---|---|\n" +
+		ledger + "| E1 | c | cmd | i | o | m | r | observado |\n"
+	problems := CheckDocument(plan)
+	joined := strings.Join(problems, "\n")
+	if !strings.Contains(joined, "line 6: the Findings table is interrupted at line 6") {
+		t.Fatalf("a subheading cut with intervening prose must be reported at its line: %v", problems)
+	}
+	if !strings.Contains(joined, "### Notes") {
+		t.Fatalf("the interruption must quote the subheading: %v", problems)
+	}
+	if !strings.Contains(joined, "line 7") {
+		t.Fatalf("the report must name the row whose reading was skipped: %v", problems)
+	}
+	if strings.Contains(joined, "cites evidence E9") {
+		t.Fatalf("rows under an interruption were never read, and must not be judged: %v", problems)
+	}
+
+	// The other side of the same rule, so the fix cannot narrow the check: a subheading whose own header is
+	// immediately followed by its separator is still a table of its own, prose before the header included.
+	nested := header +
+		"| F1 | `src/a.js:5` x | M | yes | E1 | t.js :: x | fixed | me | - | - |\n" +
+		"### Notes\n\nNotes prose.\n\n| Note | Why |\n|---|---|\n| a note | a reason |\n" +
+		ledger + "| E1 | c | cmd | i | o | m | r | observado |\n"
+	if problems := CheckDocument(nested); len(problems) != 0 {
+		t.Fatalf("a subheading with its own header and separator opens a table: %v", problems)
+	}
+	// A section whose first table header sits under a `###` is the same shape one level up: the subheading
+	// comes before any header, so it opens the table rather than cutting one.
+	underHeading := "## Findings\n\n### Recorded defects\n\n| Id | Finding | Severity | Data safe? | Evidence id | Pinning test | Status | Verdict by / date | Reason | Fingerprint |\n" +
+		"|---|---|---|---|---|---|---|---|---|---|\n" +
+		"| F1 | `src/a.js:5` x | M | yes | E1 | t.js :: x | fixed | me | - | - |\n" +
+		ledger + "| E1 | c | cmd | i | o | m | r | observado |\n"
+	if problems := CheckDocument(underHeading); len(problems) != 0 {
+		t.Fatalf("a table header under a subheading is a table, not a cut: %v", problems)
+	}
+}
+
+// insertFencedExample puts a fenced sample table right after the Findings separator. The fence opens
+// and closes with nothing between it and the rows, so the rows under it must still read.
+func insertFencedExample(doc string) (string, bool) {
+	lines := strings.Split(doc, "\n")
+	for i, l := range lines {
+		if strings.HasPrefix(strings.TrimSpace(l), "| Id | Finding") {
+			fence := []string{"", "```markdown", "| Id | Finding | Severity |", "|---|---|---|",
+				"| F1 | `src/a.ts:1` | visible error |", "```"}
+			out := append(append([]string{}, lines[:i+2]...), fence...)
+			return strings.Join(append(out, lines[i+2:]...), "\n"), true
+		}
+	}
+	return doc, false
+}
