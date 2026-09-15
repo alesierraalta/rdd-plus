@@ -1,4 +1,4 @@
-package main
+package admit
 
 import (
 	"context"
@@ -14,6 +14,15 @@ import (
 
 	"github.com/alesierraalta/rdd-plus/internal/evidence"
 	"github.com/alesierraalta/rdd-plus/internal/plan"
+)
+
+const (
+	// SandboxReadOnly is how the container sees the tree for a row's own command: the command must not reach this
+	// machine's working tree, so a write fails against the mount instead of landing.
+	SandboxReadOnly = "ro"
+	// SandboxWritable is how the container sees the tree for a replay, which edits a copy it owns and then puts the
+	// file back, so the mount has to allow the write.
+	SandboxWritable = "rw"
 )
 
 // stageTree copies the files git knows about dir into a fresh temporary directory and returns its path. The caller
@@ -183,7 +192,7 @@ func restoreFile(path string, original []byte, mode fs.FileMode, wantHex string)
 // Any staging, apply, or restore failure is returned as a mutation-not-replayed refusal: those failures are about
 // the replay's own machinery rather than about the row's command, and blaming the row would send the reader to the
 // wrong place. Nothing is run once the tree cannot be built or put back.
-func replayWith(run commandRunner, timeout time.Duration) func(plan.Mutation, string, string) evidence.ReplayResult {
+func replayWith(run Runner, timeout time.Duration) func(plan.Mutation, string, string) evidence.ReplayResult {
 	return func(mutation plan.Mutation, dir, command string) evidence.ReplayResult {
 		notReplayed := func(what string, err error) evidence.ReplayResult {
 			return evidence.ReplayResult{MutatedErr: evidence.Refusal{
@@ -221,7 +230,7 @@ func replayWith(run commandRunner, timeout time.Duration) func(plan.Mutation, st
 }
 
 // runOnceWithin runs one half of a replay under its own full timeout, so --timeout still bounds one command.
-func runOnceWithin(run commandRunner, timeout time.Duration, dir, command string) (string, error) {
+func runOnceWithin(run Runner, timeout time.Duration, dir, command string) (string, error) {
 	ctx := context.Background()
 	if timeout > 0 {
 		var cancel context.CancelFunc
@@ -231,8 +240,8 @@ func runOnceWithin(run commandRunner, timeout time.Duration, dir, command string
 	return run(ctx, dir, command)
 }
 
-// replayMutation returns the replay the admission calls when it runs in a sandbox. The container sees the staged
-// copy writable, because editing the copy and putting it back is exactly what this half of the run is for.
-func replayMutation(image string, timeout time.Duration) func(plan.Mutation, string, string) evidence.ReplayResult {
-	return replayWith(sandboxRunner(image, sandboxWritable), timeout)
+// Replay returns the replay the admission calls when it runs in a sandbox. The caller supplies the runner for the
+// writable staged copy, because editing the copy and putting it back is exactly what this half of the run is for.
+func Replay(run Runner, timeout time.Duration) func(plan.Mutation, string, string) evidence.ReplayResult {
+	return replayWith(run, timeout)
 }

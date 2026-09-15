@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alesierraalta/rdd-plus/internal/admit"
 	"github.com/alesierraalta/rdd-plus/internal/buildinfo"
 	"github.com/alesierraalta/rdd-plus/internal/evidence"
 )
@@ -658,7 +659,7 @@ func TestPlanAddFindingHelp(t *testing.T) {
 // pins. Nothing here starts a container.
 func TestSandboxRunnerNamesADockerThatIsNotOnPath(t *testing.T) {
 	t.Setenv("PATH", t.TempDir()) // an empty directory: there is no docker to find
-	run := sandboxRunner(sandboxImageDefault, sandboxReadOnly)
+	run := sandboxRunner(sandboxImageDefault, admit.SandboxReadOnly)
 	_, err := run(context.Background(), t.TempDir(), "printf one")
 	var refusal evidence.Refusal
 	if !errors.As(err, &refusal) || refusal.Reason != evidence.ReasonMisconfigured {

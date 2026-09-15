@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/alesierraalta/rdd-plus/internal/admit"
 	"github.com/alesierraalta/rdd-plus/internal/bench"
 	"github.com/alesierraalta/rdd-plus/internal/buildinfo"
 	"github.com/alesierraalta/rdd-plus/internal/check"
@@ -418,173 +419,22 @@ func runPlan(args []string) int {
 // run made: a dry run makes none, and a pinned value nobody observed is the failure this flag exists
 // to prevent.
 func runPlanAdmit(path string, execute bool, timeout time.Duration, only, record string, sandbox bool, sandboxImage string) int {
-	recordIDs := admitIDs(record)
-	if len(recordIDs) > 0 && !execute {
-		fmt.Fprintln(os.Stderr, "plan admit: --record requires --execute: recording pins the observation this run makes, and a dry run makes none")
-		return 2
-	}
-	if sandbox && !execute {
-		fmt.Fprintln(os.Stderr, "plan admit: --sandbox requires --execute: a dry run executes nothing, so there is nothing to confine")
-		return 2
-	}
-	mode := evidence.ModeHost
-	if sandbox {
-		mode = evidence.ModeSandbox
-	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "plan admit:", err)
-		return 1
-	}
-	ledgerRows := plan.Ledger(string(raw))
-	// A named row that does not exist is a mistake the user must see: without this, `--record ZZZ` is a
-	// silent no-op whose exit code depends only on the other rows, and `--only ZZZ` silently narrows to
-	// nothing. Both flags are checked against the ids the ledger actually carries.
-	for _, flag := range []struct {
-		name string
-		ids  []string
-	}{{"--only", admitIDs(only)}, {"--record", recordIDs}} {
-		if id := unknownID(flag.ids, ledgerRows); id != "" {
-			return ledgerIDError(flag.name, id, ledgerRows)
-		}
-	}
-	runner := runShell
-	if sandbox {
-		runner = runShellSandboxed(sandboxImage)
-	}
-	deps := evidence.Deps{Run: runner}
-	// The replay is wired exactly where a tree the tool owns exists: a sandbox stages a copy of the tree git knows,
-	// edits the copy, runs against it and puts the file back, so a row that claims its own command is falsifiable
-	// has that claim checked instead of admitted unchecked. The host mode has no such copy and leaves Replay nil,
-	// which refuses such a row.
-	if sandbox {
-		deps.Replay = replayMutation(sandboxImage, timeout)
-	}
-	results := evidence.Admit(ledgerRows, evidence.Options{
+	return admit.Run(admit.Request{
+		Path:    path,
 		Execute: execute,
-		Dir:     feedback.RepoRoot("."),
 		Timeout: timeout,
-		Mode:    mode,
-		Only:    admitIDs(only),
-		Record:  recordIDs,
-	}, deps)
-
-	admitted, wouldRun, refused := 0, 0, 0
-	for _, r := range results {
-		switch r.Verdict {
-		case evidence.VerdictAdmitted:
-			admitted++
-			fmt.Printf("%s  %s  %s  %s  %d lines\n", r.ID, r.Verdict, r.Command, r.Digest, r.Lines)
-		case evidence.VerdictWouldRun:
-			wouldRun++
-			fmt.Printf("%s  %s  %s\n", r.ID, r.Verdict, r.Command)
-		default:
-			// A refusal prints the human sentence beside its machine reason, so a run that stops here
-			// still says what to change and what a caller can branch on.
-			refused++
-			fmt.Printf("%s  %s  %s  [%s]\n", r.ID, r.Verdict, r.Detail, r.Reason)
-		}
-	}
-
-	// Recording applies every edit to the document in memory and writes the file once, so a run that
-	// records three rows leaves one write. A splice that refuses aborts the whole write rather than
-	// skipping the row: a half-recorded ledger is the state this feature exists to prevent.
-	recording := map[string]bool{}
-	for _, id := range recordIDs {
-		recording[id] = true
-	}
-	doc, recorded := string(raw), 0
-	var recordedLines []string
-	for _, r := range results {
-		if r.Verdict != evidence.VerdictAdmitted || !recording[r.ID] {
-			continue
-		}
-		updated, err := plan.RecordDigest(doc, r.ID, r.Digest)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "plan admit:", err)
-			return 1
-		}
-		// The mode is recorded beside the digest, because a digest without the mode it was taken in is not
-		// checkable. A plan written before the Mode column existed cannot carry one; an empty cell there
-		// already means the host, so a host recording is still true and a sandbox recording is refused rather
-		// than written as a claim the plan cannot hold.
-		withMode, err := plan.RecordMode(updated, r.ID, mode)
-		if err != nil {
-			if mode != evidence.ModeHost || !errors.Is(err, plan.ErrNoColumn) {
-				fmt.Fprintln(os.Stderr, "plan admit:", err)
-				return 1
-			}
-		} else {
-			updated = withMode
-		}
-		doc = updated
-		recorded++
-		recordedLines = append(recordedLines, fmt.Sprintf("%s  RECORDED  %s  (%s mode)\n", r.ID, r.Digest, mode))
-	}
-	if recorded > 0 {
-		info, err := os.Stat(path)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "plan admit:", err)
-			return 1
-		}
-		if err := os.WriteFile(path, []byte(doc), info.Mode().Perm()); err != nil {
-			fmt.Fprintln(os.Stderr, "plan admit:", err)
-			return 1
-		}
-	}
-	for _, line := range recordedLines {
-		fmt.Print(line)
-	}
-	fmt.Printf("%d rows: %d admitted, %d would run, %d refused, %d recorded\n", len(results), admitted, wouldRun, refused, recorded)
-	if refused > 0 {
-		return 1
-	}
-	return 0
-}
-
-// unknownID returns the first id in ids that names no ledger row, or "" when every id names one. An
-// empty list names nothing and is never a mistake.
-func unknownID(ids []string, rows []plan.LedgerRow) string {
-	if len(ids) == 0 {
-		return ""
-	}
-	known := make(map[string]bool, len(rows))
-	for _, row := range rows {
-		known[row.ID] = true
-	}
-	for _, id := range ids {
-		if !known[id] {
-			return id
-		}
-	}
-	return ""
-}
-
-// ledgerIDError reports an id a flag named that the ledger does not carry, and lists every id it does
-// carry, so a typo is a message on stderr and exit 2 instead of a silent narrowing.
-func ledgerIDError(flag, id string, rows []plan.LedgerRow) int {
-	ids := make([]string, 0, len(rows))
-	for _, row := range rows {
-		ids = append(ids, row.ID)
-	}
-	available := "(none)"
-	if len(ids) > 0 {
-		available = strings.Join(ids, ", ")
-	}
-	fmt.Fprintf(os.Stderr, "plan admit: %s names %q, which is not a row in the Evidence ledger; available ids: %s\n", flag, id, available)
-	return 2
-}
-
-// admitIDs turns --only's comma-separated list into the ids Admit narrows to. An empty list narrows
-// nothing, which is why the empty string and a list of blanks both come back empty.
-func admitIDs(csv string) []string {
-	var ids []string
-	for _, part := range strings.Split(csv, ",") {
-		if id := strings.TrimSpace(part); id != "" {
-			ids = append(ids, id)
-		}
-	}
-	return ids
+		Only:    strings.Split(only, ","),
+		Record:  strings.Split(record, ","),
+		Sandbox: sandbox,
+		Image:   sandboxImage,
+		Dir:     feedback.RepoRoot("."),
+	}, admit.Deps{
+		Run:           runShell,
+		SandboxRunner: sandboxRunner,
+		Replay:        admit.Replay,
+		Out:           os.Stdout,
+		Err:           os.Stderr,
+	})
 }
 
 // waitDelayAfterKill is how long the output pipes may stay open once the shell is gone: the gap between the
@@ -837,22 +687,22 @@ func runBenchHistory(args []string) int {
 // exists, and the default only spares the common case a flag.
 const sandboxImageDefault = "golang:1.26-alpine"
 
-// commandRunner runs one command in dir and returns its combined output. It is the shape the host runner and the
-// sandbox runner both present to the admission, named here so a replay can take a runner as a parameter.
-type commandRunner func(ctx context.Context, dir, command string) (string, error)
-
-const (
-	// sandboxReadOnly is how the container sees the tree for a row's own command: the command must not reach this
-	// machine's working tree, so a write fails against the mount instead of landing.
-	sandboxReadOnly = "ro"
-	// sandboxWritable is how the container sees the tree for a replay, which edits a copy it owns and then puts the
-	// file back, so the mount has to allow the write.
-	sandboxWritable = "rw"
-)
-
 // sandboxRunner returns a runner that observes one command inside a container. mount is how the container sees
-// dir: read-only for a row's own command, writable for a replay, which edits a copy it owns.
-func sandboxRunner(image, mount string) commandRunner {
+// dir: read-only for a row's own command, writable for a replay, which edits a copy it owns. It is the only
+// confinement this tool offers, and what it buys is narrow: the command is still arbitrary code, but a write
+// lands on a read-only mount instead of the working tree, and the network is gone.
+//
+// The invocation was measured rather than guessed, and three of its parts are load-bearing:
+//   - `--tmpfs /tmp:exec`: Docker mounts a tmpfs noexec by default, and Go then dies with
+//     `fork/exec ...: permission denied`, which reads like a repository permission bug rather than a sandbox one.
+//   - a writable `GOCACHE`: the build cache is written on every run, and the image's own cache directory sits
+//     behind --read-only. `GOTMPDIR` was measured unnecessary.
+//   - `-v <dir>:/w:<mount>` with `-w /w`: the command needs the tree, and the tree is the thing that must not
+//     change.
+//
+// `--read-only` and `--network none` do not change whether a command passes; they are exactly the isolation this
+// mode claims, so they are asserted here rather than relied on to make anything work.
+func sandboxRunner(image, mount string) admit.Runner {
 	return func(ctx context.Context, dir, command string) (string, error) {
 		if !filepath.IsAbs(dir) {
 			return "", evidence.Refusal{
@@ -885,23 +735,6 @@ func sandboxRunner(image, mount string) commandRunner {
 		return output, sandboxRefusal(image, output, err)
 	}
 }
-
-// runShellSandboxed runs one command inside a container that cannot touch the host tree. It is the only
-// confinement this tool offers, and what it buys is narrow: the command is still arbitrary code, but a write
-// lands on a read-only mount instead of the working tree, and the network is gone.
-//
-// The invocation was measured rather than guessed, and three of its parts are load-bearing:
-//   - `--tmpfs /tmp:exec`: Docker mounts a tmpfs noexec by default, and Go then dies with
-//     `fork/exec ...: permission denied`, which reads like a repository permission bug rather than a sandbox
-//     one.
-//   - a writable `GOCACHE`: the build cache is written on every run, and the image's own cache directory sits
-//     behind --read-only. `GOTMPDIR` was measured unnecessary.
-//   - `-v <dir>:/w:ro` with `-w /w`: the command needs the tree, and the tree is the thing that must not
-//     change.
-//
-// `--read-only` and `--network none` do not change whether a command passes; they are exactly the isolation
-// this mode claims, so they are asserted here rather than relied on to make anything work.
-func runShellSandboxed(image string) commandRunner { return sandboxRunner(image, sandboxReadOnly) }
 
 // sandboxRefusal names why a sandboxed command produced no observation. Three of these are about the sandbox
 // and not about the row, and they are told apart by the text Docker and the container emit, because neither
