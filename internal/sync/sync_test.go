@@ -166,6 +166,23 @@ func TestSyncRefusesInvalidSettingsAndWritesNothing(t *testing.T) {
 	}
 }
 
+// A report is printed before the error that explains a refusal, so it must not claim a state it never read:
+// telling a reader the gate hook is `already wired` in a file the tool could not parse is a sentence about a
+// file nobody looked at, and it sits one line above the refusal that says otherwise.
+func TestSyncSaysNothingAboutTheHookInSettingsItCouldNotRead(t *testing.T) {
+	cfg := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cfg, "settings.json"), []byte("{not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	report, err := Sync(cfg, bin, Options{})
+	if err == nil {
+		t.Fatal("expected an error on invalid settings.json")
+	}
+	if got := report.String(); strings.Contains(got, "gate hook") {
+		t.Fatalf("the report claims a hook state it never read:\n%s", got)
+	}
+}
+
 func TestSyncDryRunWritesNothing(t *testing.T) {
 	cfg := t.TempDir()
 	report, err := Sync(cfg, bin, Options{DryRun: true})

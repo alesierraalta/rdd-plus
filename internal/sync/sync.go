@@ -23,13 +23,17 @@ type Options struct {
 
 // Report says what a sync did, or would do under DryRun.
 type Report struct {
-	ConfigDir       string
-	DryRun          bool
-	Written         []string
-	Unchanged       []string
-	BackedUp        map[string]string
-	RemovedHooks    []string
-	SettingsPath    string
+	ConfigDir    string
+	DryRun       bool
+	Written      []string
+	Unchanged    []string
+	BackedUp     map[string]string
+	RemovedHooks []string
+	SettingsPath string
+	// SettingsRead is false when settings.json could not be read, and then the report says nothing about
+	// wiring it: a report is printed before the error that explains a refusal, so a line claiming the hook
+	// is `already wired` would be a sentence about a file nobody looked at.
+	SettingsRead    bool
 	SettingsChanged bool
 }
 
@@ -54,10 +58,12 @@ func (r Report) String() string {
 	for _, h := range r.RemovedHooks {
 		fmt.Fprintf(&b, "%sremoved previous gate hook: %s\n", prefix, h)
 	}
-	if r.SettingsChanged {
-		fmt.Fprintf(&b, "%ssettings: gate hook wired in %s\n", prefix, r.SettingsPath)
-	} else {
-		fmt.Fprintf(&b, "%ssettings: gate hook already wired in %s\n", prefix, r.SettingsPath)
+	if r.SettingsRead {
+		if r.SettingsChanged {
+			fmt.Fprintf(&b, "%ssettings: gate hook wired in %s\n", prefix, r.SettingsPath)
+		} else {
+			fmt.Fprintf(&b, "%ssettings: gate hook already wired in %s\n", prefix, r.SettingsPath)
+		}
 	}
 	return b.String()
 }
@@ -77,6 +83,7 @@ func Sync(cfgDir, binPath string, opts Options) (Report, error) {
 	if err != nil {
 		return report, err
 	}
+	report.SettingsRead = true
 
 	skills := assets.Skills()
 	for _, name := range assets.SkillNames() {
