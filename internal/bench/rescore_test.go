@@ -106,8 +106,9 @@ func TestRescore(t *testing.T) {
 	_ = casesRoot
 }
 
-// A rescore whose aggregate cannot be written must not return as if it had recorded one.
-func TestRescoreReportsTheAggregateItCouldNotWrite(t *testing.T) {
+// A rescore whose record cannot be written must not return as if it had recorded one: the aggregate is
+// written first and the summary after it, so the blocked summary is what this pins.
+func TestRescoreReportsTheRecordItCouldNotWrite(t *testing.T) {
 	results := t.TempDir()
 	if err := writeJSON(filepath.Join(results, "aggregate.json"), Aggregate{TS: "t0", Model: "m", Runs: 1}); err != nil {
 		t.Fatal(err)

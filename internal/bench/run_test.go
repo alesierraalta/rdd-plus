@@ -548,3 +548,36 @@ func TestACaseWhoseResultCannotBeWrittenIsReportedFailed(t *testing.T) {
 		t.Fatalf("finish = %+v, want the case failed with the reason naming result.json", got)
 	}
 }
+
+// The note about a plan that could not be kept has to be in the file: one appended after the result was
+// persisted is a note nobody reads.
+func TestTheNoteAboutAnUnkeptPlanReachesTheResultFile(t *testing.T) {
+	out := t.TempDir()
+	ws := filepath.Join(out, "case-a", "1", "ws")
+	if err := os.MkdirAll(filepath.Join(ws, filepath.Dir(PlanPath)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, PlanPath), []byte("## Findings\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A directory where the kept plan has to go: the copy fails and the case keeps working.
+	dir := filepath.Join(out, "case-a", "1")
+	if err := os.MkdirAll(filepath.Join(dir, "test-plan.md"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got := finish(Result{Case: "case-a", Run: 1, Total: 2, Workspace: ws}, Options{Out: out, Log: io.Discard}, false)
+	if len(got.Notes) == 0 {
+		t.Fatal("finish dropped the note about the plan it could not keep")
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "result.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved Result
+	if err := json.Unmarshal(raw, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if len(saved.Notes) == 0 {
+		t.Fatalf("result.json carries no note about the plan it could not keep:\n%s", raw)
+	}
+}

@@ -340,7 +340,13 @@ func Run(opts Options) (Aggregate, int) {
 // unwritten reports a record the run could not persist: the numbers are returned so a caller can still read
 // them, and the code says the run did not finish as a recorded one.
 func unwritten(agg Aggregate, opts Options, artifact string, err error) (Aggregate, int) {
-	fmt.Fprintf(opts.Log, "%s could not be written: %v; the run's numbers are not recorded\n", artifact, err)
+	// The partial state belongs to the numbers that were not recorded, so it travels in the same line: an
+	// artifact failure is not a reason to lose the fact that some cases failed on their own.
+	partial := ""
+	if agg.Failed > 0 || agg.Invalid > 0 {
+		partial = fmt.Sprintf(" (the run had %d failed and %d invalid cases)", agg.Failed, agg.Invalid)
+	}
+	fmt.Fprintf(opts.Log, "%s could not be written: %v; the run's numbers are not recorded%s\n", artifact, err, partial)
 	return agg, ExitArtifact
 }
 
@@ -430,19 +436,20 @@ func merge(res, scored Result) Result {
 
 func finish(res Result, opts Options, keepWS bool) Result {
 	dir := filepath.Dir(res.Workspace)
+	// The plan is the run's deliverable: keep it beside result.json so a later scorer can re-read it. A copy
+	// that fails is a note on the case, not a failure — the case was scored, what is lost is rescoring it
+	// later — and the note is computed here, before the result is persisted, because one added afterwards is
+	// a note nobody reads.
+	if data, err := os.ReadFile(filepath.Join(res.Workspace, PlanPath)); err == nil {
+		if err := os.WriteFile(filepath.Join(dir, "test-plan.md"), data, 0o644); err != nil {
+			res.Notes = append(res.Notes, "the plan could not be kept beside the result: "+err.Error())
+		}
+	}
 	if err := writeJSON(filepath.Join(dir, "result.json"), res); err != nil {
 		// The case ran, and its record is its evidence: a case whose result cannot be written is reported as
 		// failed rather than counted from a file that is not there. Marking it failed also keeps the
 		// workspace, which is the only copy of what the case produced.
 		res.Failed, res.FailReason = true, fmt.Sprintf("result.json could not be written: %v", err)
-	}
-	// The plan is the run's deliverable: keep it beside result.json so a later scorer can re-read it.
-	if data, err := os.ReadFile(filepath.Join(res.Workspace, PlanPath)); err == nil {
-		if err := os.WriteFile(filepath.Join(dir, "test-plan.md"), data, 0o644); err != nil {
-			// The case is still scored from result.json; what is lost is rescoring it later, so the note
-			// travels with the case instead of failing a measurement that did happen.
-			res.Notes = append(res.Notes, "the plan could not be kept beside the result: "+err.Error())
-		}
 	}
 	if !opts.Keep && !keepWS && !res.Invalid && !res.Failed {
 		_ = os.RemoveAll(res.Workspace)
