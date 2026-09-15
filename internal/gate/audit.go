@@ -1,6 +1,10 @@
 package gate
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/alesierraalta/rdd-plus/internal/plan"
+)
 
 // BuildAuditReason is what the Stop says when the discipline ran. Covering a diff and reporting
 // as though the surface were covered is the failure this catches: the run looks complete because
@@ -27,6 +31,19 @@ func BuildCompleteReason(planPath string) string {
 		"the plan assigned was swept and every ranked target is done.",
 		"",
 		feedbackOffer,
+	}, "\n")
+}
+
+// BuildDeclarationProblem is what the Stop says when the plan declaration cannot be read. It replaces
+// the silence: the gate cannot audit a plan it cannot resolve, and the operator is the one who can
+// repair the file. Removing the declaration falls back to the default plan, which is a decision.
+func BuildDeclarationProblem(err error) string {
+	return strings.Join([]string{
+		"The plan declaration could not be read, so this run's breadth was not audited:",
+		"",
+		"  " + err.Error(),
+		"",
+		"Fix " + plan.ConfigName + " at the worktree root, or remove it to fall back to " + plan.DefaultPath + ".",
 	}, "\n")
 }
 

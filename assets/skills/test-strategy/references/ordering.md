@@ -71,9 +71,16 @@ negligence, and writing it down is what distinguishes the two.
 
 ## Plan persistence
 
-The plan lives at `docs/testing/test-plan.md` (or the path the user names), built from
-`assets/test-plan-template.md`. Rows are never deleted by budget. The stopping point is
-recorded as row status (`pending`, `in progress`, `done`, `blocked`), not as prose.
+The plan lives at `docs/testing/test-plan.md` by default (or the path the user names), built from
+`assets/test-plan-template.md`. When it is not the default path, declare it at the worktree root in
+`.rdd-plus.json`; the Stop hook and `rdd-plus check` read that declared plan:
+
+```json
+{"planPath": "docs/testing/<name>.md"}
+```
+
+A plan nobody declares is a plan nothing clears. Rows are never deleted by budget. The stopping
+point is recorded as row status (`pending`, `in progress`, `done`, `blocked`), not as prose.
 EXECUTE mode resumes from the first `pending` row; a refreshed PLAN keeps existing statuses.
 
 ---

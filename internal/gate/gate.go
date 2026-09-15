@@ -72,6 +72,7 @@ type Entry struct {
 	Fired         bool     `json:"fired"`
 	Skipped       string   `json:"skipped,omitempty"`
 	OptedOut      bool     `json:"opted_out,omitempty"`
+	Plan          string   `json:"plan,omitempty"`
 }
 
 type Result struct {
@@ -90,6 +91,9 @@ type Result struct {
 	// both make Gaps.Any() true without raising Owed or Pending.
 	Unreadable int
 	Unplanned  bool
+	// Problem is a repository state the gate could not act on: a plan declaration it cannot read. It is
+	// not an audit — nothing was read — and it is never silence: the model and the operator both hear it.
+	Problem string
 }
 
 // IsProductionSource decides what the gate protects: source by extension, outside test,
@@ -297,6 +301,12 @@ func Decide(in Input, d Deps) Result {
 		Repo:         filepath.Base(root),
 		SkillsLoaded: []string{},
 	}
+	rel, cfgErr := plan.ResolvePath(root, func(path string) (string, error) {
+		return readPlan(d, path)
+	})
+	if cfgErr == nil {
+		entry.Plan = rel
+	}
 	statusOut, err := d.Git(root, "status", "--porcelain", "-z", "-uall")
 	if err != nil {
 		entry.Skipped = "git_status_failed"
@@ -342,7 +352,12 @@ func Decide(in Input, d Deps) Result {
 	// The discipline ran. The second question is whether it ran all the way: a layer assigned
 	// and never invoked leaves the report reading as coverage of a surface nobody examined.
 	if len(files) > 0 && !entry.OptedOut && isAdversarial(entry.SkillsLoaded) {
-		planPath := filepath.Join(root, plan.DefaultPath)
+		if cfgErr != nil {
+			entry.Skipped = "plan_config_invalid"
+			res.Problem = BuildDeclarationProblem(cfgErr)
+			return res
+		}
+		planPath := filepath.Join(root, rel)
 		if body, err := readPlan(d, planPath); err == nil {
 			if gaps, err := plan.GapsIn(body); err == nil {
 				res.Audit = true
@@ -350,9 +365,9 @@ func Decide(in Input, d Deps) Result {
 				res.Owed, res.Pending = len(gaps.UnsweptLayers), len(gaps.PendingTargets)
 				res.Unreadable, res.Unplanned = len(gaps.InterruptedTables), gaps.NoLayerMatrix
 				if gaps.Any() {
-					res.Reason = BuildAuditReason(plan.DefaultPath, gaps.Report())
+					res.Reason = BuildAuditReason(rel, gaps.Report())
 				} else {
-					res.Reason = BuildCompleteReason(plan.DefaultPath)
+					res.Reason = BuildCompleteReason(rel)
 				}
 			}
 		}

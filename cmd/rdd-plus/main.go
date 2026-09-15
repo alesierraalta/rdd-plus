@@ -55,21 +55,22 @@ bench score --case <dir> --workspace <ws>
 bench history [--bench-dir <dir>]
 bench compare <before-results> <after-results>
 bench rescore [--bench-dir <dir>] <results>
-plan init [--path docs/testing/test-plan.md] [--force]
-plan check [--path docs/testing/test-plan.md]
-plan gaps  [--path docs/testing/test-plan.md]
+plan init [--path <path>] [--force]
+plan check [--path <path>]
+plan gaps [--path <path>]
 plan add-finding --id <id> --location <path:line> --severity <class> --data-safe <yes|no> --evidence <ids>
            --status <open|confirmed|fixed|rejected|wontfix> [--test <suite :: name>] --verdict-by <who / date>
-           --reason <why> [--fingerprint <digest>] [--path docs/testing/test-plan.md]
+           --reason <why> [--fingerprint <digest>] [--path <path>]
            (writes one Findings row; refuses a row plan check would reject, and never writes an
             evidence row. A bad value exits 2; a plan that refuses the row exits 1)
            (swept = status done, fixed or closed; n/a, na, none and skipped leave the denominator)
-plan admit [--path docs/testing/test-plan.md] [--execute] [--sandbox] [--sandbox-image <image>] [--timeout 120s] [--only <ids>] [--record <ids>]
+plan admit [--path <path>] [--execute] [--sandbox] [--sandbox-image <image>] [--timeout 120s] [--only <ids>] [--record <ids>]
            (dry run by default: --execute runs each admitted row's one command through sh -c;
             --record writes the freshly observed digest back into the named rows and requires
             --execute, because a dry run makes no observation to pin; exit 1 when any row is
             refused or a digest cannot be written)
-check [--cwd .]
+check [--cwd .] [--path <path>]
+--path defaults to the plan declared in .rdd-plus.json when there is one, else docs/testing/test-plan.md
 feedback [--config-dir <dir>] [--template] [--file <path>] [--plan <path>] [--summary]
 `
 
@@ -176,10 +177,21 @@ func selfDir() string {
 func runCheck(args []string) int {
 	fs := flag.NewFlagSet("check", flag.ContinueOnError)
 	cwd := fs.String("cwd", ".", "directory inside the repository to check")
+	path := fs.String("path", "", "plan file relative to the repository root")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	res := check.Run(*cwd, check.Deps{})
+	pathSet := false
+	fs.Visit(func(f *flag.Flag) {
+		pathSet = pathSet || f.Name == "path"
+	})
+	if pathSet && !filepath.IsAbs(*path) {
+		if err := plan.ValidatePlanPath("--path", *path); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 2
+		}
+	}
+	res := check.Run(*cwd, check.Deps{PlanPath: *path})
 	fmt.Println(strings.TrimRight(res.Text, "\n"))
 	return res.Exit
 }
@@ -247,7 +259,7 @@ func runPlan(args []string) int {
 		return 2
 	}
 	fs := flag.NewFlagSet("plan", flag.ContinueOnError)
-	path := fs.String("path", plan.DefaultPath, "plan file")
+	path := fs.String("path", "", "plan file")
 	force := fs.Bool("force", false, "replace an existing plan (init only)")
 	id := fs.String("id", "", "Findings row id (add-finding)")
 	location := fs.String("location", "", "the `path:line` the finding cites (add-finding)")
@@ -268,11 +280,24 @@ func runPlan(args []string) int {
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
 	}
+	pathSet := false
+	fs.Visit(func(f *flag.Flag) {
+		pathSet = pathSet || f.Name == "path"
+	})
+	effectivePath := *path
+	if !pathSet {
+		var err error
+		effectivePath, err = plan.ResolvePath(feedback.RepoRoot("."), nil)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "plan:", err)
+			return 1
+		}
+	}
 	switch args[0] {
 	case "admit":
-		return runPlanAdmit(*path, *execute, *timeout, *only, *record, *sandbox, *sandboxImage)
+		return runPlanAdmit(effectivePath, *execute, *timeout, *only, *record, *sandbox, *sandboxImage)
 	case "gaps":
-		g, err := plan.GapsInFile(*path)
+		g, err := plan.GapsInFile(effectivePath)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "plan gaps:", err)
 			return 1
@@ -283,24 +308,24 @@ func runPlan(args []string) int {
 		}
 		return 0
 	case "init":
-		if err := plan.Init(*path, *force); err != nil {
+		if err := plan.Init(effectivePath, *force); err != nil {
 			fmt.Fprintln(os.Stderr, "plan init:", err)
 			return 1
 		}
-		fmt.Printf("wrote %s\n", *path)
+		fmt.Printf("wrote %s\n", effectivePath)
 		return 0
 	case "check":
-		problems, err := plan.Check(*path)
+		problems, err := plan.Check(effectivePath)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "plan check:", err)
 			return 1
 		}
 		if len(problems) == 0 {
-			fmt.Printf("%s: well formed\n", *path)
+			fmt.Printf("%s: well formed\n", effectivePath)
 			return 0
 		}
 		for _, p := range problems {
-			fmt.Fprintf(os.Stderr, "%s: %s\n", *path, p)
+			fmt.Fprintf(os.Stderr, "%s: %s\n", effectivePath, p)
 		}
 		return 1
 	case "add-finding":
@@ -317,7 +342,7 @@ func runPlan(args []string) int {
 				return 2
 			}
 		}
-		line, err := plan.AddFinding(*path, plan.Finding{
+		line, err := plan.AddFinding(effectivePath, plan.Finding{
 			ID: *id, Location: *location, Severity: *severity, DataSafe: *dataSafe,
 			Evidence: *evidence, Test: *test, Status: *status, VerdictBy: *verdictBy,
 			Reason: *reason, Fingerprint: *fingerprint,
@@ -331,7 +356,7 @@ func runPlan(args []string) int {
 			}
 			return 1
 		}
-		fmt.Printf("added %s to %s at line %d\n", *id, *path, line)
+		fmt.Printf("added %s to %s at line %d\n", *id, effectivePath, line)
 		return 0
 	default:
 		fmt.Fprint(os.Stderr, usage)
