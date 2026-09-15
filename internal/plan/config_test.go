@@ -50,6 +50,36 @@ func TestResolvePathFallsBackToTheDefault(t *testing.T) {
 	}
 }
 
+func TestResolveFromRootTakesAnAbsolutePathAsGiven(t *testing.T) {
+	const absolute = "/tmp/absolute-plan.md"
+	got, err := ResolveFromRoot("/repository", "--path", absolute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != absolute {
+		t.Fatalf("path = %q, want %q", got, absolute)
+	}
+}
+
+func TestResolveFromRootResolvesARelativePathAgainstTheRoot(t *testing.T) {
+	root := t.TempDir()
+	got, err := ResolveFromRoot(root, "--path", "docs/testing/plan.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(root, "docs/testing/plan.md")
+	if got != want {
+		t.Fatalf("path = %q, want %q", got, want)
+	}
+}
+
+func TestResolveFromRootRefusesARelativeEscape(t *testing.T) {
+	_, err := ResolveFromRoot("/repository", "--path", "../../outside.md")
+	if err == nil || !strings.Contains(err.Error(), "--path") {
+		t.Fatalf("error = %v, want an error naming --path", err)
+	}
+}
+
 func TestDeclaredPathRefusesAnUnknownKey(t *testing.T) {
 	_, err := DeclaredPath(t.TempDir(), func(string) (string, error) {
 		return `{"planpath":"docs/testing/custom-plan.md"}`, nil

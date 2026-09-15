@@ -178,6 +178,36 @@ func TestCheckPathBeatsTheDeclaration(t *testing.T) {
 	}
 }
 
+func TestCheckRefusesAnAbsolutePath(t *testing.T) {
+	deps := (&fakeRepo{root: "/r", status: porcelain(" M src/app.js"), plan: settled}).deps()
+	deps.PlanPath = "/tmp/outside-plan.md"
+	res := Run(".", deps)
+	if res.Exit != 1 {
+		t.Fatalf("exit = %d, want 1: %s", res.Exit, res.Text)
+	}
+	if !strings.Contains(res.Text, "--path") {
+		t.Fatalf("text = %q, want the flag named", res.Text)
+	}
+}
+
+func TestCheckResolvesARelativePathAgainstTheRoot(t *testing.T) {
+	const rootOnly = "docs/testing/root-only.md"
+	repo := &fakeRepo{
+		root:   "/repository-root",
+		status: porcelain(" M src/app.js"),
+		plans:  map[string]string{rootOnly: settled},
+	}
+	deps := repo.deps()
+	deps.PlanPath = rootOnly
+	res := Run("/repository-root/subdirectory", deps)
+	if res.Exit != 0 {
+		t.Fatalf("exit = %d, want 0: %s", res.Exit, res.Text)
+	}
+	if !strings.Contains(res.Text, rootOnly) {
+		t.Fatalf("text = %q, want the root-relative plan named", res.Text)
+	}
+}
+
 func TestCheckNamesABrokenDeclaration(t *testing.T) {
 	repo := &fakeRepo{root: "/r", status: porcelain(" M src/app.js"), config: `{`}
 	res := Run(".", repo.deps())

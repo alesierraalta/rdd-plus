@@ -45,30 +45,26 @@ func Run(cwd string, d Deps) Result {
 	if err != nil || root == "" {
 		return Result{Text: "not a git repository: nothing to check"}
 	}
-	planPath := d.PlanPath
-	planReadPath := planPath
-	if planPath != "" {
-		if !filepath.IsAbs(planPath) {
-			if err := plan.ValidatePlanPath("--path", planPath); err != nil {
-				return Result{Exit: 1, Text: err.Error()}
-			}
-			planPath = filepath.Clean(planPath)
-			planReadPath = filepath.Join(root, planPath)
+	planRelPath := d.PlanPath
+	if planRelPath != "" {
+		if err := plan.ValidatePlanPath("--path", planRelPath); err != nil {
+			return Result{Exit: 1, Text: err.Error()}
 		}
+		planRelPath = filepath.Clean(planRelPath)
 	} else {
 		var cfgErr error
-		planPath, cfgErr = plan.ResolvePath(root, d.ReadFile)
+		planRelPath, cfgErr = plan.ResolvePath(root, d.ReadFile)
 		if cfgErr != nil {
 			return Result{Exit: 1, Text: "the plan declaration could not be read: " + cfgErr.Error()}
 		}
-		planReadPath = filepath.Join(root, planPath)
 	}
+	planFilePath := filepath.Join(root, planRelPath)
 	// The plan is read before the diff so the versioning caveat rides with every verdict, including
 	// the quiet ones: a plan git will never version is a half persistence whatever the tree shows.
-	body, planErr := d.ReadFile(planReadPath)
+	body, planErr := d.ReadFile(planFilePath)
 	warn := ""
 	if planErr == nil {
-		warn = ignoredPlanWarning(root, planPath, d)
+		warn = ignoredPlanWarning(root, planRelPath, d)
 	}
 	statusOut, err := d.Git(root, "status", "--porcelain", "-z", "-uall")
 	if err != nil {
@@ -87,14 +83,14 @@ func Run(cwd string, d Deps) Result {
 	}
 	if planErr != nil {
 		return Result{Exit: 1, Files: files, Text: warn + changedLine(files) +
-			"\nthere is no test plan at " + planPath + ": run the testing discipline, or write down why this change does not warrant it"}
+			"\nthere is no test plan at " + planRelPath + ": run the testing discipline, or write down why this change does not warrant it"}
 	}
 	gaps, err := plan.GapsIn(body)
 	if err != nil {
 		return Result{Exit: 1, Files: files, Text: warn + changedLine(files) + "\nthe plan could not be read: " + err.Error()}
 	}
 	if !gaps.Any() {
-		return Result{Files: files, Text: warn + changedLine(files) + "\n" + planPath + " owes nothing: every assigned layer was swept and every ranked target is done"}
+		return Result{Files: files, Text: warn + changedLine(files) + "\n" + planRelPath + " owes nothing: every assigned layer was swept and every ranked target is done"}
 	}
 	return Result{Exit: 1, Files: files, Text: warn + changedLine(files) + "\n" + gaps.Report()}
 }

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -13,11 +12,6 @@ import (
 
 // ConfigName is the repository-local declaration read from the worktree root.
 const ConfigName = ".rdd-plus.json"
-
-// Config is the declaration's shape.
-type Config struct {
-	PlanPath string `json:"planPath"`
-}
 
 // Reader reads a file's text; nil means os.ReadFile.
 type Reader func(path string) (string, error)
@@ -40,20 +34,6 @@ func DeclaredPath(root string, read Reader) (string, error) {
 		return "", fmt.Errorf("%s: %w", ConfigName, err)
 	}
 
-	var cfg Config
-	decoder := json.NewDecoder(strings.NewReader(body))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&cfg); err != nil {
-		return "", fmt.Errorf("%s: %w", ConfigName, err)
-	}
-	var extra json.RawMessage
-	if err := decoder.Decode(&extra); err != io.EOF {
-		if err == nil {
-			return "", fmt.Errorf("%s: multiple JSON values", ConfigName)
-		}
-		return "", fmt.Errorf("%s: %w", ConfigName, err)
-	}
-
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(body), &fields); err != nil {
 		return "", fmt.Errorf("%s: %w", ConfigName, err)
@@ -61,21 +41,29 @@ func DeclaredPath(root string, read Reader) (string, error) {
 	if fields == nil {
 		return "", fmt.Errorf("%s: declaration must be a JSON object", ConfigName)
 	}
+	// The key check must be a map check: Go's decoder matches struct field names case-insensitively,
+	// so {"planpath": ...} would decode into the field and DisallowUnknownFields would not refuse it.
+	// Checking the exact key is what makes a typo fail closed.
 	for key := range fields {
 		if key != "planPath" {
 			return "", fmt.Errorf("%s: unknown field %q", ConfigName, key)
 		}
 	}
-	if _, present := fields["planPath"]; !present {
+	declared, present := fields["planPath"]
+	if !present {
 		return "", nil
 	}
-	if strings.TrimSpace(cfg.PlanPath) == "" {
+	var path string
+	if err := json.Unmarshal(declared, &path); err != nil {
+		return "", fmt.Errorf("%s: planPath must be a string: %w", ConfigName, err)
+	}
+	if strings.TrimSpace(path) == "" {
 		return "", fmt.Errorf("%s: planPath is empty", ConfigName)
 	}
-	if err := ValidatePlanPath(ConfigName, cfg.PlanPath); err != nil {
+	if err := ValidatePlanPath(ConfigName, path); err != nil {
 		return "", err
 	}
-	return cfg.PlanPath, nil
+	return path, nil
 }
 
 // ResolvePath is the effective plan path for a worktree: the declaration when there is one, else
@@ -89,6 +77,18 @@ func ResolvePath(root string, read Reader) (string, error) {
 		return DefaultPath, nil
 	}
 	return declared, nil
+}
+
+// ResolveFromRoot turns a --path value into the file to read: an absolute value is taken as given, a
+// relative one is resolved against root under the same containment rule the declaration obeys.
+func ResolveFromRoot(root, source, p string) (string, error) {
+	if filepath.IsAbs(p) {
+		return p, nil
+	}
+	if err := ValidatePlanPath(source, p); err != nil {
+		return "", err
+	}
+	return filepath.Join(root, filepath.Clean(p)), nil
 }
 
 // ValidatePlanPath rejects a declaration path that is not repository-relative or that escapes the

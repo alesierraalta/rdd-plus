@@ -70,7 +70,7 @@ plan admit [--path <path>] [--execute] [--sandbox] [--sandbox-image <image>] [--
             --execute, because a dry run makes no observation to pin; exit 1 when any row is
             refused or a digest cannot be written)
 check [--cwd .] [--path <path>]
---path defaults to the plan declared in .rdd-plus.json when there is one, else docs/testing/test-plan.md
+--path: relative values resolve against the worktree root; absolute values are taken as given except in check, which refuses them. Without --path, use the plan declared in .rdd-plus.json when there is one, else docs/testing/test-plan.md
 feedback [--config-dir <dir>] [--template] [--file <path>] [--plan <path>] [--summary]
 `
 
@@ -181,11 +181,7 @@ func runCheck(args []string) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	pathSet := false
-	fs.Visit(func(f *flag.Flag) {
-		pathSet = pathSet || f.Name == "path"
-	})
-	if pathSet && !filepath.IsAbs(*path) {
+	if flagSet(fs, "path") {
 		if err := plan.ValidatePlanPath("--path", *path); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 2
@@ -194,6 +190,16 @@ func runCheck(args []string) int {
 	res := check.Run(*cwd, check.Deps{PlanPath: *path})
 	fmt.Println(strings.TrimRight(res.Text, "\n"))
 	return res.Exit
+}
+
+// flagSet reports whether the operator passed the named flag, which is how an explicit empty value is
+// told apart from an absent one.
+func flagSet(fs *flag.FlagSet, name string) bool {
+	set := false
+	fs.Visit(func(f *flag.Flag) {
+		set = set || f.Name == name
+	})
+	return set
 }
 
 // runFeedback is the destination the gate's Stop offer never had: --template hands the operator a
@@ -280,18 +286,17 @@ func runPlan(args []string) int {
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
 	}
-	pathSet := false
-	fs.Visit(func(f *flag.Flag) {
-		pathSet = pathSet || f.Name == "path"
-	})
+	root := feedback.RepoRoot(".")
+	var err error
 	effectivePath := *path
-	if !pathSet {
-		var err error
-		effectivePath, err = plan.ResolvePath(feedback.RepoRoot("."), nil)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "plan:", err)
-			return 1
-		}
+	if flagSet(fs, "path") {
+		effectivePath, err = plan.ResolveFromRoot(root, "--path", *path)
+	} else {
+		effectivePath, err = plan.ResolvePath(root, nil)
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "plan:", err)
+		return 1
 	}
 	switch args[0] {
 	case "admit":
