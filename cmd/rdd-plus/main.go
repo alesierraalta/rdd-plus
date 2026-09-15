@@ -35,7 +35,7 @@ commands:
   doctor   report installed skills, the hook wiring, and optional capabilities
   bench    run the testing skill against sealed-key fixtures and score it (run | score | history)
   plan     write the skeleton, check the contract, name what breadth is still owed, record a
-           Findings row from flags, and admit every Evidence row (init | check | gaps | add-finding | admit)
+           Findings row from flags, and admit every Evidence row (init | check | gaps | upgrade | add-finding | admit)
   check    say what this repository still owes, from git and the plan alone: no hook payload,
            no transcript, no host. Exit 1 when there is something to do.
   feedback record an honest process report on the method itself, or read the reports back
@@ -57,7 +57,8 @@ bench compare <before-results> <after-results>
 bench rescore [--bench-dir <dir>] <results>
 plan init [--path <path>] [--force]
 plan check [--path <path>]
-plan gaps [--path <path>]
+plan gaps [--run <slug>] [--all] [--path <path>]
+plan upgrade [--run <slug>] [--path <path>]
 plan add-finding --id <id> --location <path:line> --severity <class> --data-safe <yes|no> --evidence <ids>
            --status <open|confirmed|fixed|rejected|wontfix> [--test <suite :: name>] --verdict-by <who / date>
            --reason <why> [--fingerprint <digest>] [--path <path>]
@@ -71,6 +72,7 @@ plan admit [--path <path>] [--execute] [--sandbox] [--sandbox-image <image>] [--
             refused or a digest cannot be written)
 check [--cwd .] [--path <path>]
 --path: relative values resolve against the worktree root; absolute values are taken as given except in check, which refuses them. Without --path, use the plan declared in .rdd-plus.json when there is one, else docs/testing/test-plan.md
+--run: a lowercase slug identifying the active run; plan gaps uses the declaration when omitted, while --all forces whole-document counts
 feedback [--config-dir <dir>] [--template] [--file <path>] [--plan <path>] [--summary]
 `
 
@@ -266,6 +268,8 @@ func runPlan(args []string) int {
 	}
 	fs := flag.NewFlagSet("plan", flag.ContinueOnError)
 	path := fs.String("path", "", "plan file")
+	run := fs.String("run", "", "active run slug (gaps and upgrade)")
+	all := fs.Bool("all", false, "count every row (gaps only)")
 	force := fs.Bool("force", false, "replace an existing plan (init only)")
 	id := fs.String("id", "", "Findings row id (add-finding)")
 	location := fs.String("location", "", "the `path:line` the finding cites (add-finding)")
@@ -286,13 +290,31 @@ func runPlan(args []string) int {
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
 	}
+	if *all && flagSet(fs, "run") {
+		fmt.Fprintln(os.Stderr, "plan gaps: --run and --all cannot combine")
+		return 2
+	}
+	if *all && args[0] != "gaps" {
+		fmt.Fprintln(os.Stderr, "plan: --all is only valid with gaps")
+		return 2
+	}
+	if flagSet(fs, "run") {
+		if err := plan.ValidateRun("--run", *run); err != nil {
+			fmt.Fprintln(os.Stderr, "plan:", err)
+			return 2
+		}
+	}
 	root := feedback.RepoRoot(".")
 	var err error
+	var declaredRun string
 	effectivePath := *path
 	if flagSet(fs, "path") {
 		effectivePath, err = plan.ResolveFromRoot(root, "--path", *path)
+		if err == nil {
+			declaredRun, err = plan.DeclaredRun(root, nil)
+		}
 	} else {
-		effectivePath, err = plan.ResolvePath(root, nil)
+		effectivePath, declaredRun, err = plan.Resolve(root, nil)
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "plan:", err)
@@ -302,7 +324,13 @@ func runPlan(args []string) int {
 	case "admit":
 		return runPlanAdmit(effectivePath, *execute, *timeout, *only, *record, *sandbox, *sandboxImage)
 	case "gaps":
-		g, err := plan.GapsInFile(effectivePath)
+		selectedRun := declaredRun
+		if *all {
+			selectedRun = ""
+		} else if flagSet(fs, "run") {
+			selectedRun = *run
+		}
+		g, err := plan.GapsInFileForRun(effectivePath, selectedRun)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "plan gaps:", err)
 			return 1
@@ -311,6 +339,18 @@ func runPlan(args []string) int {
 		if g.Any() {
 			return 1
 		}
+		return 0
+	case "upgrade":
+		selectedRun := ""
+		if flagSet(fs, "run") {
+			selectedRun = *run
+		}
+		changed, err := plan.Upgrade(effectivePath, selectedRun)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "plan upgrade:", err)
+			return 1
+		}
+		fmt.Printf("upgraded %s: %d table(s) changed\n", effectivePath, changed)
 		return 0
 	case "init":
 		if err := plan.Init(effectivePath, *force); err != nil {

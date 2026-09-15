@@ -206,12 +206,12 @@ func scopedPlan(light, scope string) string {
 		"| Id | Finding | Severity | Data safe? | Evidence id | Pinning test | Status | Verdict by / date | Reason | Fingerprint |\n" +
 		"|---|---|---|---|---|---|---|---|---|---|\n\n" +
 		"## Ranked targets\n\n" +
-		"| Target | Blast radius | Churn / past fixes | Consequence class | Existing evidence | Altitude | Target rung |\n" +
-		"|---|---|---|---|---|---|---|\n" +
-		"| cli flags | `internal/cli/flags.go:12` | Unknown | incorrect output | | | |\n\n" +
+		"| Target | Blast radius | Churn / past fixes | Consequence class | Existing evidence | Altitude | Target rung | Run |\n" +
+		"|---|---|---|---|---|---|---|---|\n" +
+		"| cli flags | `internal/cli/flags.go:12` | Unknown | incorrect output | | | |  |\n\n" +
 		"## Layer matrix\n\n" +
-		"| Layer | Skill | Scope | Status |\n|---|---|---|---|\n" +
-		"| Persistence and migrations | `database-persistence-testing` | " + scope + " | n/a |\n"
+		"| Layer | Skill | Scope | Status | Run |\n|---|---|---|---|---|\n" +
+		"| Persistence and migrations | `database-persistence-testing` | " + scope + " | n/a |  |\n"
 }
 
 const lightLine = "Light: cli flags · touches cli\n\n"
@@ -610,8 +610,9 @@ func TestLedgerResolvesTheColumnsOfTheShippedHeader(t *testing.T) {
 	}
 }
 
-// Substring matching is all columnIndex knows, so the collisions are pinned: `Admit` must not resolve
-// to `Executed`, `Digest` must not resolve to another column, and no two names may share a column.
+// Historical column names use substring matching, so the collisions are pinned: `Admit` must not resolve
+// to `Executed`, `Digest` must not resolve to another column, and no two names may share a column. The Run
+// column is the deliberate exact-match exception because `Target rung` contains the same substring.
 func TestLedgerColumnNamesResolveToDistinctColumns(t *testing.T) {
 	_, header := table(section(machineHeader, "Evidence ledger"))
 	if header == nil {
@@ -1296,8 +1297,8 @@ func TestCheckAcceptsTheShippedTemplateWithItsHypothesesTable(t *testing.T) {
 // read as the resumed half of a cut table.
 func TestCheckIgnoresAFencedBlockInRankedTargets(t *testing.T) {
 	doc := header + ledger + "| E1 | c | cmd | i | o | m | r | observado |\n" +
-		"## Ranked targets\n\n| Target | Blast radius | Status |\n|---|---|---|\n" +
-		"| 1. token refresh | every session | done |\n" +
+		"## Ranked targets\n\n| Target | Blast radius | Status | Run |\n|---|---|---|---|\n" +
+		"| 1. token refresh | every session | done |  |\n" +
 		"\nA target row looks like this:\n\n" +
 		"```markdown\n| Target | Status |\n|---|---|\n| 9. an example | done |\n```\n"
 	if problems := CheckDocument(doc); len(problems) != 0 {
@@ -1422,4 +1423,51 @@ func insertFencedExample(doc string) (string, bool) {
 		}
 	}
 	return doc, false
+}
+
+func runCheckPlan(layer, ranked string) string {
+	return header + layer + ranked
+}
+
+func TestCheckRefusesALayerMatrixWithoutARunColumn(t *testing.T) {
+	doc := runCheckPlan("## Layer matrix\n\n| Layer | Skill | Scope | Status |\n|---|---|---|---|\n| Security | `appsec` | input | pending |\n", "## Ranked targets\n\n| Target | Status | Run |\n|---|---|---|\n| target | pending | redis-stream-pool |\n")
+	problems := CheckDocument(doc)
+	joined := strings.Join(problems, "\n")
+	if !strings.Contains(joined, "Layer matrix") || !strings.Contains(joined, "Run") || !strings.Contains(joined, "rdd-plus plan upgrade") {
+		t.Fatalf("missing Run-column refusal: %v", problems)
+	}
+}
+
+func TestCheckRefusesARankedTargetsTableWithoutARunColumn(t *testing.T) {
+	doc := runCheckPlan("## Layer matrix\n\n| Layer | Skill | Scope | Status | Run |\n|---|---|---|---|---|\n| Security | `appsec` | input | pending | redis-stream-pool |\n", "## Ranked targets\n\n| Target | Status |\n|---|---|\n| target | pending |\n")
+	problems := CheckDocument(doc)
+	joined := strings.Join(problems, "\n")
+	if !strings.Contains(joined, "Ranked targets") || !strings.Contains(joined, "Run") || !strings.Contains(joined, "rdd-plus plan upgrade") {
+		t.Fatalf("missing Run-column refusal: %v", problems)
+	}
+}
+
+func TestCheckRefusesAMalformedRunCell(t *testing.T) {
+	doc := runCheckPlan("## Layer matrix\n\n| Layer | Skill | Scope | Status | Run |\n|---|---|---|---|---|\n| Security | `appsec` | input | pending | Bad_Slug |\n", "## Ranked targets\n\n| Target | Status | Run |\n|---|---|---|\n| target | pending | redis-stream-pool |\n")
+	problems := CheckDocument(doc)
+	joined := strings.Join(problems, "\n")
+	if !strings.Contains(joined, "line") || !strings.Contains(joined, "Bad_Slug") {
+		t.Fatalf("malformed Run cell was not named with its line and cell: %v", problems)
+	}
+}
+
+func TestCheckAcceptsARunCellThatIsASlug(t *testing.T) {
+	doc := runCheckPlan("## Layer matrix\n\n| Layer | Skill | Scope | Status | Run |\n|---|---|---|---|---|\n| Security | `appsec` | input | pending | redis-stream-pool |\n", "## Ranked targets\n\n| Target | Status | Run |\n|---|---|---|\n| target | pending | redis-stream-pool |\n")
+	if problems := CheckDocument(doc); len(problems) != 0 {
+		t.Fatalf("valid Run slug rejected: %v", problems)
+	}
+}
+
+func TestColumnRunDoesNotResolveToTargetRung(t *testing.T) {
+	if got := columnIndex([]string{"Target rung", "Run"}, "run"); got != 1 {
+		t.Fatalf("run resolved to column %d, want the Run column at 1", got)
+	}
+	if got := columnIndex([]string{"Target rung"}, "run"); got != -1 {
+		t.Fatalf("run resolved to Target rung at %d, want -1", got)
+	}
 }

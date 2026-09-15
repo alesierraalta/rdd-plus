@@ -125,6 +125,14 @@ func CheckDocument(doc string) []string {
 			problems = append(problems, fmt.Sprintf("line %d: %s", line, message))
 		}
 	}
+	for _, t := range []struct {
+		name string
+		scan tableScan
+	}{
+		{"Ranked targets", ranked}, {"Layer matrix", layers},
+	} {
+		problems = append(problems, runColumnProblems(t.name, t.scan)...)
+	}
 	ledgerIDs := map[string]bool{}
 	for _, r := range ledger.rows {
 		id := cell(r.cells, 0)
@@ -992,10 +1000,42 @@ func cell(row []string, i int) string {
 }
 
 func columnIndex(header []string, name string) int {
+	// Most historical readers deliberately use substring matching (`Finding (path:line)` and `Status`).
+	// Run is different: `Target rung` contains the substring `run`, so this one machine column must match
+	// the whole header cell or a ranked target's rung will be read as its run.
+	if strings.EqualFold(strings.TrimSpace(name), "run") {
+		for i, h := range header {
+			if strings.EqualFold(strings.TrimSpace(h), "run") {
+				return i
+			}
+		}
+		return -1
+	}
 	for i, h := range header {
 		if strings.Contains(strings.ToLower(h), strings.ToLower(name)) {
 			return i
 		}
 	}
 	return -1
+}
+
+func runColumnProblems(name string, scan tableScan) []string {
+	if scan.header == nil {
+		return nil
+	}
+	iRun := columnIndex(scan.header, "run")
+	if iRun < 0 {
+		return []string{fmt.Sprintf("the %s table has no Run column: run rdd-plus plan upgrade to add it", name)}
+	}
+	var problems []string
+	for _, r := range scan.rows {
+		run := cell(r.cells, iRun)
+		if run == "" {
+			continue
+		}
+		if err := ValidateRun("Run", run); err != nil {
+			problems = append(problems, fmt.Sprintf("line %d: the %s table Run cell %q is invalid: %v", r.line, name, run, err))
+		}
+	}
+	return problems
 }

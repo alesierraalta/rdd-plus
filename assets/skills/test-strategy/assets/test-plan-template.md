@@ -13,8 +13,8 @@ Baseline: `<git rev>` · untracked files: <count> · fingerprint: `<assets/finge
 Rows are never removed by budget; budget changes order and status only. Rows contributed by a
 sibling in the layer sweep name that sibling in "Sibling skill".
 
-| Target | Blast radius | Churn / past fixes | Consequence class | Existing evidence | Altitude | Target rung | Sibling skill | Verdict | Status |
-|---|---|---|---|---|---|---|---|---|---|
+| Target | Blast radius | Churn / past fixes | Consequence class | Existing evidence | Altitude | Target rung | Sibling skill | Verdict | Status | Run |
+|---|---|---|---|---|---|---|---|---|---|---|
 
 Verdicts: probe · pin · none. Statuses: pending · in progress · done · blocked · n/a.
 A `none` verdict is created with status `n/a`; the execution ratio excludes `n/a` rows.
@@ -28,14 +28,16 @@ How each critical journey is driven for real (`real-run-validation`), so EXECUTE
 
 ## Layer matrix
 
-| Layer | Skill | Scope | Status |
-|---|---|---|---|
-| Security | `appsec-adversarial-auditor` | auth boundaries, untrusted input, secrets | pending |
-| Runtime and faults | `runtime-reliability-testing` | load, latency, fault injection, smoke | pending |
-| Persistence and migrations | `database-persistence-testing` | migration naming/order/idempotency, isolation, N+1 | pending |
-| Architecture conformance | `clean-architecture-audit` | layer purity, targeted mutation | pending |
-| Critical e2e journeys | `real-run-validation` | <journey 1>, <journey 2>, <journey 3> | pending |
-| Sandbox | `docker-test-containers` | ephemeral DB/cache, environment proof | pending |
+The `Run` column identifies which bounded run owns each layer and target row; leave it blank for unscoped work.
+
+| Layer | Skill | Scope | Status | Run |
+|---|---|---|---|---|
+| Security | `appsec-adversarial-auditor` | auth boundaries, untrusted input, secrets | pending |  |
+| Runtime and faults | `runtime-reliability-testing` | load, latency, fault injection, smoke | pending |  |
+| Persistence and migrations | `database-persistence-testing` | migration naming/order/idempotency, isolation, N+1 | pending |  |
+| Architecture conformance | `clean-architecture-audit` | layer purity, targeted mutation | pending |  |
+| Critical e2e journeys | `real-run-validation` | <journey 1>, <journey 2>, <journey 3> | pending |  |
+| Sandbox | `docker-test-containers` | ephemeral DB/cache, environment proof | pending |  |
 
 Statuses: pending · in progress · done · blocked · n/a. `plan gaps` counts a row as swept when its
 status cell reads `done`, `fixed` or `closed`, and drops `n/a`, `na`, `none` and `skipped` from the
