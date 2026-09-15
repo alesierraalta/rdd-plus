@@ -591,6 +591,40 @@ func TestAdmitRefusesCommandSubstitutionButKeepsPositionalParameters(t *testing.
 	assertNoRun(t, calls)
 }
 
+// A parameter expansion is not a place to hide a second process. The walk reads the expansion's interior,
+// so the `$(` of `${X:-$(touch sentinel)}` is the same `$(` a bare substitution is refused for, and
+// everything the braces carry past the identifier is a value nobody materialized. Resuming after the first
+// `}` instead read that whole span as one word and handed it to sh -c, which ran what it hid.
+func TestAdmitRefusesASubstitutionHiddenInAParameterExpansion(t *testing.T) {
+	cases := []struct {
+		name   string
+		cmd    string
+		reason string
+	}{
+		{"an operator expansion hides a substitution", `${X:-$(touch sentinel)}`, "admit-has-substitution"},
+		{"a quoted expansion hides a substitution", `"${X:-$(touch sentinel)}"`, "admit-has-substitution"},
+		{"a nested expansion hides a substitution", `${X:-${Y:-$(touch sentinel)}}`, "admit-has-substitution"},
+		{"an operator expansion is a value nobody filled in", `${HOME:-/root}`, "admit-has-placeholder"},
+		{"a default value is a value nobody filled in", `${X:-sentinel}`, "admit-has-placeholder"},
+		{"a single quote inside a double-quoted expansion hides nothing", `echo "${1:-'}$(touch sentinel)'}"`, "admit-has-substitution"},
+		{"a substitution inside a double-quoted expansion is a process", `echo "${1:-'$(touch sentinel)'}"`, "admit-has-substitution"},
+		{"a nested expansion inside double quotes hides nothing either", `echo "${1:-${1:-x}'$(touch sentinel)'}"`, "admit-has-substitution"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, calls := admit(t, []plan.LedgerRow{row("E1", tc.cmd, "", "observado")}, Options{Execute: true}, "out\n", nil)
+			assertRows(t, got, []want{{id: "E1", verdict: VerdictRefused, reason: tc.reason, detail: []string{"E1"}}})
+			assertNoRun(t, calls)
+		})
+	}
+
+	// A `'` inside an unquoted expansion does quote for the shell: the substitution in this cell never runs, so
+	// the row is not refused for a process nobody started.
+	runnable, calls := admit(t, []plan.LedgerRow{row("E1", `${1:-'$(touch sentinel)'}`, "", "observado")}, Options{}, "out\n", nil)
+	assertRows(t, runnable, []want{{id: "E1", verdict: VerdictWouldRun, command: `${1:-'$(touch sentinel)'}`}})
+	assertNoRun(t, calls)
+}
+
 // A cell that redirects is refused before the shell sees it, so the file it would have created is
 // never created: that side effect is exactly what the pinned digest cannot cover.
 func TestAdmitRefusesARedirectBeforeTheShellCanWrite(t *testing.T) {

@@ -179,10 +179,12 @@ var commandMarkers = []struct {
 
 // A placeholder is a value only the row's author can supply: an angle span like `<tmp>`, or a variable
 // expansion like `$HOME` or `${VAR}`. The variable must start with an identifier character, so a
-// positional parameter such as `awk '{print $1}'` is not mistaken for one.
+// positional parameter such as `awk '{print $1}'` is not mistaken for one. Everything the braces carry past
+// that identifier belongs to the same value, so the span is read to its closing brace: `${HOME:-/root}` is a
+// value nobody materialized.
 var (
 	anglePlaceholder = regexp.MustCompile(`<[^<>\n]*>`)
-	varPlaceholder   = regexp.MustCompile(`\$\{[A-Za-z_][A-Za-z0-9_]*\}|\$[A-Za-z_][A-Za-z0-9_]*`)
+	varPlaceholder   = regexp.MustCompile(`\$\{[A-Za-z_][A-Za-z0-9_]*[^}]*\}|\$[A-Za-z_][A-Za-z0-9_]*`)
 )
 
 // Admit decides every row named by opts.Only, or the whole ledger when Only is empty, in document
@@ -466,19 +468,23 @@ func commandMarker(command string, late bool) (marker, reason string, ok bool) {
 	return "", "", false
 }
 
+const (
+	unquoted = 0
+	single   = '\''
+	double   = '"'
+)
+
 // activeMarkers walks the command once and returns the markers the shell would read as syntax in it.
 // Quoting is the shell's own: every byte inside a single-quoted span is literal, and inside a
 // double-quoted span everything but a command substitution (`$(`) is literal — so a quoted pipe or
 // brace is text, not a second process. A backslash escapes the next byte outside single quotes. The
 // walk and the table beside it are the whole rule.
-func activeMarkers(command string) map[string]bool {
+func activeMarkers(command string) map[string]bool { return markersFrom(command, unquoted) }
+
+// markersFrom is the walk itself, starting in a given quoting state: an expansion's interior is read in the
+// state its caller was in, because that is the state the shell is in there.
+func markersFrom(command string, quote byte) map[string]bool {
 	active := map[string]bool{}
-	const (
-		unquoted = 0
-		single   = '\''
-		double   = '"'
-	)
-	quote := byte(unquoted)
 	for i := 0; i < len(command); i++ {
 		c := command[i]
 		switch quote {
@@ -496,7 +502,7 @@ func activeMarkers(command string) map[string]bool {
 			case c == '$' && i+1 < len(command) && command[i+1] == '(':
 				active["$("] = true
 			case c == '$' && i+1 < len(command) && command[i+1] == '{':
-				i = skipExpansion(command, i)
+				i = recordExpansion(command, i, active, quote)
 			}
 			continue
 		}
@@ -510,7 +516,7 @@ func activeMarkers(command string) map[string]bool {
 		case c == '$' && i+1 < len(command) && command[i+1] == '(':
 			active["$("] = true
 		case c == '$' && i+1 < len(command) && command[i+1] == '{':
-			i = skipExpansion(command, i)
+			i = recordExpansion(command, i, active, quote)
 		case strings.IndexByte("\n;&|(){}<>", c) >= 0:
 			active[string(c)] = true
 		}
@@ -518,15 +524,41 @@ func activeMarkers(command string) map[string]bool {
 	return active
 }
 
-// skipExpansion returns the index of the `}` that closes the `${` starting at i, or i when the
-// expansion is unterminated. The braces of a parameter expansion `${VAR}` are not shell grouping, so
-// the parameter is skipped here and the placeholder rule owns it, rather than this rule reporting the
-// braces as a brace group.
-func skipExpansion(command string, i int) int {
-	if end := strings.IndexByte(command[i+2:], '}'); end >= 0 {
-		return i + 2 + end
+// recordExpansion reads what a parameter expansion hides and returns the index the walk resumes at. The
+// `${...}` is never skipped blind: its interior is walked here in the quoting state the expansion was entered
+// in, so the `$(` of a `${X:-$(id)}` — or of one the shell reads inside double quotes — is refused rather
+// than admitted, and the walk resumes after the brace that closes the expansion.
+//
+// The braces of a parameter expansion `${VAR}` are not shell grouping either, so the parameter is read here
+// and the placeholder rule owns it, rather than this rule reporting the braces as a brace group.
+func recordExpansion(command string, i int, active map[string]bool, quote byte) int {
+	interior, end := expansionInterior(command, i)
+	for marker := range markersFrom(interior, quote) {
+		active[marker] = true
 	}
-	return i
+	return end
+}
+
+// expansionInterior returns the text inside the `${` that starts at i and the index the walk resumes at:
+// brace depth finds the `}` that really closes it, so a nested `${X:-${Y}}` is not cut at its middle. It reads
+// no quoting of its own, because the walk that entered it is the one that knows the context: a `'` inside a
+// double-quoted expansion is literal, and skipping it hid the `$(` of `"${1:-'}$(id)'"`, which the shell runs.
+// Ending the interior at the brace and letting the caller walk the rest leaves quoting to the caller, and a
+// short interior refuses more, never admits.
+func expansionInterior(command string, i int) (string, int) {
+	depth := 0
+	for j := i + 1; j < len(command); j++ {
+		switch command[j] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return command[i+2 : j], j
+			}
+		}
+	}
+	return command[i+2:], len(command) - 1
 }
 
 // markerDetail is the human sentence a metacharacter refusal carries: it names the row, the command,
