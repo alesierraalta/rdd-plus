@@ -4,6 +4,8 @@ bin/
 results/
 __pycache__/
 .codegraph/
+# tgrep's local index: the same class of machine-local state as .codegraph/, never part of a change.
+.tgrep/
 bench/results/
 bench/**/ws/
 # Local Pi runtime state
