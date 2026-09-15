@@ -47,3 +47,4 @@ Rows above this header predate the activation column and record no scoped run ei
 | ts | kind | out | model | cases | defects | reported | recall | caught | recall caught | false positives | failed | invalid | no plan | cost USD | skill version | scorer | corpus | light | runs |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | 2026-09-13T03:14:39Z | run | bench/results/val-after-clean | openai-codex/gpt-5.6-luna | 18 | 91 | 85 | 0.93 | 77 | 0.85 | 0 | 1 | 0 | 0 | 1.268 | 0.3.8 | b8b6710 | sha256:dfab82bd3e6fc21b | 9 | 3 |
+| 2026-09-15T14:37:40Z | run | bench/results/baseline-2ad008f | openai-codex/gpt-5.6-luna | 18 | 93 | 83 | 0.89 | 79 | 0.85 | 0 | 0 | 0 | 0 | 1.655 | 0.3.8 | 2ad008f | sha256:dfab82bd3e6fc21b | 4 | 3 |
