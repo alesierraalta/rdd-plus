@@ -2,6 +2,8 @@ package check
 
 import (
 	"errors"
+	"io/fs"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -9,12 +11,15 @@ import (
 )
 
 type fakeRepo struct {
-	root    string
-	status  string
-	rootErr error
-	plan    string
-	planErr bool
-	ignored bool
+	root     string
+	status   string
+	rootErr  error
+	plan     string
+	planPath string
+	plans    map[string]string
+	config   string
+	planErr  bool
+	ignored  bool
 }
 
 func (f *fakeRepo) deps() Deps {
@@ -35,9 +40,30 @@ func (f *fakeRepo) deps() Deps {
 			}
 			return f.status, nil
 		},
-		ReadFile: func(string) (string, error) {
-			if f.planErr {
-				return "", errors.New("no such file")
+		ReadFile: func(path string) (string, error) {
+			if path == f.root+"/"+plan.ConfigName {
+				if f.config == "" {
+					return "", fs.ErrNotExist
+				}
+				return f.config, nil
+			}
+			if f.plans != nil {
+				rel, err := filepath.Rel(f.root, path)
+				if err != nil {
+					return "", fs.ErrNotExist
+				}
+				body, ok := f.plans[rel]
+				if !ok || f.planErr {
+					return "", fs.ErrNotExist
+				}
+				return body, nil
+			}
+			declared := f.planPath
+			if declared == "" {
+				declared = plan.DefaultPath
+			}
+			if path != f.root+"/"+declared || f.planErr {
+				return "", fs.ErrNotExist
 			}
 			return f.plan, nil
 		},
@@ -107,6 +133,99 @@ func TestCheckReadsTheRepositoryAlone(t *testing.T) {
 				t.Fatalf("text missing %q:\n%s", tc.wantOut, res.Text)
 			}
 		})
+	}
+}
+
+func TestCheckReadsTheDeclaredPlan(t *testing.T) {
+	const declared = "docs/testing/scoped-plan.md"
+	repo := &fakeRepo{
+		root:   "/r",
+		status: porcelain(" M src/app.js"),
+		plans: map[string]string{
+			plan.DefaultPath: owing,
+			declared:         settled,
+		},
+		config: `{"planPath":"` + declared + `"}`,
+	}
+	res := Run(".", repo.deps())
+	if res.Exit != 0 {
+		t.Fatalf("exit = %d, want 0: %s", res.Exit, res.Text)
+	}
+	if !strings.Contains(res.Text, declared) || strings.Contains(res.Text, plan.DefaultPath) {
+		t.Fatalf("text = %s", res.Text)
+	}
+}
+
+func TestCheckPathBeatsTheDeclaration(t *testing.T) {
+	const explicit = "docs/testing/explicit-plan.md"
+	repo := &fakeRepo{
+		root:   "/r",
+		status: porcelain(" M src/app.js"),
+		plans: map[string]string{
+			"docs/testing/declared-plan.md": owing,
+			explicit:                        settled,
+		},
+		config: `{"planPath":"docs/testing/declared-plan.md"}`,
+	}
+	deps := repo.deps()
+	deps.PlanPath = explicit
+	res := Run(".", deps)
+	if res.Exit != 0 {
+		t.Fatalf("exit = %d, want 0: %s", res.Exit, res.Text)
+	}
+	if !strings.Contains(res.Text, explicit) || strings.Contains(res.Text, "declared-plan.md") {
+		t.Fatalf("text = %s", res.Text)
+	}
+}
+
+func TestCheckRefusesAnAbsolutePath(t *testing.T) {
+	deps := (&fakeRepo{root: "/r", status: porcelain(" M src/app.js"), plan: settled}).deps()
+	deps.PlanPath = "/tmp/outside-plan.md"
+	res := Run(".", deps)
+	if res.Exit != 1 {
+		t.Fatalf("exit = %d, want 1: %s", res.Exit, res.Text)
+	}
+	if !strings.Contains(res.Text, "--path") {
+		t.Fatalf("text = %q, want the flag named", res.Text)
+	}
+}
+
+func TestCheckResolvesARelativePathAgainstTheRoot(t *testing.T) {
+	const rootOnly = "docs/testing/root-only.md"
+	repo := &fakeRepo{
+		root:   "/repository-root",
+		status: porcelain(" M src/app.js"),
+		plans:  map[string]string{rootOnly: settled},
+	}
+	deps := repo.deps()
+	deps.PlanPath = rootOnly
+	res := Run("/repository-root/subdirectory", deps)
+	if res.Exit != 0 {
+		t.Fatalf("exit = %d, want 0: %s", res.Exit, res.Text)
+	}
+	if !strings.Contains(res.Text, rootOnly) {
+		t.Fatalf("text = %q, want the root-relative plan named", res.Text)
+	}
+}
+
+func TestCheckNamesABrokenDeclaration(t *testing.T) {
+	repo := &fakeRepo{root: "/r", status: porcelain(" M src/app.js"), config: `{`}
+	res := Run(".", repo.deps())
+	if res.Exit != 1 {
+		t.Fatalf("exit = %d, want 1", res.Exit)
+	}
+	for _, want := range []string{"the plan declaration could not be read", plan.ConfigName} {
+		if !strings.Contains(res.Text, want) {
+			t.Fatalf("text missing %q:\n%s", want, res.Text)
+		}
+	}
+}
+
+func TestCheckFallsBackToTheDefaultWhenNothingIsDeclared(t *testing.T) {
+	repo := &fakeRepo{root: "/r", status: porcelain(" M src/app.js"), plan: settled}
+	res := Run(".", repo.deps())
+	if res.Exit != 0 || !strings.Contains(res.Text, plan.DefaultPath) {
+		t.Fatalf("exit = %d, text = %s", res.Exit, res.Text)
 	}
 }
 

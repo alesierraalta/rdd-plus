@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/alesierraalta/rdd-plus/internal/plan"
 )
 
 // The gate's first question is "was the discipline invoked at all". Its second is the one the
@@ -104,6 +106,78 @@ func auditRepo() *fakeRepo {
 		root:   "/repo",
 		status: porcelain(" M src/app.js"),
 		files:  map[string]time.Time{"src/app.js": auditNow},
+	}
+}
+
+func TestDecideAuditsTheDeclaredPlanNotTheDefault(t *testing.T) {
+	const declared = "docs/testing/scoped-plan.md"
+	complete := "## Layer matrix\n\n| Layer | Skill | Scope | Status |\n|---|---|---|---|\n" +
+		"| Security | `appsec-adversarial-auditor` | input | done |\n\n" +
+		"## Ranked targets\n\n| Target | Verdict | Status |\n|---|---|---|\n| 1. auth | probe | done |\n"
+	owed := strings.Replace(complete, "| Security | `appsec-adversarial-auditor` | input | done |", "| Security | `appsec-adversarial-auditor` | input | pending |", 1)
+	owed = strings.Replace(owed, "| 1. auth | probe | done |", "| 1. auth | probe | pending |", 1)
+	repo := auditRepo()
+	repo.transcript = stamped(auditStart, `{"name":"Skill","input":{"skill":"test-strategy"}}`)
+	repo.planConfig = `{"planPath":"` + declared + `"}`
+	repo.plans = map[string]string{plan.DefaultPath: complete, declared: owed}
+
+	res := Decide(Input{TranscriptPath: "t"}, repo.deps(auditNow))
+	if res.Fire || !res.Audit {
+		t.Fatalf("fire = %v, audit = %v, want fire false and audit true", res.Fire, res.Audit)
+	}
+	if res.Owed != 1 || res.Pending != 1 {
+		t.Fatalf("owed = %d, pending = %d, want 1 and 1", res.Owed, res.Pending)
+	}
+	if !strings.Contains(res.Reason, declared) || strings.Contains(res.Reason, plan.DefaultPath) {
+		t.Fatalf("reason = %s", res.Reason)
+	}
+}
+
+func TestDecideLogsThePlanItRead(t *testing.T) {
+	const declared = "docs/testing/scoped-plan.md"
+	repo := auditRepo()
+	repo.transcript = stamped(auditStart, `{"name":"Skill","input":{"skill":"test-strategy"}}`)
+	repo.planConfig = `{"planPath":"` + declared + `"}`
+	repo.planPath = declared
+	repo.plan = "## Layer matrix\n\n| Layer | Skill | Scope | Status |\n|---|---|---|---|\n| Security | `appsec-adversarial-auditor` | input | done |\n\n## Ranked targets\n\n| Target | Verdict | Status |\n|---|---|---|\n| 1. auth | probe | done |\n"
+
+	res := Decide(Input{TranscriptPath: "t"}, repo.deps(auditNow))
+	if res.Entry == nil || res.Entry.Plan != declared {
+		t.Fatalf("entry plan = %#v, want %q", res.Entry, declared)
+	}
+}
+
+func TestDecideReportsABrokenDeclaration(t *testing.T) {
+	repo := auditRepo()
+	repo.transcript = stamped(auditStart, `{"name":"Skill","input":{"skill":"test-strategy"}}`)
+	repo.planConfig = `{`
+	repo.plan = "valid plan that must not be read"
+
+	res := Decide(Input{TranscriptPath: "t"}, repo.deps(auditNow))
+	if res.Fire || res.Audit {
+		t.Fatalf("result = %#v, want no fire and no audit: nothing was read", res)
+	}
+	// Silence was the defect: the operator never learned the audit was skipped while check failed closed.
+	for _, want := range []string{plan.ConfigName, "not audited"} {
+		if !strings.Contains(res.Problem, want) {
+			t.Fatalf("problem = %q, want it to carry %q", res.Problem, want)
+		}
+	}
+	if res.Entry == nil || res.Entry.Skipped != "plan_config_invalid" {
+		t.Fatalf("entry = %#v, want plan_config_invalid", res.Entry)
+	}
+}
+
+func TestDecideStillFiresWhenTheDeclarationIsBroken(t *testing.T) {
+	repo := auditRepo()
+	repo.planConfig = `{`
+
+	res := Decide(Input{TranscriptPath: "t"}, repo.deps(auditNow))
+	if !res.Fire || res.Audit {
+		t.Fatalf("fire = %v, audit = %v, want fire true and audit false", res.Fire, res.Audit)
+	}
+	if res.Entry == nil || res.Entry.Skipped != "" {
+		t.Fatalf("entry = %#v, want unchanged fire entry", res.Entry)
 	}
 }
 

@@ -13,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/alesierraalta/rdd-plus/internal/plan"
 )
 
 var binaryPath string
@@ -538,5 +540,40 @@ func TestDifferentialAgainstNode(t *testing.T) {
 				t.Fatalf("named files differ: go=%q node=%q", namedFiles(goCtx), namedFiles(nodeCtx))
 			}
 		})
+	}
+}
+
+// A declaration the gate cannot read used to be silence, while `check` failed closed on the same
+// repository state: the operator never learned the breadth audit had been skipped. Both audiences
+// hear it now, and nothing enters the model beyond the problem itself, because no plan was read.
+func TestBinaryReportsADeclarationItCannotRead(t *testing.T) {
+	requireIntegration(t)
+	dir := newRepo(t)
+	edit(t, dir, "src/a.ts", "export const a = 2;\n", fresh())
+	writeFile(t, filepath.Join(dir, plan.ConfigName), "{")
+	tr := transcript(t, `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"test-strategy"}}]}}`)
+
+	r := runBinary(t, binaryPath, dir, payload(dir, tr, nil))
+	if r.code != 0 {
+		t.Fatalf("a hook must never break the turn: code %d, stderr %s", r.code, r.err)
+	}
+	ctx, spoke := reason(t, r)
+	if !spoke {
+		t.Fatal("the gate stayed silent on a declaration it could not read")
+	}
+	if !strings.Contains(ctx, "not audited") || !strings.Contains(ctx, plan.ConfigName) {
+		t.Fatalf("additionalContext = %q, want the skipped audit and the file", ctx)
+	}
+	var j struct {
+		SystemMessage string `json:"systemMessage"`
+	}
+	if err := json.Unmarshal([]byte(r.out), &j); err != nil {
+		t.Fatalf("stdout is not a JSON object: %q", r.out)
+	}
+	if !strings.Contains(j.SystemMessage, plan.ConfigName) {
+		t.Fatalf("systemMessage = %q, want the operator told too", j.SystemMessage)
+	}
+	if e := lastEntry(r); e == nil || e["skipped"] != "plan_config_invalid" || e["audited"] != nil {
+		t.Fatalf("entry = %#v, want skipped plan_config_invalid and no audit claim", e)
 	}
 }

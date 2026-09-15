@@ -122,6 +122,10 @@ func Run(stdin io.Reader, stdout io.Writer, logPath string, now time.Time) (code
 		emit(stdout, res.Reason)
 	case res.Audit:
 		emitWith(stdout, res.Reason, auditLine(res))
+	case res.Problem != "":
+		// A declaration the gate cannot read is a defect its operator can repair, and the model can too:
+		// both hear it. It is not an audit, so no counts ride along.
+		emitWith(stdout, res.Problem, res.Problem)
 	}
 	return 0
 }

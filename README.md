@@ -92,6 +92,21 @@ session is where compliance goes wrong: in one 15-case benchmark, three runs wro
 as prose sections instead of the template's tables, and every one of those had never opened the
 template.
 
+For both `check` and `plan`, a relative `--path` is resolved against the worktree root. An absolute
+`--path` is taken as given, except in `check`, which refuses it as a usage error. This is the same
+relative resolution and containment rule used for the `planPath` declaration in `.rdd-plus.json`.
+
+The effective plan path follows one precedence rule: an explicit `--path` wins, then `planPath` in
+`.rdd-plus.json` at the worktree root, then `docs/testing/test-plan.md`. Declare a scoped plan like
+this:
+
+```json
+{"planPath": "docs/testing/test-plan-redis-stream-pool.md"}
+```
+
+A malformed, unreadable or unusable declaration fails closed; it never silently falls back to the
+default. `rdd-plus check`, the Stop-hook gate and every `plan *` command honor the same declaration.
+
 ```
 rdd-plus plan init                # write the skeleton, tables and all; never overwrites silently
 rdd-plus plan check               # exit 1 and name every breach of the contract

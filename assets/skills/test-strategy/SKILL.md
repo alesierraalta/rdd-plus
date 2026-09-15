@@ -68,13 +68,20 @@ reverse-engineered, and whether the method earned its keep — is recorded with
 12. **Persist before you report, in the shipped shape.** The plan is a set of tables, not a
     document you compose: create it with `rdd-plus plan init` (or copy
     [assets/test-plan-template.md](assets/test-plan-template.md) when the binary is absent) and
-    fill its rows. Prose replaces no row, and every finding cell opens with `path:line`. The
-    final message is written only after `docs/testing/test-plan.md` is on disk and
-    `rdd-plus plan check` passes: it reports findings that are not rows, cite no location, cite
-    an evidence id that does not exist, or settle without a pinning test. A finding that exists
-    only in chat does not exist, and one nothing can parse is the same thing. Asking the user
-    whether to fix something never replaces writing the row first. When the binary is absent, the
-    Tooling section names the fallback for each call.
+    fill its rows. Prose replaces no row, and every finding cell opens with `path:line`. When the
+    plan is not `docs/testing/test-plan.md`, declare it so the Stop hook and `rdd-plus check` read
+    it: write `.rdd-plus.json` at the worktree root.
+    ```json
+    {"planPath": "docs/testing/<name>.md"}
+    ```
+    A plan nobody declares is a plan nothing clears. The declaration is repository-local, so a
+    scoped plan cannot silently become the default plan for another checkout. The final message is
+    written only after the declared plan is on disk and `rdd-plus plan check` passes: it reports
+    findings that are not rows, cite no location, cite an evidence id that does not exist, or
+    settle without a pinning test. A finding that exists only in chat does not exist, and one
+    nothing can parse is the same thing. Asking the user whether to fix something never replaces
+    writing the row first. When the binary is absent, the Tooling section names the fallback for
+    each call.
 13. **Every confirmed finding leaves a pinning test in the suite, asserting the CORRECT
     behaviour.** A probe in the scratchpad proves the defect once; a test in the repository's own
     suite proves it on every run. The assertion states what the contract promises, so the test is
@@ -92,7 +99,7 @@ reverse-engineered, and whether the method earned its keep — is recorded with
 
 | State found | Action |
 |---|---|
-| No `docs/testing/test-plan.md` | PLAN the blast radius when the change is bounded (a scoped run), the whole app when it is not, then EXECUTE the first rows, same run |
+| No declared plan (`.rdd-plus.json` absent or has no `planPath`) | PLAN the blast radius when the change is bounded (a scoped run), the whole app when it is not, then EXECUTE the first rows, same run |
 | Plan exists but predates the template (missing sections or `Baseline:`) | Migrate it: add the missing sections empty, record the baseline (`assets/fingerprint.sh`), treat the tree as changed, then EXECUTE |
 | Plan exists, fingerprint unchanged | EXECUTE from the first `pending` row |
 | Plan exists, files differ from the plan baseline | Refresh rows in that diff's blast radius, rank first, EXECUTE |
@@ -125,8 +132,8 @@ example `docs/testing/test-plan-reports.md` beside an existing `test-plan.md` �
 
 ## Execution Steps
 
-**Always first**: read `docs/testing/test-plan.md` if present, `git status`, the diff against
-main, the test runner. Pick mode and scope from the state table; state the inference in one line.
+**Always first**: resolve and read the declared plan (`docs/testing/test-plan.md` when the declaration has no `planPath`),
+`git status`, the diff against main, and the test runner. Pick mode and scope from the state table; state the inference in one line.
 
 **PLAN**
 
@@ -146,7 +153,7 @@ main, the test runner. Pick mode and scope from the state table; state the infer
    and `skipped` leave the breadth denominator: marking a layer out of scope is a decision the plan
    records, never a silent omission. The `Skill` cell only labels what is still owed.
 6. Record the baseline (`assets/fingerprint.sh`: repo fingerprint; per-finding cited-files fingerprint) and persist to
-   `docs/testing/test-plan.md` (or the path the user names). Create the file with
+   the declared plan path (or `docs/testing/test-plan.md` when no path is declared). Create the file with
    `rdd-plus plan init --path <plan>`, which writes
    [assets/test-plan-template.md](assets/test-plan-template.md) with every table in place; rows
    start `pending`, `none` rows start `n/a`. Close the run with `rdd-plus plan check` (rule 12).

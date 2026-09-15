@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/alesierraalta/rdd-plus/internal/plan"
 )
 
 type fakeInfo struct {
@@ -35,6 +37,9 @@ type fakeRepo struct {
 	transcript        string
 	transcriptMissing bool
 	plan              string
+	planPath          string
+	planConfig        string
+	plans             map[string]string
 	planMissing       bool
 }
 
@@ -71,11 +76,37 @@ func (f *fakeRepo) deps(now time.Time) Deps {
 			}
 			return nil, os.ErrNotExist
 		},
-		ReadPlan: func(string) (string, error) {
-			if f.planMissing || f.plan == "" {
+		ReadPlan: func(path string) (string, error) {
+			if path == filepath.Join(f.root, plan.ConfigName) {
+				if f.planConfig == "" {
+					return "", os.ErrNotExist
+				}
+				return f.planConfig, nil
+			}
+			rel, err := filepath.Rel(f.root, path)
+			if err != nil {
 				return "", os.ErrNotExist
 			}
-			return f.plan, nil
+			body := f.plan
+			if f.plans != nil {
+				var ok bool
+				body, ok = f.plans[rel]
+				if !ok {
+					return "", os.ErrNotExist
+				}
+			} else {
+				want := f.planPath
+				if want == "" {
+					want = plan.DefaultPath
+				}
+				if rel != want {
+					return "", os.ErrNotExist
+				}
+			}
+			if f.planMissing || body == "" {
+				return "", os.ErrNotExist
+			}
+			return body, nil
 		},
 		OpenTranscript: func(string) (io.ReadCloser, error) {
 			if f.transcriptMissing {
