@@ -333,7 +333,9 @@ func dataRows(section string) [][]string {
 	for _, l := range strings.Split(section, "\n") {
 		t := strings.TrimSpace(l)
 		if !strings.HasPrefix(t, "|") {
-			if inTable {
+			// A blank line inside the section is not the end of its table. The plan's own reader skips one, so
+			// stopping here dropped rows the plan reports as table rows, and dropped them without saying so.
+			if t != "" && inTable {
 				break
 			}
 			continue

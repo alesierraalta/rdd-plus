@@ -178,3 +178,26 @@ func TestSectionAndRows(t *testing.T) {
 		t.Fatalf("missing section yielded rows: %v", got)
 	}
 }
+
+// A blank line inside a table is not the end of it. The plan's own reader skips one (`table` says so in as
+// many words) and this scanner stopped there instead, so a finding or an evidence row under a blank line was
+// written by the run, reported by the plan, and invisible to the score.
+func TestScoreReadsTheRowsUnderABlankLineInsideATable(t *testing.T) {
+	key := Key{ID: "c", Defects: []Defect{
+		{ID: "a", File: "src/a.js", Line: 5, Keywords: []string{"alpha"}},
+		{ID: "b", File: "src/b.js", Line: 5, Keywords: []string{"beta"}},
+	}}
+	findings := "| F1 | `src/a.js:5` x | M | yes | E1 | open | me | - | - |\n" +
+		"\n" +
+		"| F2 | `src/b.js:5` beta | M | yes | E2 | open | me | - | - |\n"
+	ledger := "| E1 | c | cmd | i | o | m | r | observado |\n" +
+		"\n" +
+		"| E2 | c | cmd | i | o | m | r | observado |\n"
+	r := Score(plan(findings, ledger), key)
+	if r.FindingRows != 2 || r.LedgerRows != 2 {
+		t.Fatalf("rows = %d findings, %d ledger: a blank line inside the table hid the rows under it", r.FindingRows, r.LedgerRows)
+	}
+	if r.Found != 2 {
+		t.Fatalf("found = %d of 2: the row under the blank line was never scored", r.Found)
+	}
+}
