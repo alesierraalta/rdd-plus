@@ -593,4 +593,17 @@ func TestTheHookLogsThePayloadItCouldNotRead(t *testing.T) {
 	if broken.out != "" {
 		t.Fatalf("the hook must stay silent about a payload it cannot read, and spoke: %q", broken.out)
 	}
+
+	// A payload that looks like JSON and is not takes the same branch, and it is the one a real host is most
+	// likely to hand over: half a write, or a shape this version does not know.
+	truncated := runBinary(t, binaryPath, dir, `{"cwd": "`)
+	if len(truncated.entries) != 1 || truncated.entries[0]["skipped"] != "unreadable_payload" {
+		t.Fatalf("truncated payload entries = %v, want one line naming it", truncated.entries)
+	}
+
+	// An empty payload is the same fact and gets the same label: the hook ran and could not read anything.
+	empty := runBinary(t, binaryPath, dir, "")
+	if len(empty.entries) != 1 || empty.entries[0]["skipped"] != "unreadable_payload" {
+		t.Fatalf("empty payload entries = %v, want one line naming it", empty.entries)
+	}
 }

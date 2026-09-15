@@ -54,6 +54,12 @@ func DefaultLogPath(configDir string) string {
 	return filepath.Join(configDir, "telemetry", "testing-gate.jsonl")
 }
 
+// unreadablePayloadEntry is the line a hook leaves when it could not read what it was handed: it ran, and it
+// decided nothing, which is a different fact from a hook that never ran at all.
+func unreadablePayloadEntry(now time.Time) *Entry {
+	return &Entry{TS: now.UTC().Format(time.RFC3339), SkillsLoaded: []string{}, Skipped: "unreadable_payload"}
+}
+
 // appendEntry never fails the turn: a lost log line is cheaper than a broken session.
 func appendEntry(path string, e *Entry) {
 	if path == "" {
@@ -106,15 +112,13 @@ func Run(stdin io.Reader, stdout io.Writer, logPath string, now time.Time) (code
 	}()
 	raw, _ := io.ReadAll(stdin)
 	payload := strings.TrimSpace(string(raw))
-	if payload == "" || !strings.HasPrefix(payload, "{") {
+	var in Input
+	// An empty payload and a malformed one are the same fact to this hook: it ran and could not read what it
+	// was handed. One label says that once, instead of inventing a difference the reader cannot act on.
+	if payload == "" || json.Unmarshal([]byte(payload), &in) != nil {
 		// A payload the hook cannot read is a decision it has to record: it ran, and it decided nothing. The
 		// log is the only place that distinction survives — the turn itself must never break.
-		appendEntry(logPath, &Entry{TS: now.UTC().Format(time.RFC3339), SkillsLoaded: []string{}, Skipped: "unreadable_payload"})
-		return 0
-	}
-	var in Input
-	if err := json.Unmarshal([]byte(payload), &in); err != nil {
-		appendEntry(logPath, &Entry{TS: now.UTC().Format(time.RFC3339), SkillsLoaded: []string{}, Skipped: "unreadable_payload"})
+		appendEntry(logPath, unreadablePayloadEntry(now))
 		return 0
 	}
 	res := Decide(in, RealDeps(now))
