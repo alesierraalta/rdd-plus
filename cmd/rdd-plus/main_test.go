@@ -77,6 +77,8 @@ func TestCLIContract(t *testing.T) {
 		{name: "plan with an unknown subcommand exits 2", args: []string{"plan", "bogus"}, wantExit: 2, wantOut: "usage: rdd-plus"},
 		{name: "plan check on a missing file exits 1", args: []string{"plan", "check", "--path", "/nonexistent/plan.md"}, wantExit: 1, wantOut: "plan check:"},
 		{name: "plan gaps on a missing file exits 1", args: []string{"plan", "gaps", "--path", "/nonexistent/plan.md"}, wantExit: 1, wantOut: "plan gaps:"},
+		{name: "plan gaps run and all are mutually exclusive", args: []string{"plan", "gaps", "--run", "redis-pool", "--all"}, wantExit: 2, wantOut: "cannot combine"},
+		{name: "plan gaps rejects a bad run slug", args: []string{"plan", "gaps", "--run", "Bad_Slug"}, wantExit: 2, wantOut: "--run"},
 		{name: "plan admit on a missing file exits 1", args: []string{"plan", "admit", "--path", "/nonexistent/plan.md"}, wantExit: 1, wantOut: "plan admit:"},
 		{name: "plan admit with an unreadable timeout exits 2", args: []string{"plan", "admit", "--timeout", "soon"}, wantExit: 2, wantOut: "invalid value"},
 		// The gate is a hook: whatever it receives, it must not break the turn.
@@ -510,7 +512,7 @@ func runCLI(t *testing.T, bin string, args ...string) (string, int) {
 
 // A usage text that does not list a command it accepts sends users to the wrong place.
 func TestUsageListsEveryBenchSubcommand(t *testing.T) {
-	for _, sub := range []string{"bench run", "bench score", "bench history", "bench compare", "bench rescore", "plan init", "plan check", "plan gaps", "plan add-finding", "plan admit"} {
+	for _, sub := range []string{"bench run", "bench score", "bench history", "bench compare", "bench rescore", "plan init", "plan check", "plan gaps", "plan upgrade", "plan add-finding", "plan admit"} {
 
 		if !strings.Contains(usage, sub) {
 			t.Errorf("usage does not document %q", sub)
@@ -778,5 +780,124 @@ func TestPlanAddFindingExitCodes(t *testing.T) {
 				t.Fatal("a refusal must leave the plan byte-identical")
 			}
 		})
+	}
+}
+
+func TestPlanUpgradeCLIOnALegacyPlan(t *testing.T) {
+	bin := buildCLI(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "plan.md")
+	doc := "## Findings\n\n| Id | Finding | Severity | Data safe? | Evidence id | Pinning test | Status | Verdict by / date | Reason | Fingerprint |\n|---|---|---|---|---|---|---|---|---|---|\n" +
+		"\n## Ranked targets\n\n| Target | Status |\n|---|---|\n| target | pending |\n" +
+		"\n## Layer matrix\n\n| Layer | Skill | Scope | Status |\n|---|---|---|---|\n| Security | `appsec` | input | pending |\n"
+	if err := os.WriteFile(path, []byte(doc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, code := runCLI(t, bin, "plan", "upgrade", "--path", path)
+	if code != 0 {
+		t.Fatalf("plan upgrade exit = %d\n%s", code, out)
+	}
+	out, code = runCLI(t, bin, "plan", "check", "--path", path)
+	if code != 0 || !strings.Contains(out, "well formed") {
+		t.Fatalf("upgraded plan check = %d\n%s", code, out)
+	}
+}
+
+func runCLIAt(t *testing.T, dir, bin string, args ...string) (string, int) {
+	t.Helper()
+	cmd := exec.Command(bin, args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		return string(out), 0
+	}
+	var ee exec.ExitError
+	if asExit(err, &ee) {
+		return string(out), ee.ExitCode()
+	}
+	t.Fatalf("run %v: %v", args, err)
+	return "", -1
+}
+
+func TestPlanScopedCLIRealRun(t *testing.T) {
+	bin := buildCLI(t)
+	dir := t.TempDir()
+	git := exec.Command("git", "init", dir)
+	if out, err := git.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	path := filepath.Join(dir, "plan.md")
+	legacy := "## Findings\n\n| Id | Finding | Severity | Data safe? | Evidence id | Pinning test | Status | Verdict by / date | Reason | Fingerprint |\n|---|---|---|---|---|---|---|---|---|---|\n" +
+		"\n## Ranked targets\n\n| Target | Status |\n|---|---|\n| first target | pending |\n| second target | pending |\n" +
+		"\n## Layer matrix\n\n| Layer | Skill | Scope | Status |\n|---|---|---|---|\n| first layer | skill | scope | pending |\n| second layer | skill | scope | pending |\n"
+	if err := os.WriteFile(path, []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, code := runCLIAt(t, dir, bin, "plan", "check", "--path", "plan.md")
+	t.Logf("$ %s plan check --path plan.md\n%s", bin, out)
+	if code != 1 || !strings.Contains(out, "rdd-plus plan upgrade") {
+		t.Fatalf("legacy plan check = %d\n%s", code, out)
+	}
+	out, code = runCLIAt(t, dir, bin, "plan", "upgrade", "--path", "plan.md")
+	t.Logf("$ %s plan upgrade --path plan.md\n%s", bin, out)
+	if code != 0 {
+		t.Fatalf("legacy plan upgrade = %d\n%s", code, out)
+	}
+	out, code = runCLIAt(t, dir, bin, "plan", "check", "--path", "plan.md")
+	t.Logf("$ %s plan check --path plan.md\n%s", bin, out)
+	if code != 0 || !strings.Contains(out, "well formed") {
+		t.Fatalf("upgraded plan check = %d\n%s", code, out)
+	}
+	out, code = runCLIAt(t, dir, bin, "plan", "gaps", "--all", "--path", "plan.md")
+	t.Logf("$ %s plan gaps --all --path plan.md\n%s", bin, out)
+	if code != 1 || !strings.Contains(out, "layers swept: 0 of 2") || !strings.Contains(out, "ranked targets done: 0 of 2") {
+		t.Fatalf("all-row gaps = %d\n%s", code, out)
+	}
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scoped := strings.Replace(string(raw), "| first target | pending |  |", "| first target | pending | redis-pool |", 1)
+	scoped = strings.Replace(scoped, "| first layer | skill | scope | pending |  |", "| first layer | skill | scope | pending | redis-pool |", 1)
+	if err := os.WriteFile(path, []byte(scoped), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, code = runCLIAt(t, dir, bin, "plan", "gaps", "--run", "redis-pool", "--path", "plan.md")
+	t.Logf("$ %s plan gaps --run redis-pool --path plan.md\n%s", bin, out)
+	if code != 1 || !strings.Contains(out, "run redis-pool: layers swept: 0 of 1") || !strings.Contains(out, "2 row(s) belong to no run") {
+		t.Fatalf("scoped gaps = %d\n%s", code, out)
+	}
+	out, code = runCLIAt(t, dir, bin, "plan", "gaps", "--run", "typo", "--path", "plan.md")
+	t.Logf("$ %s plan gaps --run typo --path plan.md\n%s", bin, out)
+	if code != 1 || !strings.Contains(out, `no row carries run "typo"`) {
+		t.Fatalf("missing-run gaps = %d\n%s", code, out)
+	}
+}
+
+func TestPlanGapsUsesTheDeclaredRun(t *testing.T) {
+	bin := buildCLI(t)
+	dir := t.TempDir()
+	git := exec.Command("git", "init", dir)
+	if out, err := git.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".rdd-plus.json"), []byte(`{"planPath":"plan.md","run":"redis-pool"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	doc := "## Findings\n\n| Id | Finding | Severity | Data safe? | Evidence id | Pinning test | Status | Verdict by / date | Reason | Fingerprint |\n|---|---|---|---|---|---|---|---|---|---|\n" +
+		"\n## Ranked targets\n\n| Target | Status | Run |\n|---|---|---|\n| own target | pending | redis-pool |\n| old target | pending |  |\n" +
+		"\n## Layer matrix\n\n| Layer | Skill | Scope | Status | Run |\n|---|---|---|---|---|\n| own layer | skill | scope | pending | redis-pool |\n| old layer | skill | scope | pending |  |\n"
+	if err := os.WriteFile(filepath.Join(dir, "plan.md"), []byte(doc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, code := runCLIAt(t, dir, bin, "plan", "gaps")
+	if code != 1 || !strings.Contains(out, "run redis-pool: layers swept: 0 of 1") || !strings.Contains(out, "2 row(s) belong to no run") {
+		t.Fatalf("declared-run gaps = %d\n%s", code, out)
+	}
+	out, code = runCLIAt(t, dir, bin, "plan", "gaps", "--all")
+	if code != 1 || !strings.Contains(out, "layers swept: 0 of 2") || strings.Contains(out, "belong to no run") {
+		t.Fatalf("--all did not force whole-document counts = %d\n%s", code, out)
 	}
 }

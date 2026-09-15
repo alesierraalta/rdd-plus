@@ -33,22 +33,34 @@ type Gaps struct {
 	// InterruptedTables names every breadth table a stray line cut in two: the rows under the cut were never
 	// read, so Any() fails closed on them.
 	InterruptedTables []string `json:"interrupted_tables,omitempty"`
+	Run               string   `json:"run,omitempty"`
+	UnscopedLayers    int      `json:"unscoped_layers,omitempty"`
+	UnscopedTargets   int      `json:"unscoped_targets,omitempty"`
+	RunMissing        bool     `json:"run_missing,omitempty"`
+	// RunProblems names every way the Run column stops a row from being counted: a malformed cell, or a table
+	// whose header carries no Run column at all. Both fail closed, because the counter cannot decide which run
+	// owns a row it cannot read.
+	RunProblems []string `json:"run_problems,omitempty"`
 }
 
 // Any reports whether the run left breadth owed. The verdict is read from the fields above — the lists, the
 // target counter and the unread tables — never from the text Report writes, so a caller that holds the
 // structured result decides without parsing prose a later reword is free to change.
 func (g Gaps) Any() bool {
-	return g.NoLayerMatrix || len(g.UnsweptLayers) > 0 || g.TargetsDone < g.TargetsTotal || len(g.InterruptedTables) > 0
+	return g.NoLayerMatrix || len(g.UnsweptLayers) > 0 || g.TargetsDone < g.TargetsTotal || len(g.InterruptedTables) > 0 || g.RunMissing || len(g.RunProblems) > 0
 }
 
 // Report renders the gaps as the lines a final message has to carry to be honest.
 func (g Gaps) Report() string {
 	var b strings.Builder
+	runPrefix := ""
+	if g.Run != "" {
+		runPrefix = "run " + g.Run + ": "
+	}
 	if g.NoLayerMatrix {
-		b.WriteString("the layer sweep was never planned: the plan has no layer matrix, so breadth was not skipped, it was never on the list\n")
+		fmt.Fprintf(&b, "%sthe layer sweep was never planned: the plan has no layer matrix, so breadth was not skipped, it was never on the list\n", runPrefix)
 	} else {
-		fmt.Fprintf(&b, "layers swept: %d of %d", g.LayersDone, g.LayersTotal)
+		fmt.Fprintf(&b, "%slayers swept: %d of %d", runPrefix, g.LayersDone, g.LayersTotal)
 		if g.LayersDone < g.LayersTotal {
 			b.WriteString(" (a layer counts unless its status reads n/a, na, none or skipped, and counts as swept when it reads done, fixed or closed)")
 		}
@@ -77,13 +89,23 @@ func (g Gaps) Report() string {
 	for _, t := range g.InterruptedTables {
 		fmt.Fprintf(&b, "  %s\n", t)
 	}
+	unscoped := g.UnscopedLayers + g.UnscopedTargets
+	if unscoped > 0 {
+		fmt.Fprintf(&b, "%d row(s) belong to no run and are not counted; rdd-plus plan gaps --all shows every row\n", unscoped)
+	}
+	if g.RunMissing {
+		fmt.Fprintf(&b, "no row carries run %q: a run nobody opened reads as work nobody planned, never as nothing owed\n", g.Run)
+	}
+	for _, problem := range g.RunProblems {
+		fmt.Fprintf(&b, "%s\n", problem)
+	}
 	return b.String()
 }
 
 // quotesFromThePlan reports whether the report is about to print text read out of the plan file, so the block
 // is marked as data exactly when it needs to be.
 func (g Gaps) quotesFromThePlan() bool {
-	return len(g.UnsweptLayers) > 0 || len(g.PendingTargets) > 0 || len(g.UnrecognizedStatuses) > 0 || len(g.InterruptedTables) > 0
+	return len(g.UnsweptLayers) > 0 || len(g.PendingTargets) > 0 || len(g.UnrecognizedStatuses) > 0 || len(g.InterruptedTables) > 0 || len(g.RunProblems) > 0
 }
 
 // MaxQuoted bounds any text taken from the plan file. A plan lives in the repository, so its
@@ -137,31 +159,53 @@ var owedStatus = regexp.MustCompile(`(?i)^(pending|in[ -]?progress|blocked)$`)
 
 // GapsInFile reads a plan and reports what it still owes.
 func GapsInFile(path string) (Gaps, error) {
+	return GapsInFileForRun(path, "")
+}
+
+// GapsInFileForRun reads a plan and reports what the selected run still owes.
+func GapsInFileForRun(path, run string) (Gaps, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return Gaps{}, err
 	}
-	return GapsIn(string(raw))
+	return GapsForRun(string(raw), run)
 }
 
-// GapsIn reports what a plan document still owes.
-//
-// The breadth tables are read through the same line-carrying scanner the checker uses, so an owed row names
-// the line it sits on instead of leaving the reader to grep for the text the report quotes. A region that
-// carries no table at all is `never planned`: prose there used to read as a width of zero and leave Any()
-// false, which is the one verdict a sweep must never be handed by accident. A table the scanner could not
-// read to the end is the other half of that: its unread rows are reported, and Any() fails closed on them.
+// GapsIn reports what a plan document still owes using today's whole-document behaviour.
 func GapsIn(doc string) (Gaps, error) {
-	lines := strings.Split(doc, "\n")
+	return GapsForRun(doc, "")
+}
 
-	var g Gaps
+// GapsForRun reports only the breadth rows owned by run. Blank Run cells are disclosed as unscoped, rows
+// carrying another valid slug are ignored, and malformed cells fail closed without being counted.
+func GapsForRun(doc, run string) (Gaps, error) {
+	if run != "" {
+		if err := ValidateRun("--run", run); err != nil {
+			return Gaps{}, err
+		}
+	}
+	lines := strings.Split(doc, "\n")
+	g := Gaps{Run: run}
+	matched := false
+
 	layers := scanSection(lines, "Layer matrix")
 	if layers.header == nil {
 		g.NoLayerMatrix = true
 	} else {
 		iSkill := columnIndex(layers.header, "skill")
 		iStatus := columnIndex(layers.header, "status")
+		iRun := columnIndex(layers.header, "run")
+		if run != "" && iRun < 0 {
+			g.RunProblems = append(g.RunProblems, missingRunColumn("Layer matrix", run))
+		}
 		for _, r := range layers.rows {
+			if run != "" {
+				owned, include := scopedRow(&g, "Layer matrix", r, iRun, run)
+				if !include {
+					continue
+				}
+				matched = matched || owned
+			}
 			status := cell(r.cells, iStatus)
 			if naStatus.MatchString(status) {
 				continue
@@ -182,14 +226,25 @@ func GapsIn(doc string) (Gaps, error) {
 				g.UnrecognizedStatuses = append(g.UnrecognizedStatuses, message)
 			}
 		}
-		if _, message := interruptedTable("Layer matrix", layers); message != "" {
-			g.InterruptedTables = append(g.InterruptedTables, message)
-		}
+	}
+	if _, message := interruptedTable("Layer matrix", layers); message != "" {
+		g.InterruptedTables = append(g.InterruptedTables, message)
 	}
 
 	ranked := scanSection(lines, "Ranked targets")
 	iStatus := columnIndex(ranked.header, "status")
+	iRun := columnIndex(ranked.header, "run")
+	if run != "" && iRun < 0 {
+		g.RunProblems = append(g.RunProblems, missingRunColumn("Ranked targets", run))
+	}
 	for _, r := range ranked.rows {
+		if run != "" {
+			owned, include := scopedRow(&g, "Ranked targets", r, iRun, run)
+			if !include {
+				continue
+			}
+			matched = matched || owned
+		}
 		status := cell(r.cells, iStatus)
 		if naStatus.MatchString(status) {
 			continue
@@ -208,7 +263,42 @@ func GapsIn(doc string) (Gaps, error) {
 	if _, message := interruptedTable("Ranked targets", ranked); message != "" {
 		g.InterruptedTables = append(g.InterruptedTables, message)
 	}
+	if run != "" && !matched {
+		g.RunMissing = true
+	}
 	return g, nil
+}
+
+// missingRunColumn is the diagnostic for a breadth table whose header carries no Run column while a run is
+// scoped. Its rows cannot be attributed to anybody, so they stay out of the count and Any() fails closed on
+// them: reading a legacy table as "this run owes nothing" is the one verdict a scoped count must never invent.
+func missingRunColumn(table, run string) string {
+	return fmt.Sprintf("the %s table has no Run column, so its rows were not counted for run %q: run rdd-plus plan upgrade to add it", table, run)
+}
+
+// scopedRow decides whether one breadth row belongs to run. It returns include=false for blank or other-run
+// rows, and for a malformed cell after recording the diagnostic.
+func scopedRow(g *Gaps, table string, r row, iRun int, run string) (owned, include bool) {
+	if iRun < 0 {
+		return false, false
+	}
+	raw := cell(r.cells, iRun)
+	if raw == "" {
+		if table == "Layer matrix" {
+			g.UnscopedLayers++
+		} else {
+			g.UnscopedTargets++
+		}
+		return false, false
+	}
+	if err := ValidateRun("Run", raw); err != nil {
+		g.RunProblems = append(g.RunProblems, fmt.Sprintf("line %d: the %s table Run cell %q is invalid: %v", r.line, table, raw, err))
+		return false, false
+	}
+	if raw != run {
+		return false, false
+	}
+	return true, true
 }
 
 // unrecognizedStatus names a status cell the count could not place, with the line it was read from, its row,

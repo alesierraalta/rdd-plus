@@ -842,3 +842,131 @@ func fenceLineOf(t *testing.T, doc string) int {
 	t.Fatal("no fenced block in the fixture")
 	return 0
 }
+
+const scopedLayerMatrix = `## Layer matrix
+
+| Layer | Skill | Scope | Status | Run |
+|---|---|---|---|---|
+| Security | ` + "`appsec-adversarial-auditor`" + ` | input | %s | %s |
+| Runtime and faults | ` + "`runtime-reliability-testing`" + ` | faults | %s | %s |
+| Persistence | ` + "`database-persistence-testing`" + ` | db | %s | %s |
+
+`
+
+const scopedRankedTargets = `## Ranked targets
+
+| Target | Status | Run |
+|---|---|---|
+| 1. own target | %s | %s |
+| 2. other target | %s | %s |
+| 3. unscoped target | %s |  |
+
+`
+
+func scopedDoc(layerStatuses ...string) string {
+	args := make([]any, 0, len(layerStatuses)*2)
+	for _, status := range layerStatuses {
+		args = append(args, status, "redis-stream-pool")
+	}
+	return sprintf(scopedLayerMatrix, args...) + sprintf(scopedRankedTargets,
+		"pending", "redis-stream-pool", "pending", "other-run", "pending")
+}
+
+func TestGapsForRunCountsOnlyItsOwnRows(t *testing.T) {
+	doc := scopedDoc("done", "pending", "done")
+	g, err := GapsForRun(doc, "redis-stream-pool")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g.LayersDone != 2 || g.LayersTotal != 3 {
+		t.Fatalf("layers = %d/%d, want only this run's rows", g.LayersDone, g.LayersTotal)
+	}
+	if g.TargetsDone != 0 || g.TargetsTotal != 1 || len(g.PendingTargets) != 1 {
+		t.Fatalf("targets = %d/%d pending=%v, want only this run's rows", g.TargetsDone, g.TargetsTotal, g.PendingTargets)
+	}
+	if g.RunMissing || g.UnscopedLayers != 0 || g.UnscopedTargets != 1 {
+		t.Fatalf("unexpected disclosures: %+v", g)
+	}
+}
+
+func TestGapsForRunDisclosesUnscopedRowsWithoutCountingThem(t *testing.T) {
+	doc := "## Layer matrix\n\n| Layer | Skill | Scope | Status | Run |\n|---|---|---|---|---|\n| Security | appsec | input | pending |  |\n| Runtime | runtime | faults | done | redis-stream-pool |\n" +
+		"## Ranked targets\n\n| Target | Status | Run |\n|---|---|---|\n| target | pending |  |\n| own | done | redis-stream-pool |\n"
+	g, err := GapsForRun(doc, "redis-stream-pool")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g.LayersTotal != 1 || g.TargetsTotal != 1 || g.UnscopedLayers != 1 || g.UnscopedTargets != 1 {
+		t.Fatalf("unscoped rows changed the owed counts: %+v", g)
+	}
+	if g.Any() {
+		t.Fatalf("unscoped rows are disclosed, not owed: %+v", g)
+	}
+	if !strings.Contains(g.Report(), "2 row(s) belong to no run and are not counted; rdd-plus plan gaps --all shows every row") {
+		t.Fatalf("report omitted the unscoped-row disclosure:\n%s", g.Report())
+	}
+}
+
+func TestGapsForRunRefusesASlugNobodyCarries(t *testing.T) {
+	g, err := GapsForRun(scopedDoc("done", "done", "done"), "typo-run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !g.RunMissing || !g.Any() {
+		t.Fatalf("a run with no rows must fail closed: %+v", g)
+	}
+	if !strings.Contains(g.Report(), `no row carries run "typo-run"`) {
+		t.Fatalf("report did not name the missing run:\n%s", g.Report())
+	}
+}
+
+func TestGapsForRunFailsClosedOnAMalformedRunCell(t *testing.T) {
+	doc := "## Layer matrix\n\n| Layer | Skill | Scope | Status | Run |\n|---|---|---|---|---|\n| Security | appsec | input | done | Bad_Slug |\n" +
+		"## Ranked targets\n\n| Target | Status | Run |\n|---|---|---|\n| target | done | redis-stream-pool |\n"
+	g, err := GapsForRun(doc, "redis-stream-pool")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(g.RunProblems) != 1 || !g.Any() {
+		t.Fatalf("malformed Run cell did not fail closed: %+v", g)
+	}
+	if report := g.Report(); !strings.Contains(report, "line") || !strings.Contains(report, `"Bad_Slug"`) {
+		t.Fatalf("report did not name the malformed cell:\n%s", report)
+	}
+}
+
+// A breadth table whose header carries no Run column cannot be attributed to a run: its rows stay out of the
+// count and the scoped verdict fails closed. Reading a legacy table as "this run owes nothing" is the silent
+// all-clear the run scoping exists to prevent, so the check's refusal is not enough on its own — gaps is what
+// the report and the gate read, and it has to refuse too.
+func TestGapsForRunFailsClosedWhenATableHasNoRunColumn(t *testing.T) {
+	doc := "## Layer matrix\n\n| Layer | Skill | Scope | Status |\n|---|---|---|---|\n| Security | appsec | input | pending |\n" +
+		"## Ranked targets\n\n| Target | Status | Run |\n|---|---|---|\n| target | done | redis-stream-pool |\n"
+	g, err := GapsForRun(doc, "redis-stream-pool")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !g.Any() {
+		t.Fatalf("a table with no Run column read as nothing owed: %+v", g)
+	}
+	if len(g.RunProblems) != 1 || !strings.Contains(g.RunProblems[0], "Layer matrix") || !strings.Contains(g.RunProblems[0], "no Run column") {
+		t.Fatalf("problems = %v, want the Layer matrix and the missing column named", g.RunProblems)
+	}
+	if report := g.Report(); !strings.Contains(report, "no Run column") {
+		t.Fatalf("report did not disclose the missing column:\n%s", report)
+	}
+}
+
+func TestGapsWithoutARunKeepsTodaysCounts(t *testing.T) {
+	doc := matrix("done", "pending", "done", "done", "done") + sprintf(ranked, "done", "pending")
+	g, err := GapsIn(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g.LayersDone != 4 || g.LayersTotal != 5 || g.TargetsDone != 1 || g.TargetsTotal != 2 {
+		t.Fatalf("legacy counts changed: %+v", g)
+	}
+	if g.Run != "" || g.RunMissing || g.UnscopedLayers != 0 || g.UnscopedTargets != 0 || len(g.RunProblems) != 0 {
+		t.Fatalf("legacy gaps gained scoped disclosures: %+v", g)
+	}
+}

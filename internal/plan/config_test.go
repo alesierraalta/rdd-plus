@@ -128,3 +128,79 @@ func TestDeclaredPathRefusesAnUnreadableDeclaration(t *testing.T) {
 		t.Fatalf("error = %v, want the config name and read error", err)
 	}
 }
+
+func TestDeclaredRunReadsTheDeclaration(t *testing.T) {
+	got, err := DeclaredRun(t.TempDir(), func(string) (string, error) {
+		return `{"planPath":"docs/testing/custom-plan.md","run":"redis-stream-pool"}`, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "redis-stream-pool" {
+		t.Fatalf("run = %q, want redis-stream-pool", got)
+	}
+}
+
+func TestDeclaredRunIsAbsentWhenTheKeyIsAbsent(t *testing.T) {
+	got, err := DeclaredRun(t.TempDir(), func(string) (string, error) {
+		return `{"planPath":"docs/testing/custom-plan.md"}`, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "" {
+		t.Fatalf("run = %q, want empty", got)
+	}
+}
+
+func TestDeclaredRunRefusesABadSlug(t *testing.T) {
+	_, err := DeclaredRun(t.TempDir(), func(string) (string, error) {
+		return `{"run":"Bad_Slug"}`, nil
+	})
+	if err == nil || !strings.Contains(err.Error(), ConfigName) {
+		t.Fatalf("error = %v, want a declaration error", err)
+	}
+}
+
+func TestDeclaredRunRefusesAllAndNone(t *testing.T) {
+	for _, run := range []string{"all", "none"} {
+		t.Run(run, func(t *testing.T) {
+			_, err := DeclaredRun(t.TempDir(), func(string) (string, error) {
+				return `{"run":"` + run + `"}`, nil
+			})
+			if err == nil || !strings.Contains(err.Error(), ConfigName) {
+				t.Fatalf("error = %v, want a declaration error", err)
+			}
+		})
+	}
+}
+
+func TestDeclaredRunRefusesAnEmptyValue(t *testing.T) {
+	for _, value := range []string{`{"run":""}`, `{"run":"   "}`} {
+		t.Run(value, func(t *testing.T) {
+			_, err := DeclaredRun(t.TempDir(), func(string) (string, error) {
+				return value, nil
+			})
+			if err == nil || !strings.Contains(err.Error(), ConfigName) {
+				t.Fatalf("error = %v, want a declaration error", err)
+			}
+		})
+	}
+}
+
+func TestResolveReadsTheDeclarationOnceForPathAndRun(t *testing.T) {
+	calls := 0
+	path, run, err := Resolve(t.TempDir(), func(string) (string, error) {
+		calls++
+		return `{"planPath":"docs/testing/custom-plan.md","run":"redis-stream-pool"}`, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != "docs/testing/custom-plan.md" || run != "redis-stream-pool" {
+		t.Fatalf("resolved %q, %q", path, run)
+	}
+	if calls != 1 {
+		t.Fatalf("declaration read %d times, want once", calls)
+	}
+}
