@@ -517,6 +517,10 @@ func admitIDs(csv string) []string {
 	return ids
 }
 
+// waitDelayAfterKill is how long the output pipes may stay open once the shell is gone: the gap between the
+// kill and the copy of its output finishing, so a row that hits its bound is still reported as one.
+const waitDelayAfterKill = 2 * time.Second
+
 // runShell runs one admitted command through `sh -c`, so quoting, word splitting, and redirection
 // behave the way the ledger's shell commands intend, and points both streams at one buffer so the
 // observation is the single stream a row's digest is pinned against. This runs an arbitrary shell
@@ -526,11 +530,21 @@ func admitIDs(csv string) []string {
 func runShell(ctx context.Context, dir, command string) (string, error) {
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
 	cmd.Dir = dir
+	processGroup(cmd)
+	// A bytes.Buffer is served through an operating-system pipe whose copy finishes only at end of file, and
+	// the deadline ends the shell, not a descendant that inherited the write end: without WaitDelay that
+	// descendant keeps Run blocked past --timeout and no timeout line is ever printed.
+	cmd.WaitDelay = waitDelayAfterKill
 	var buf bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &buf, &buf
 	err := cmd.Run()
+	// The row is over, so what the shell left behind is reaped here rather than left running past it.
+	defer killGroup(cmd)
 	if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return buf.String(), fmt.Errorf("run %q: %w", command, context.DeadlineExceeded)
+	}
+	if errors.Is(err, exec.ErrWaitDelay) {
+		return buf.String(), fmt.Errorf("run %q: the command left a process holding its output, so the row's one stream never closed: %w", command, err)
 	}
 	return buf.String(), err
 }

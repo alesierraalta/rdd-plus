@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/alesierraalta/rdd-plus/internal/buildinfo"
 	"github.com/alesierraalta/rdd-plus/internal/evidence"
@@ -27,6 +28,24 @@ func buildCLI(t *testing.T) string {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
 	return bin
+}
+
+// --timeout has to bound the row it names. The shell can start a descendant that inherits the output pipes
+// and outlives it, and Go's copy of that output finishes only at end of file, so without WaitDelay and the
+// process-group kill the run waits for the descendant: the whole pass runs past the deadline, no timeout
+// line is ever printed, and the descendant keeps running after the bound was supposed to end it.
+func TestRunShellBoundsARowWhoseDescendantHoldsThePipes(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := runShell(ctx, t.TempDir(), "sleep 10 & sleep 10")
+	elapsed := time.Since(start)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want the deadline classified as the timeout it is", err)
+	}
+	if elapsed > 3*time.Second {
+		t.Fatalf("the row ran %s against a 300ms timeout: the bound held only until the descendant that inherited the pipes exited", elapsed)
+	}
 }
 
 func TestCLIContract(t *testing.T) {
