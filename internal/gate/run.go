@@ -107,10 +107,14 @@ func Run(stdin io.Reader, stdout io.Writer, logPath string, now time.Time) (code
 	raw, _ := io.ReadAll(stdin)
 	payload := strings.TrimSpace(string(raw))
 	if payload == "" || !strings.HasPrefix(payload, "{") {
+		// A payload the hook cannot read is a decision it has to record: it ran, and it decided nothing. The
+		// log is the only place that distinction survives — the turn itself must never break.
+		appendEntry(logPath, &Entry{TS: now.UTC().Format(time.RFC3339), SkillsLoaded: []string{}, Skipped: "unreadable_payload"})
 		return 0
 	}
 	var in Input
 	if err := json.Unmarshal([]byte(payload), &in); err != nil {
+		appendEntry(logPath, &Entry{TS: now.UTC().Format(time.RFC3339), SkillsLoaded: []string{}, Skipped: "unreadable_payload"})
 		return 0
 	}
 	res := Decide(in, RealDeps(now))

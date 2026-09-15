@@ -279,6 +279,10 @@ func openOrNil(d Deps, path string) io.ReadCloser {
 // continuing because of a previous Stop block.
 func Decide(in Input, d Deps) Result {
 	if in.StopHookActive {
+		// The host sets this flag when the Stop hook already ran for this stop, and that run wrote its own
+		// line: a second line here would count one stop twice, and silence in the log still means `the hook
+		// did not run`. A payload that could not be read is the case that leaves nothing behind, and `Run`
+		// records that one itself.
 		return Result{}
 	}
 	cwd := in.Cwd

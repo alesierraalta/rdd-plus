@@ -577,3 +577,20 @@ func TestBinaryReportsADeclarationItCannotRead(t *testing.T) {
 		t.Fatalf("entry = %#v, want skipped plan_config_invalid and no audit claim", e)
 	}
 }
+
+// A hook that could not read its payload is still a decision: it ran, and it decided nothing, which is a
+// different thing from a hook that never ran. That silence is what F38 was about — the unreadable payload
+// used to leave nothing behind. The loop guard is not the same case: it means the hook already ran for this
+// stop, and that run wrote its own line, so a second one would count one stop twice.
+func TestTheHookLogsThePayloadItCouldNotRead(t *testing.T) {
+	requireIntegration(t)
+	dir := newRepo(t)
+
+	broken := runBinary(t, binaryPath, dir, "no soy json")
+	if len(broken.entries) != 1 || broken.entries[0]["skipped"] != "unreadable_payload" {
+		t.Fatalf("unreadable payload entries = %v, want one line naming it", broken.entries)
+	}
+	if broken.out != "" {
+		t.Fatalf("the hook must stay silent about a payload it cannot read, and spoke: %q", broken.out)
+	}
+}
