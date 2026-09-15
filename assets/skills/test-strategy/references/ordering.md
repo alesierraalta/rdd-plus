@@ -76,11 +76,14 @@ The plan lives at `docs/testing/test-plan.md` by default (or the path the user n
 `.rdd-plus.json`; the Stop hook and `rdd-plus check` read that declared plan:
 
 ```json
-{"planPath": "docs/testing/<name>.md"}
+{"planPath": "docs/testing/<name>.md", "run": "redis-stream-pool"}
 ```
 
-A plan nobody declares is a plan nothing clears. Rows are never deleted by budget. The stopping
-point is recorded as row status (`pending`, `in progress`, `done`, `blocked`), not as prose.
+A plan nobody declares is a plan nothing clears. A run that is not the repository's first starts with
+`rdd-plus run start <slug>`, which seeds its six layer rows and declares the active run. Rows are never
+deleted by budget. The stopping point is recorded as row status (`pending`, `in progress`, `done`,
+`blocked`), not as prose. Every row written by PLAN carries the active run in its `Run` cell; a blank
+`Run` cell belongs to no run and is not counted, so the omission must be explicit.
 EXECUTE mode resumes from the first `pending` row; a refreshed PLAN keeps existing statuses.
 
 ---
@@ -94,8 +97,9 @@ declared itself seven times on **each** side and the change cost 8.5% more turns
 with detection unchanged. What it buys is the record: a `Light:` run names its blast radius, the classes
 it touched, and a reason for every layer it skipped, which a plan that swept everything never states.
 
-What the trigger does not change is the depth: execution inside the scope is not reduced. The target it
-reaches climbs to its rung through its sibling, leaves a pinning test and an evidence row, and the run
+What the trigger does not change is the depth: execution inside the scope is not reduced. EXECUTE
+selects pending rows from the active run only; a row owned by another run is not a candidate. The target
+it reaches climbs to its rung through its sibling, leaves a pinning test and an evidence row, and the run
 closes on `rdd-plus plan check` like any other. A bounded request and a bounded diff are the same
 decision reached from two sides: one names the surface, the other shows it.
 

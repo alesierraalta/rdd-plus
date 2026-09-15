@@ -3,6 +3,7 @@ package plan
 import (
 	"errors"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -202,5 +203,63 @@ func TestResolveReadsTheDeclarationOnceForPathAndRun(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Fatalf("declaration read %d times, want once", calls)
+	}
+}
+
+func TestDeclareRunWritesTheDeclarationPreservingPlanPath(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, ConfigName)
+	if err := os.WriteFile(path, []byte(`{"planPath":"docs/testing/custom-plan.md"}`), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := DeclareRun(root, "redis-pool"); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != `{"planPath":"docs/testing/custom-plan.md","run":"redis-pool"}` {
+		t.Fatalf("declaration = %q", body)
+	}
+}
+
+func TestDeclareRunRefusesToOverwriteABrokenDeclaration(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, ConfigName)
+	before := []byte(`{"planPath":`)
+	if err := os.WriteFile(path, before, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := DeclareRun(root, "redis-pool"); err == nil {
+		t.Fatal("a broken declaration must be refused")
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("broken declaration was overwritten: %q", after)
+	}
+}
+
+func TestDeclareRunIsAtomic(t *testing.T) {
+	root := t.TempDir()
+	if err := DeclareRun(root, "redis-pool"); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(filepath.Join(root, ConfigName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != `{"run":"redis-pool"}` {
+		t.Fatalf("new declaration = %q", body)
+	}
+	matches, err := filepath.Glob(filepath.Join(root, "."+ConfigName+".tmp*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("atomic write left temporary files: %v", matches)
 	}
 }

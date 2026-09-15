@@ -357,3 +357,69 @@ func TestDecideNamesWhatItCouldNotReadOrPlan(t *testing.T) {
 		t.Fatalf("a plan with no layer matrix must not read as nothing owed: %s", res.Reason)
 	}
 }
+
+func declaredRunPlan(run, layerStatus, targetStatus string) string {
+	return "## Layer matrix\n\n| Layer | Skill | Scope | Status | Run |\n|---|---|---|---|---|\n" +
+		"| Security | `appsec-adversarial-auditor` | input | " + layerStatus + " | " + run + " |\n" +
+		"\n## Ranked targets\n\n| Target | Verdict | Status | Run |\n|---|---|---|---|\n" +
+		"| 1. auth | probe | " + targetStatus + " | " + run + " |\n"
+}
+
+func TestDecideAuditsTheDeclaredRun(t *testing.T) {
+	r := auditRepo()
+	r.transcript = stamped(auditStart, `{"name":"Skill","input":{"skill":"test-strategy"}}`)
+	r.planConfig = `{"run":"redis-pool"}`
+	r.plan = declaredRunPlan("redis-pool", "pending", "done")
+	res := Decide(Input{TranscriptPath: "t"}, r.deps(auditNow))
+	if !res.Audit || res.Owed != 1 || res.Pending != 0 || !strings.Contains(res.Reason, "run redis-pool") {
+		t.Fatalf("declared run audit = %#v, want its pending layer only", res)
+	}
+}
+
+func TestDecideLogsTheRunItAudited(t *testing.T) {
+	r := auditRepo()
+	r.transcript = stamped(auditStart, `{"name":"Skill","input":{"skill":"test-strategy"}}`)
+	r.planConfig = `{"run":"redis-pool"}`
+	r.plan = declaredRunPlan("redis-pool", "done", "done")
+	res := Decide(Input{TranscriptPath: "t"}, r.deps(auditNow))
+	if res.Entry == nil || res.Entry.Run != "redis-pool" {
+		t.Fatalf("entry = %#v, want the audited run", res.Entry)
+	}
+}
+
+func TestDecideFailsClosedWhenTheDeclaredRunHasNoRows(t *testing.T) {
+	r := auditRepo()
+	r.transcript = stamped(auditStart, `{"name":"Skill","input":{"skill":"test-strategy"}}`)
+	r.planConfig = `{"run":"redis-pool"}`
+	r.plan = declaredRunPlan("other-run", "done", "done")
+	res := Decide(Input{TranscriptPath: "t"}, r.deps(auditNow))
+	if !res.Audit || !strings.Contains(res.Reason, "nobody opened") || strings.Contains(auditLine(res), "owes nothing") {
+		t.Fatalf("missing run did not fail closed: %#v\n%s", res, res.Reason)
+	}
+}
+
+func TestDecideFailsClosedWhenATableHasNoRunColumn(t *testing.T) {
+	r := auditRepo()
+	r.transcript = stamped(auditStart, `{"name":"Skill","input":{"skill":"test-strategy"}}`)
+	r.planConfig = `{"run":"redis-pool"}`
+	r.plan = "## Layer matrix\n\n| Layer | Skill | Scope | Status |\n|---|---|---|---|\n| Security | `appsec-adversarial-auditor` | input | done |\n" +
+		"\n## Ranked targets\n\n| Target | Verdict | Status |\n|---|---|---|\n| 1. auth | probe | done |\n"
+	res := Decide(Input{TranscriptPath: "t"}, r.deps(auditNow))
+	if !res.Audit || !strings.Contains(res.Reason, "no Run column") || !strings.Contains(res.Reason, "plan upgrade") {
+		t.Fatalf("legacy table did not fail closed: %#v\n%s", res, res.Reason)
+	}
+}
+
+func TestAuditLineNamesTheRun(t *testing.T) {
+	line := auditLine(Result{Run: "redis-pool", Audit: true, Owed: 1})
+	if !strings.Contains(line, "redis-pool") {
+		t.Fatalf("audit line = %q, want the run named", line)
+	}
+}
+
+func TestAuditLineDisclosesUnscopedRows(t *testing.T) {
+	line := auditLine(Result{Run: "redis-pool", Unscoped: 2})
+	if !strings.Contains(line, "2 unscoped row(s)") || !strings.Contains(line, "plan gaps --all") {
+		t.Fatalf("audit line = %q, want the unscoped disclosure", line)
+	}
+}
