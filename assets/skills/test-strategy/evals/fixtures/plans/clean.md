@@ -56,16 +56,16 @@ A `none` verdict is created with status `n/a`; the execution ratio excludes `n/a
 
 ## Execution log
 
-| Date | Target | Rung reached | Findings (path:line) | Promoted tests | Evidence (ledger id) | Notes |
-|---|---|---|---|---|---|---|
+| Date | Target | Rung reached | Findings (path:line) | Promoted tests | Evidence (ledger id) | Notes | Run |
+|---|---|---|---|---|---|---|---|
 
 ## Findings
 
 A rejected or wontfix finding is a known non-issue: it is never re-proposed unless the fingerprint
 of its cited files changed; when a run skips it, it cites the row.
 
-| Id | Finding (path:line, one line) | Severity (consequence class) | Data safe? | Evidence id | Status | Verdict by / date | Reason | Cited-files fingerprint at verdict |
-|---|---|---|---|---|---|---|---|---|
+| Id | Finding (path:line, one line) | Severity (consequence class) | Data safe? | Evidence id | Status | Verdict by / date | Reason | Cited-files fingerprint at verdict | Run |
+|---|---|---|---|---|---|---|---|---|---|
 
 Statuses: open · confirmed · fixed · rejected · wontfix.
 
@@ -74,8 +74,8 @@ Statuses: open · confirmed · fixed · rejected · wontfix.
 One row per `observado` conclusion (`references/evidence.md`). `razonado` items go under
 "Hypotheses" below, never here.
 
-| Id | Claim | Executed | Inputs and parameters | Observed | Mutation or negative control → result | Reproduction | Label (`observado` / `razonado`, literal) |
-|---|---|---|---|---|---|---|---|
+| Id | Claim | Executed | Inputs and parameters | Observed | Mutation or negative control → result | Reproduction | Label (`observado` / `razonado`, literal) | Run |
+|---|---|---|---|---|---|---|---|---|
 
 ### Hypotheses (razonado)
 

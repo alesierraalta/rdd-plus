@@ -295,10 +295,10 @@ func ValidateRun(source, s string) error {
 		return fmt.Errorf("%s must name a run", source)
 	}
 	if !runSlugRe.MatchString(s) {
-		return fmt.Errorf("%s must be a valid run slug [a-z0-9][a-z0-9-]{1,63}: %q", source, s)
+		return fmt.Errorf("%s must be a valid run slug [a-z0-9][a-z0-9-]{1,63}: \"%s\"", source, quote(s))
 	}
 	if s == "all" || s == "none" {
-		return fmt.Errorf("%s cannot use reserved run %q", source, s)
+		return fmt.Errorf("%s cannot use reserved run %s", source, quote(s))
 	}
 	return nil
 }

@@ -33,6 +33,8 @@ type Finding struct {
 	VerdictBy   string
 	Reason      string
 	Fingerprint string
+	Run         string
+	RunDeclared bool
 }
 
 // AddFinding writes one Findings row into the plan at path and returns the 1-based line it landed on. Every
@@ -123,17 +125,18 @@ func addFinding(path string, f Finding) (int, error) {
 		return 0, usagef("--location %s is not path:line, so nothing can be located", quote(f.Location))
 	}
 	// The ids are read exactly as the checker reads them, so the writer validates what the checker will.
-	ledger := scanSection(lines, "Evidence ledger")
-	known := map[string]bool{}
-	for _, r := range ledger.rows {
-		known[cell(r.cells, 0)] = true
-	}
+	ledgerRows := Ledger(string(raw))
+	// The row this command writes trims the run, so the provenance check reads the same value: a run given with
+	// surrounding spaces must resolve to the cell that will be written, not to a cross-run citation.
+	run := strings.TrimSpace(f.Run)
 	for _, part := range strings.FieldsFunc(f.Evidence, func(r rune) bool { return r == ',' || r == ';' || r == '/' || r == ' ' }) {
 		id := strings.Trim(part, "`")
-		if id == "" || known[id] {
+		if id == "" {
 			continue
 		}
-		return 0, fmt.Errorf("--evidence names %s, which is not a row in the Evidence ledger: add the ledger row first, this command writes findings only", quote(id))
+		if breach := evidenceCitationProblem(id, run, ledgerRows); breach != "" {
+			return 0, fmt.Errorf("--evidence %s: %s: add the ledger row first, this command writes findings only", quote(id), breach)
+		}
 	}
 
 	after := findingsEnd(table)
@@ -210,6 +213,15 @@ func (f Finding) row(header []string, status string) (string, error) {
 	}
 	cells[id] = cellValue(f.ID)
 
+	run := strings.TrimSpace(f.Run)
+	if f.RunDeclared && run == "" {
+		return "", usagef("--run is declared but empty: refusing to write a blank Run cell")
+	}
+	if run != "" {
+		if err := ValidateRun("--run", run); err != nil {
+			return "", usagef("--run %s is invalid: %v", quote(f.Run), err)
+		}
+	}
 	columns := []struct {
 		name   string
 		value  string
@@ -226,6 +238,7 @@ func (f Finding) row(header []string, status string) (string, error) {
 		{"Verdict by", f.VerdictBy, true},
 		{"Reason", f.Reason, true},
 		{"Fingerprint", f.Fingerprint, !placeholder.MatchString(strings.TrimSpace(f.Fingerprint))},
+		{"Run", run, f.RunDeclared || run != ""},
 	}
 	for _, c := range columns {
 		at := columnIndex(header, c.name)

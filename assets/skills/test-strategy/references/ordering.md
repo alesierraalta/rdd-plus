@@ -83,7 +83,7 @@ A plan nobody declares is a plan nothing clears. A run that is not the repositor
 `rdd-plus run start <slug>`, which seeds its six layer rows and declares the active run. Rows are never
 deleted by budget. The stopping point is recorded as row status (`pending`, `in progress`, `done`,
 `blocked`), not as prose. Every row written by PLAN carries the active run in its `Run` cell; a blank
-`Run` cell belongs to no run and is not counted, so the omission must be explicit.
+`Run` cell belongs to no run and is not counted, so the omission must be explicit. Evidence borrowed from another run is cited as `<run>:<id>`; a bare id means the same run.
 EXECUTE mode resumes from the first `pending` row; a refreshed PLAN keeps existing statuses.
 
 ---

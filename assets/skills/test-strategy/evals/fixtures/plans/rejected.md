@@ -56,17 +56,17 @@ A `none` verdict is created with status `n/a`; the execution ratio excludes `n/a
 
 ## Execution log
 
-| Date | Target | Rung reached | Findings (path:line) | Promoted tests | Evidence (ledger id) | Notes |
-|---|---|---|---|---|---|---|
+| Date | Target | Rung reached | Findings (path:line) | Promoted tests | Evidence (ledger id) | Notes | Run |
+|---|---|---|---|---|---|---|---|
 
 ## Findings
 
 A rejected or wontfix finding is a known non-issue: it is never re-proposed unless the fingerprint
 of its cited files changed; when a run skips it, it cites the row.
 
-| Id | Finding (path:line, one line) | Severity (consequence class) | Data safe? | Evidence id | Status | Verdict by / date | Reason | Cited-files fingerprint at verdict |
-|---|---|---|---|---|---|---|---|---|
-| F1 | `src/parse.js:5` quoted field containing a comma is split into two fields | silently wrong answer | yes | E1 | rejected | owner / 2026-09-08 | CSV input never contains quoted commas by contract | `{{FP_PARSE}}` |
+| Id | Finding (path:line, one line) | Severity (consequence class) | Data safe? | Evidence id | Status | Verdict by / date | Reason | Cited-files fingerprint at verdict | Run |
+|---|---|---|---|---|---|---|---|---|---|
+| F1 | `src/parse.js:5` quoted field containing a comma is split into two fields | silently wrong answer | yes | E1 | rejected | owner / 2026-09-08 | CSV input never contains quoted commas by contract | `{{FP_PARSE}}` |  |
 
 Statuses: open · confirmed · fixed · rejected · wontfix.
 
@@ -75,9 +75,9 @@ Statuses: open · confirmed · fixed · rejected · wontfix.
 One row per `observado` conclusion (`references/evidence.md`). `razonado` items go under
 "Hypotheses" below, never here.
 
-| Id | Claim | Executed | Inputs and parameters | Observed | Mutation or negative control → result | Reproduction | Label (`observado` / `razonado`, literal) |
-|---|---|---|---|---|---|---|---|
-| E1 | If a quoted comma is protected, the split yields three fields | `node -e "import('./src/parse.js').then(m => console.log(JSON.stringify(m.parseCsvLine('a,\"b,c\",d'))))"` | line `a,"b,c",d` | `["a","\"b","c\"","d"]` (four fields) | n/a: red on unmodified code | same command | observado |
+| Id | Claim | Executed | Inputs and parameters | Observed | Mutation or negative control → result | Reproduction | Label (`observado` / `razonado`, literal) | Run |
+|---|---|---|---|---|---|---|---|---|
+| E1 | If a quoted comma is protected, the split yields three fields | `node -e "import('./src/parse.js').then(m => console.log(JSON.stringify(m.parseCsvLine('a,\"b,c\",d'))))"` | line `a,"b,c",d` | `["a","\"b","c\"","d"]` (four fields) | n/a: red on unmodified code | same command | observado |  |
 
 ### Hypotheses (razonado)
 

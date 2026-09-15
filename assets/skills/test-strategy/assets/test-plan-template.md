@@ -42,7 +42,7 @@ The `Run` column identifies which bounded run owns each layer and target row; le
 Statuses: pending · in progress · done · blocked · n/a. `plan gaps` counts a row as swept when its
 status cell reads `done`, `fixed` or `closed`, and drops `n/a`, `na`, `none` and `skipped` from the
 denominator entirely; the `Skill` cell only labels the rows still owed. In a plan that declares
-`Light:`, every `n/a` row also states its reason in the `Scope` cell.
+`Light:`, every `n/a` row also states its reason in the `Scope` cell. The `Run` cell records which bounded run owns each counted row and stays blank for unscoped work.
 
 ## Not testing, on purpose
 
@@ -56,8 +56,8 @@ denominator entirely; the `Skill` cell only labels the rows still owed. In a pla
 
 ## Execution log
 
-| Date | Target | Rung reached | Findings (path:line) | Promoted tests | Evidence (ledger id) | Notes |
-|---|---|---|---|---|---|---|
+| Date | Target | Rung reached | Findings (path:line) | Promoted tests | Evidence (ledger id) | Notes | Run |
+|---|---|---|---|---|---|---|---|
 
 ## Findings
 
@@ -68,8 +68,8 @@ finding names the promoted test that asserts the promised behaviour, so it is re
 code and green once fixed (rule 13); a test written the other way round is a characterization
 test and says so in its name. A finding that never got a test stays `open`, reason `not pinned`.
 
-| Id | Finding (path:line, one line) | Severity (consequence class) | Data safe? | Evidence id | Pinning test (suite path :: test name) | Status | Verdict by / date | Reason | Cited-files fingerprint at verdict |
-|---|---|---|---|---|---|---|---|---|---|
+| Id | Finding (path:line, one line) | Severity (consequence class) | Data safe? | Evidence id | Pinning test (suite path :: test name) | Status | Verdict by / date | Reason | Cited-files fingerprint at verdict | Run |
+|---|---|---|---|---|---|---|---|---|---|---|
 
 Statuses: open · confirmed · fixed · rejected · wontfix.
 
@@ -111,8 +111,8 @@ A row whose command survives the edit, or whose restored half fails, is refused;
 copy to edit and put back, so the claim is refused rather than admitted unchecked. `Mutation or negative control →
 result` stays prose for a human to read; `Mutate` is the part a binary can act on and undo.
 
-| Id | Claim | Executed | Admit | Inputs and parameters | Observed | Digest | Normalize | Mode | Mutate | Mutation or negative control → result | Reproduction | Label (`observado` / `razonado`, literal) |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Id | Claim | Executed | Admit | Inputs and parameters | Observed | Digest | Normalize | Mode | Mutate | Mutation or negative control → result | Reproduction | Label (`observado` / `razonado`, literal) | Run |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 
 ### Hypotheses (razonado)
 

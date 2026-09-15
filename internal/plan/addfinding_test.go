@@ -16,7 +16,7 @@ import (
 // checker has something to hold the candidate row to.
 func addPlan(rows ...string) string {
 	return header + strings.Join(rows, "") + ledger +
-		"| E1 | it drops the comma | `node --test` | `a,b` | 3 fields | reverted -> red | same input | observado |\n"
+		"| E1 | it drops the comma | `node --test` | `a,b` | 3 fields | reverted -> red | same input | observado | |\n"
 }
 
 // openFinding is a row the checker accepts as it stands, so each test varies exactly one thing.
@@ -34,6 +34,75 @@ func edited(apply func(*Finding)) Finding {
 	return f
 }
 
+func addPlanWithRun(run string) string {
+	return "## Findings\n\n" +
+		"| Id | Finding | Severity | Data safe? | Evidence id | Pinning test | Status | Verdict by / date | Reason | Fingerprint | Run |\n" +
+		"|---|---|---|---|---|---|---|---|---|---|---|\n" +
+		"\n## Evidence ledger\n\n" +
+		"| Id | Claim | Label | Run |\n" +
+		"|---|---|---|---|\n" +
+		"| E1 | it drops the comma | observado | " + run + " |\n"
+}
+
+func TestAddFindingStampsTheActiveRun(t *testing.T) {
+	p := write(t, t.TempDir(), "plan.md", addPlanWithRun("alpha"))
+	f := openFinding()
+	f.Run, f.RunDeclared = "alpha", true
+	line, err := AddFinding(p, f)
+	if err != nil {
+		t.Fatalf("AddFinding: %v", err)
+	}
+	got, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(string(got), "\n")
+	cells := split(lines[line-1])
+	scan := scanSection(lines, "Findings")
+	if cells[columnIndex(scan.header, "run")] != "alpha" {
+		t.Fatalf("inserted row does not carry the active run: %q", lines[line-1])
+	}
+}
+
+func TestAddFindingRefusesABlankRunCellWhenARunIsDeclared(t *testing.T) {
+	p := write(t, t.TempDir(), "plan.md", addPlanWithRun("alpha"))
+	before, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := openFinding()
+	f.RunDeclared = true
+	if _, err := AddFinding(p, f); err == nil || !strings.Contains(err.Error(), "Run") {
+		t.Fatalf("a declared run must not be written blank, got %v", err)
+	}
+	after, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("a blank declared run refusal must leave the plan unchanged")
+	}
+}
+
+func TestAddFindingWithoutADeclaredRunLeavesTheCellBlank(t *testing.T) {
+	p := write(t, t.TempDir(), "plan.md", addPlanWithRun(""))
+	f := openFinding()
+	if _, err := AddFinding(p, f); err != nil {
+		t.Fatalf("AddFinding: %v", err)
+	}
+	got, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := scanSection(strings.Split(string(got), "\n"), "Findings")
+	if len(rows.rows) != 1 {
+		t.Fatalf("findings rows = %#v, want one row", rows.rows)
+	}
+	if run := cell(rows.rows[0].cells, columnIndex(rows.header, "run")); run != "" {
+		t.Fatalf("an undeclared run must remain blank, got %q", run)
+	}
+}
+
 // add-finding exists so an operator stops hand-editing a ten-column row: it writes the row the checker
 // already accepts and reports the line it landed on.
 func TestAddFindingWritesARowTheCheckerAccepts(t *testing.T) {
@@ -43,7 +112,7 @@ func TestAddFindingWritesARowTheCheckerAccepts(t *testing.T) {
 	}{
 		{"a table with no rows lands under the separator", addPlan()},
 		{"a table with rows lands under the last one",
-			addPlan("| F0 | `src/b.js:9` y | M | yes | E1 | t.js :: y | open | me | - | - |\n")},
+			addPlan("| F0 | `src/b.js:9` y | M | yes | E1 | t.js :: y | open | me | - | - | |\n")},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -314,7 +383,7 @@ func TestAddFindingHelperProcess(t *testing.T) {
 // from the scan's own heading, where a raw walk would see the example's rows and write the row into the fence.
 func TestAddFindingLandsInTheRealTableUnderAFencedExample(t *testing.T) {
 	doc := "## Findings\n\n```markdown\n| Id | Finding |\n|---|---|\n| - | example |\n```\n\n" +
-		strings.TrimPrefix(header, "## Findings\n\n") + ledger + "| E1 | c | cmd | i | o | m | r | observado |\n"
+		strings.TrimPrefix(header, "## Findings\n\n") + ledger + "| E1 | c | cmd | i | o | m | r | observado | |\n"
 	p := write(t, t.TempDir(), "plan.md", doc)
 	if _, err := AddFinding(p, openFinding()); err != nil {
 		t.Fatalf("AddFinding: %v", err)

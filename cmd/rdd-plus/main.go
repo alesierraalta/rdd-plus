@@ -62,11 +62,11 @@ plan gaps [--run <slug>] [--all] [--path <path>]
 plan upgrade [--run <slug>] [--path <path>]
 plan add-finding --id <id> --location <path:line> --severity <class> --data-safe <yes|no> --evidence <ids>
            --status <open|confirmed|fixed|rejected|wontfix> [--test <suite :: name>] --verdict-by <who / date>
-           --reason <why> [--fingerprint <digest>] [--path <path>]
+           --reason <why> [--fingerprint <digest>] [--run <slug>] [--path <path>]
            (writes one Findings row; refuses a row plan check would reject, and never writes an
             evidence row. A bad value exits 2; a plan that refuses the row exits 1)
            (swept = status done, fixed or closed; n/a, na, none and skipped leave the denominator)
-plan admit [--path <path>] [--execute] [--sandbox] [--sandbox-image <image>] [--timeout 120s] [--only <ids>] [--record <ids>]
+plan admit [--path <path>] [--run <slug>] [--execute] [--sandbox] [--sandbox-image <image>] [--timeout 120s] [--only <ids>] [--record <ids>]
            (dry run by default: --execute runs each admitted row's one command through sh -c;
             --record writes the freshly observed digest back into the named rows and requires
             --execute, because a dry run makes no observation to pin; exit 1 when any row is
@@ -405,7 +405,7 @@ func runPlan(args []string) int {
 	}
 	fs := flag.NewFlagSet("plan", flag.ContinueOnError)
 	path := fs.String("path", "", "plan file")
-	run := fs.String("run", "", "active run slug (gaps and upgrade)")
+	run := fs.String("run", "", "active run slug (gaps, upgrade, add-finding and admit)")
 	all := fs.Bool("all", false, "count every row (gaps only)")
 	force := fs.Bool("force", false, "replace an existing plan (init only)")
 	id := fs.String("id", "", "Findings row id (add-finding)")
@@ -457,11 +457,15 @@ func runPlan(args []string) int {
 		fmt.Fprintln(os.Stderr, "plan:", err)
 		return 1
 	}
+	activeRun := declaredRun
+	if flagSet(fs, "run") {
+		activeRun = *run
+	}
 	switch args[0] {
 	case "admit":
-		return runPlanAdmit(effectivePath, *execute, *timeout, *only, *record, *sandbox, *sandboxImage)
+		return runPlanAdmit(effectivePath, activeRun, *execute, *timeout, *only, *record, *sandbox, *sandboxImage)
 	case "gaps":
-		selectedRun := declaredRun
+		selectedRun := activeRun
 		if *all {
 			selectedRun = ""
 		} else if flagSet(fs, "run") {
@@ -527,7 +531,7 @@ func runPlan(args []string) int {
 		line, err := plan.AddFinding(effectivePath, plan.Finding{
 			ID: *id, Location: *location, Severity: *severity, DataSafe: *dataSafe,
 			Evidence: *evidence, Test: *test, Status: *status, VerdictBy: *verdictBy,
-			Reason: *reason, Fingerprint: *fingerprint,
+			Reason: *reason, Fingerprint: *fingerprint, Run: activeRun, RunDeclared: flagSet(fs, "run"),
 		})
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "plan add-finding:", err)
@@ -554,7 +558,7 @@ func runPlan(args []string) int {
 // usage error. --record without --execute is a usage error because recording pins an observation this
 // run made: a dry run makes none, and a pinned value nobody observed is the failure this flag exists
 // to prevent.
-func runPlanAdmit(path string, execute bool, timeout time.Duration, only, record string, sandbox bool, sandboxImage string) int {
+func runPlanAdmit(path, run string, execute bool, timeout time.Duration, only, record string, sandbox bool, sandboxImage string) int {
 	recordIDs := admitIDs(record)
 	if len(recordIDs) > 0 && !execute {
 		fmt.Fprintln(os.Stderr, "plan admit: --record requires --execute: recording pins the observation this run makes, and a dry run makes none")
@@ -640,6 +644,14 @@ func runPlanAdmit(path string, execute bool, timeout time.Duration, only, record
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "plan admit:", err)
 			return 1
+		}
+		if run != "" {
+			withRun, err := plan.RecordRun(updated, r.ID, run)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "plan admit:", err)
+				return 1
+			}
+			updated = withRun
 		}
 		// The mode is recorded beside the digest, because a digest without the mode it was taken in is not
 		// checkable. A plan written before the Mode column existed cannot carry one; an empty cell there

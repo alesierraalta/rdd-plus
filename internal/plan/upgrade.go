@@ -31,7 +31,7 @@ func upgrade(path, run string) (int, error) {
 	lines := strings.Split(string(raw), "\n")
 	updates := map[int]string{}
 	changed := 0
-	for _, name := range []string{"Layer matrix", "Ranked targets"} {
+	for _, name := range []string{"Layer matrix", "Ranked targets", "Findings", "Execution log", "Evidence ledger"} {
 		scan := scanSection(lines, name)
 		if scan.header == nil || columnIndex(scan.header, "run") >= 0 {
 			continue

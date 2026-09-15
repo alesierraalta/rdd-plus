@@ -73,6 +73,81 @@ func TestUpgradeIsIdempotent(t *testing.T) {
 	}
 }
 
+const recordUpgradePlan = "## Findings\n\n" +
+	"| Id | Finding | Run |\n" +
+	"|---|---|---|\n" +
+	"| F1 | `src/a.go:1` |  |\n" +
+	"\n## Execution log\n\n" +
+	"| Date | Notes | Run |\n" +
+	"|---|---|---|\n" +
+	"| today | executed |  |\n" +
+	"\n## Evidence ledger\n\n" +
+	"| Id | Label | Run |\n" +
+	"|---|---|---|\n" +
+	"| E1 | observado |  |\n"
+
+func TestUpgradeAddsTheRunColumnToTheRecordTables(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "plan.md")
+	legacy := strings.ReplaceAll(recordUpgradePlan, " | Run |", " | Scope |")
+	if strings.Contains(legacy, "| Run |") {
+		t.Fatal("the legacy fixture still carries the Run column, so the upgrade proves nothing")
+	}
+	if err := os.WriteFile(path, []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := Upgrade(path, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed != 3 {
+		t.Fatalf("changed tables = %d, want 3", changed)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"| Id | Finding | Scope | Run |",
+		"| Date | Notes | Scope | Run |",
+		"| Id | Label | Scope | Run |",
+		"| F1 | `src/a.go:1` |  |",
+		"| today | executed |  |",
+		"| E1 | observado |  |",
+	} {
+		if !strings.Contains(string(got), want) {
+			t.Fatalf("upgraded plan missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestUpgradeLeavesAlreadyMigratedRecordTablesAlone(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "plan.md")
+	legacy := strings.ReplaceAll(recordUpgradePlan, " | Run |", " | Scope |")
+	if err := os.WriteFile(path, []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := Upgrade(path, "alpha"); err != nil || changed != 3 {
+		t.Fatalf("first upgrade changed=%d err=%v, want three tables", changed, err)
+	}
+	first, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed, err := Upgrade(path, "beta")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed != 0 || string(second) != string(first) {
+		t.Fatalf("second upgrade changed=%d or rewrote bytes:\nfirst %q\nsecond %q", changed, first, second)
+	}
+}
+
 func TestUpgradeStampsTheGivenSlug(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "plan.md")

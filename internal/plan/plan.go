@@ -119,7 +119,8 @@ func CheckDocument(doc string) []string {
 		name string
 		scan tableScan
 	}{
-		{"Findings", findings}, {"Evidence ledger", ledger}, {"Ranked targets", ranked}, {"Layer matrix", layers},
+		{"Findings", findings}, {"Evidence ledger", ledger}, {"Execution log", scanSection(lines, "Execution log")},
+		{"Ranked targets", ranked}, {"Layer matrix", layers},
 	} {
 		if line, message := interruptedTable(t.name, t.scan); message != "" {
 			problems = append(problems, fmt.Sprintf("line %d: %s", line, message))
@@ -129,15 +130,19 @@ func CheckDocument(doc string) []string {
 		name string
 		scan tableScan
 	}{
+		{"Findings", findings}, {"Evidence ledger", ledger}, {"Execution log", scanSection(lines, "Execution log")},
 		{"Ranked targets", ranked}, {"Layer matrix", layers},
 	} {
 		problems = append(problems, runColumnProblems(t.name, t.scan)...)
 	}
-	ledgerIDs := map[string]bool{}
+	ledgerRows := Ledger(doc)
+	iLabel := columnIndex(ledger.header, "label")
 	for _, r := range ledger.rows {
 		id := cell(r.cells, 0)
-		ledgerIDs[id] = true
-		if label := cell(r.cells, len(r.cells)-1); strings.EqualFold(label, "razonado") {
+		if iLabel < 0 {
+			iLabel = len(r.cells) - 1
+		}
+		if label := cell(r.cells, iLabel); strings.EqualFold(label, "razonado") {
 			problems = append(problems, fmt.Sprintf("line %d: evidence %s is labelled razonado: a hypothesis belongs under Hypotheses, never in the ledger", r.line, quote(id)))
 		}
 	}
@@ -146,6 +151,7 @@ func CheckDocument(doc string) []string {
 	iEvidence := columnIndex(findings.header, "evidence")
 	iPin := columnIndex(findings.header, "pinning test")
 	iStatus := columnIndex(findings.header, "status")
+	iRun := columnIndex(findings.header, "run")
 	for _, r := range findings.rows {
 		id := quote(cell(r.cells, 0))
 		if iFind >= 0 && !pathCiteRe.MatchString(cell(r.cells, iFind)) {
@@ -157,8 +163,12 @@ func CheckDocument(doc string) []string {
 			problems = append(problems, fmt.Sprintf("line %d: finding %s cites no evidence row", r.line, id))
 		default:
 			for _, part := range strings.FieldsFunc(ev, func(r rune) bool { return r == ',' || r == ';' || r == '/' || r == ' ' }) {
-				if part = strings.Trim(part, "`"); part != "" && !ledgerIDs[part] {
-					problems = append(problems, fmt.Sprintf("line %d: finding %s cites evidence %s, which is not a row in the Evidence ledger", r.line, id, quote(part)))
+				part = strings.Trim(part, "`")
+				if part == "" {
+					continue
+				}
+				if breach := evidenceCitationProblem(part, cell(r.cells, iRun), ledgerRows); breach != "" {
+					problems = append(problems, fmt.Sprintf("line %d: finding %s cites evidence %s: %s", r.line, id, quote(part), breach))
 				}
 			}
 		}
@@ -192,6 +202,47 @@ func findingStatus(raw string) (string, string) {
 	return status, ""
 }
 
+// evidenceCitationProblem resolves one Findings evidence token against the ledger row's provenance. A bare
+// id is local to the finding's run; a qualified id names the origin explicitly so a cross-run citation cannot
+// look like a local one. The empty run is legacy/unscoped and can only resolve an empty ledger Run cell.
+func evidenceCitationProblem(token, findingRun string, ledger []LedgerRow) string {
+	// Every value below is read out of the plan file, so each one goes through quote() on its way into a
+	// message: a repository can plant a Run cell or an id that reads as an instruction, and this output is what
+	// a model and an operator read next.
+	if origin, id, qualified := strings.Cut(token, ":"); qualified {
+		if findingRun == "" {
+			return fmt.Sprintf("finding has no Run and may only cite blank-run evidence, but citation names run %s", quote(origin))
+		}
+		for _, row := range ledger {
+			if row.ID == id && row.Run == origin {
+				return ""
+			}
+		}
+		return fmt.Sprintf("citation names no Evidence ledger row for run %s", quote(origin))
+	}
+	for _, row := range ledger {
+		if row.ID == token && row.Run == findingRun {
+			return ""
+		}
+	}
+	for _, row := range ledger {
+		if row.ID == token {
+			if row.Run == "" {
+				// A migrated plan holds rows nobody stamped: the citation is still wrong, but the fix is to
+				// stamp the row, not to write an origin that does not exist.
+				return fmt.Sprintf("evidence %s carries no run, so it cannot back a finding of run %s; stamp the ledger row's Run cell first", quote(token), quote(findingRun))
+			}
+			if findingRun == "" {
+				// The qualified form is refused for a finding that carries no run, so naming the origin would be
+				// a repair the checker rejects: name the repair that works instead.
+				return fmt.Sprintf("evidence %s belongs to run %s, and this finding carries no run: stamp the finding's Run cell, or cite evidence that carries none", quote(token), quote(row.Run))
+			}
+			return fmt.Sprintf("bare evidence %s belongs to another run; cite it as %s:%s", quote(token), quote(row.Run), quote(token))
+		}
+	}
+	return fmt.Sprintf("evidence %s is not a row in the Evidence ledger", quote(token))
+}
+
 // LedgerRow is one row of the Evidence ledger, with the cells a machine reads resolved by column name
 // rather than by position. `Admit` is the single command the row declares and `Digest` the output that
 // command was observed to produce; both are empty on a plan written before those columns existed.
@@ -214,6 +265,7 @@ type LedgerRow struct {
 	Mutation     string
 	Reproduction string
 	Label        string
+	Run          string
 	Cells        int
 	HeaderCells  int
 }
@@ -231,12 +283,16 @@ func Ledger(doc string) []LedgerRow {
 	// carries and shares it with no other column: `admit` never resolves to `Executed`, `digest` never
 	// resolves to `Observed` or to the mutation column, and `normalize` resolves to nothing else.
 	index := map[string]int{}
-	for _, name := range []string{"claim", "executed", "admit", "inputs", "observed", "digest", "normalize", "mode", "mutate", "mutation", "reproduction"} {
+	for _, name := range []string{"claim", "executed", "admit", "inputs", "observed", "digest", "normalize", "mode", "mutate", "mutation", "reproduction", "label", "run"} {
 		index[name] = columnIndex(header, name)
 	}
 	ledger := make([]LedgerRow, 0, len(rows))
 	for _, row := range rows {
-		r := LedgerRow{ID: cell(row, 0), Label: cell(row, len(row)-1), Cells: len(row), HeaderCells: len(header)}
+		label := cell(row, len(row)-1)
+		if index["label"] >= 0 {
+			label = cell(row, index["label"])
+		}
+		r := LedgerRow{ID: cell(row, 0), Label: label, Run: cell(row, index["run"]), Cells: len(row), HeaderCells: len(header)}
 		for _, f := range []struct {
 			name  string
 			field *string
@@ -413,6 +469,29 @@ func RecordDigest(doc, id, digest string) (string, error) {
 		return "", fmt.Errorf("digest %q is not a sha256 digest: a Digest cell carries sha256:<64 lowercase hex>, the form a fresh observation takes", digest)
 	}
 	return recordCell(doc, id, "digest", "Digest", digest)
+}
+
+// RecordRun stamps the named Evidence ledger row with the active run, preserving every byte outside the Run cell.
+func RecordRun(doc, id, run string) (string, error) {
+	if run == "" {
+		return doc, nil
+	}
+	if err := ValidateRun("--run", run); err != nil {
+		return "", err
+	}
+	for _, row := range Ledger(doc) {
+		if row.ID != id {
+			continue
+		}
+		if row.Run != "" && row.Run != run {
+			// Recording replaces a digest, which is the observation this run just made. Moving a row from one
+			// run to another is a different act: doing it silently would rewrite the pin another run's finding
+			// cites, so it is refused instead.
+			return "", fmt.Errorf("evidence %s belongs to run %s: recording it would move the row to run %s, and a pin another run cites cannot change owner quietly", quote(id), quote(row.Run), quote(run))
+		}
+		break
+	}
+	return recordCell(doc, id, "run", "Run", run)
 }
 
 // RecordMode returns doc with the named ledger row's Mode cell replaced by mode, every other byte of the
@@ -922,9 +1001,9 @@ func cellCountBreach(table, first string, cells, header int) string {
 		where = "the " + table + " table"
 	}
 	if cells > header {
-		return fmt.Sprintf("%s row %q has %d cells against the header's %d: an unescaped `|` splits a cell, so the row carries more than it declares", where, first, cells, header)
+		return fmt.Sprintf("%s row \"%s\" has %d cells against the header's %d: an unescaped `|` splits a cell, so the row carries more than it declares", where, quote(first), cells, header)
 	}
-	return fmt.Sprintf("%s row %q has %d cells against the header's %d: a cell is missing, so the row carries less than it declares", where, first, cells, header)
+	return fmt.Sprintf("%s row \"%s\" has %d cells against the header's %d: a cell is missing, so the row carries less than it declares", where, quote(first), cells, header)
 }
 
 // table returns the data rows and the header of the first markdown table in a section.
@@ -1034,7 +1113,7 @@ func runColumnProblems(name string, scan tableScan) []string {
 			continue
 		}
 		if err := ValidateRun("Run", run); err != nil {
-			problems = append(problems, fmt.Sprintf("line %d: the %s table Run cell %q is invalid: %v", r.line, name, run, err))
+			problems = append(problems, fmt.Sprintf("line %d: the %s table Run cell \"%s\" is invalid: %v", r.line, name, quote(run), err))
 		}
 	}
 	return problems

@@ -292,7 +292,7 @@ func scopedRow(g *Gaps, table string, r row, iRun int, run string) (owned, inclu
 		return false, false
 	}
 	if err := ValidateRun("Run", raw); err != nil {
-		g.RunProblems = append(g.RunProblems, fmt.Sprintf("line %d: the %s table Run cell %q is invalid: %v", r.line, table, raw, err))
+		g.RunProblems = append(g.RunProblems, fmt.Sprintf("line %d: the %s table Run cell \"%s\" is invalid: %v", r.line, table, quote(raw), err))
 		return false, false
 	}
 	if raw != run {

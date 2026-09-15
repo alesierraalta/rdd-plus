@@ -74,6 +74,8 @@ reverse-engineered, and whether the method earned its keep — is recorded with
     ```json
     {"planPath": "docs/testing/<name>.md"}
     ```
+    Every row the discipline writes carries the active run in its `Run` cell. Evidence borrowed from another run is cited as `<run>:<id>`; a bare id means the same run.
+
     A plan nobody declares is a plan nothing clears. The declaration is repository-local, so a
     scoped plan cannot silently become the default plan for another checkout. The final message is
     written only after the declared plan is on disk and `rdd-plus plan check` passes: it reports

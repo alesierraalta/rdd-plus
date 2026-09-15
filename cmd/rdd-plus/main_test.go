@@ -113,8 +113,8 @@ func TestCLIContract(t *testing.T) {
 
 // ledgerHeader is the shipped Evidence ledger header. The `Admit` and `Digest` columns are the two a
 // recording run reads and writes, so a fixture drifting from this header would test another contract.
-const ledgerHeader = "| Id | Claim | Executed | Admit | Inputs and parameters | Observed | Digest | Mutation or negative control → result | Reproduction | Label (`observado` / `razonado`, literal) |\n" +
-	"|---|---|---|---|---|---|---|---|---|---|\n"
+const ledgerHeader = "| Id | Claim | Executed | Admit | Inputs and parameters | Observed | Digest | Mutation or negative control → result | Reproduction | Label (`observado` / `razonado`, literal) | Run |\n" +
+	"|---|---|---|---|---|---|---|---|---|---|---|\n"
 
 // writeLedger writes a minimal plan whose one Evidence ledger row carries the given Admit cell, so a
 // test drives the real binary over a real file rather than a string it never parsed.
@@ -131,16 +131,16 @@ func writeLedger(t *testing.T, dir, admit string) string {
 // ledgerRow is one ledger row with the given id and Admit cell and an empty Digest cell for a
 // recording run to fill.
 func ledgerRow(id, admit string) string {
-	return "| " + id + " | the claim | prose a human reads | " + admit + " | none | the observation | | reverted → red | rerun it | observado |\n"
+	return "| " + id + " | the claim | prose a human reads | " + admit + " | none | the observation | | reverted → red | rerun it | observado | |\n"
 }
 
 // compliantPlan is the smallest plan `plan check` accepts, so a recording run can be followed by a
 // check that still says well formed rather than by a smaller file that merely holds a digest.
 func compliantPlan(rows ...string) string {
 	return "## Findings\n\n" +
-		"| Id | Finding | Severity | Data safe? | Evidence id | Pinning test | Status | Verdict by / date | Reason | Fingerprint |\n" +
-		"|---|---|---|---|---|---|---|---|---|---|\n" +
-		"| F1 | `src/a.js:5` drops a quoted comma | data loss | yes | E1 | tests/a.test.js :: keeps a comma | fixed | me / 2026-09-10 | - | abc123 |\n" +
+		"| Id | Finding | Severity | Data safe? | Evidence id | Pinning test | Status | Verdict by / date | Reason | Fingerprint | Run |\n" +
+		"|---|---|---|---|---|---|---|---|---|---|---|\n" +
+		"| F1 | `src/a.js:5` drops a quoted comma | data loss | yes | E1 | tests/a.test.js :: keeps a comma | fixed | me / 2026-09-10 | - | abc123 | |\n" +
 		"\n## Evidence ledger\n\n" + ledgerHeader + strings.Join(rows, "")
 }
 
@@ -249,9 +249,9 @@ func TestPlanAdmitRecordAbortsTheWholeWriteWhenTheSpliceRefuses(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "plan.md")
 	before := "## Evidence ledger\n\n" +
-		"| Id | Claim | Executed | Admit | Inputs | Observed | Mutation | Reproduction | Label |\n" +
-		"|---|---|---|---|---|---|---|---|---|\n" +
-		"| E1 | the claim | prose | `echo hi` | none | the observation | reverted → red | rerun it | observado |\n"
+		"| Id | Claim | Executed | Admit | Inputs | Observed | Mutation | Reproduction | Label | Run |\n" +
+		"|---|---|---|---|---|---|---|---|---|---|\n" +
+		"| E1 | the claim | prose | `echo hi` | none | the observation | reverted → red | rerun it | observado | |\n"
 	if err := os.WriteFile(path, []byte(before), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -385,7 +385,7 @@ func TestPlanAdmitRefusesAnUnescapedPipeInARow(t *testing.T) {
 	dir := t.TempDir()
 	sentinel := filepath.Join(dir, "ran")
 	path := filepath.Join(dir, "plan.md")
-	row := "| E1 | the claim | prose | printf 'abc' | tr a-z A-Z > " + sentinel + " | none | the observation | | reverted → red | rerun it | observado |\n"
+	row := "| E1 | the claim | prose | printf 'abc' | tr a-z A-Z > " + sentinel + " | none | the observation | | reverted → red | rerun it | observado | |\n"
 	if err := os.WriteFile(path, []byte("## Evidence ledger\n\n"+ledgerHeader+row), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -584,14 +584,14 @@ func TestProbeHookRunsTheWiredCommand(t *testing.T) {
 
 const cliFindingPlan = `## Findings
 
-| Id | Finding | Severity | Data safe? | Evidence id | Pinning test | Status | Verdict by / date | Reason | Fingerprint |
-|---|---|---|---|---|---|---|---|---|---|
+| Id | Finding | Severity | Data safe? | Evidence id | Pinning test | Status | Verdict by / date | Reason | Fingerprint | Run |
+|---|---|---|---|---|---|---|---|---|---|---|
 
 ## Evidence ledger
 
-| Id | Claim |
-|---|---|
-| E1 | observed |
+| Id | Claim | Run |
+|---|---|---|
+| E1 | observed | |
 `
 
 func cliFindingArgs(path, id, evidence string, status ...string) []string {
@@ -673,9 +673,9 @@ func TestSandboxRunnerNamesADockerThatIsNotOnPath(t *testing.T) {
 // The plan add-finding refusal split: a malformed invocation exits 2 — the class `feedback` and
 // `bench score` already use — and a plan that refuses the row exits 1, the `plan check` class. One
 // case per refusal, and every refusal must leave the plan byte-for-byte unchanged.
-const cliFindingHeader = "## Findings\n\n| Id | Finding | Severity | Data safe? | Evidence id | Pinning test | Status | Verdict by / date | Reason | Fingerprint |\n|---|---|---|---|---|---|---|---|---|---|\n"
+const cliFindingHeader = "## Findings\n\n| Id | Finding | Severity | Data safe? | Evidence id | Pinning test | Status | Verdict by / date | Reason | Fingerprint | Run |\n|---|---|---|---|---|---|---|---|---|---|---|\n"
 
-const cliEvidenceLedger = "\n## Evidence ledger\n\n| Id | Claim |\n|---|---|\n| E1 | c |\n"
+const cliEvidenceLedger = "\n## Evidence ledger\n\n| Id | Claim | Run |\n|---|---|---|\n| E1 | c | |\n"
 
 // findingArgs builds the happy-path invocation, with one flag overridden per case. An override to the
 // empty string is what the CLI sees for `--flag ""`.
@@ -702,7 +702,7 @@ func seedLedgerRow(t *testing.T, doc string) string {
 	lines := strings.Split(doc, "\n")
 	for i, l := range lines {
 		if strings.HasPrefix(l, "| Id | Claim") {
-			row := "| E1 | it drops the comma | `node --test` | `a,b` | 3 fields | reverted -> red | same input | observado |"
+			row := "| E1 | it drops the comma | `node --test` | `a,b` | 3 fields | reverted -> red | same input | observado | |"
 			// The separator follows the header, so the new row goes after it.
 			rest := append([]string{lines[i+1], row}, lines[i+2:]...)
 			return strings.Join(append(lines[:i+1], rest...), "\n")
@@ -738,13 +738,13 @@ func TestPlanAddFindingExitCodes(t *testing.T) {
 		{name: "the plan cannot be read", plan: valid, missing: true, wantExit: 1, wantOut: "add-finding"},
 		{name: "no Findings section", plan: cliEvidenceLedger, wantExit: 1, wantOut: "no ## Findings section"},
 		{name: "a Findings section that is not a table", plan: "## Findings\n\nprose, not a table\n\n" + cliEvidenceLedger, wantExit: 1, wantOut: "no table"},
-		{name: "a Findings table cut by prose", plan: cliFindingHeader + "| F0 | `src/b.js:9` | M | yes | E1 |  | open | me | - | - |\n" + "a sentence that closes the table\n" + "| F2 | `src/c.js:1` | M | yes | E1 |  | open | me | - | - |\n" + cliEvidenceLedger, wantExit: 1, wantOut: "interrupted"},
+		{name: "a Findings table cut by prose", plan: cliFindingHeader + "| F0 | `src/b.js:9` | M | yes | E1 |  | open | me | - | - | |\n" + "a sentence that closes the table\n" + "| F2 | `src/c.js:1` | M | yes | E1 |  | open | me | - | - | |\n" + cliEvidenceLedger, wantExit: 1, wantOut: "interrupted"},
 		{name: "a Findings region ending inside a fence", plan: cliFindingHeader + "\n```markdown\n| Id | Finding |\n|---|---|\n", wantExit: 1, wantOut: "code fence opened"},
-		{name: "a header with no Id column", plan: "## Findings\n\n| Finding | Severity | Data safe? | Evidence id | Pinning test | Status | Verdict by / date | Reason | Fingerprint |\n|---|---|---|---|---|---|---|---|---|\n" + cliEvidenceLedger, wantExit: 1, wantOut: "no Id column"},
-		{name: "a header without a column the row needs", plan: "## Findings\n\n| Id | Finding | Data safe? | Evidence id | Status | Verdict by / date | Reason | Fingerprint |\n|---|---|---|---|---|---|---|---|\n" + cliEvidenceLedger, wantExit: 1, wantOut: "Severity"},
-		{name: "a duplicate id", plan: cliFindingHeader + "| F1 | `src/b.js:9` | M | yes | E1 |  | open | me | - | - |\n" + cliEvidenceLedger, wantExit: 1, wantOut: "already row"},
+		{name: "a header with no Id column", plan: "## Findings\n\n| Finding | Severity | Data safe? | Evidence id | Pinning test | Status | Verdict by / date | Reason | Fingerprint | Run |\n|---|---|---|---|---|---|---|---|---|\n" + cliEvidenceLedger, wantExit: 1, wantOut: "no Id column"},
+		{name: "a header without a column the row needs", plan: "## Findings\n\n| Id | Finding | Data safe? | Evidence id | Status | Verdict by / date | Reason | Fingerprint | Run |\n|---|---|---|---|---|---|---|---|\n" + cliEvidenceLedger, wantExit: 1, wantOut: "Severity"},
+		{name: "a duplicate id", plan: cliFindingHeader + "| F1 | `src/b.js:9` | M | yes | E1 |  | open | me | - | - | |\n" + cliEvidenceLedger, wantExit: 1, wantOut: "already row"},
 		{name: "a dangling evidence id", plan: valid, over: map[string]string{"evidence": "E9"}, wantExit: 1, wantOut: "E9"},
-		{name: "a plan the checker already rejects", plan: cliFindingHeader + "| F0 | no path here | M | yes | E1 |  | open | me | - | - |\n" + cliEvidenceLedger, wantExit: 1, wantOut: "would not pass plan check"},
+		{name: "a plan the checker already rejects", plan: cliFindingHeader + "| F0 | no path here | M | yes | E1 |  | open | me | - | - | |\n" + cliEvidenceLedger, wantExit: 1, wantOut: "would not pass plan check"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
