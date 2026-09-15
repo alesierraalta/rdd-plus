@@ -145,18 +145,33 @@ func Run(stdin io.Reader, stdout io.Writer, logPath string, now time.Time) (code
 // the reason text: breadth is owed by layers, by ranked targets, or by both, and a run that swept every
 // layer it planned still owes if its ranked targets are pending.
 func auditLine(res Result) string {
+	run := res.Run
+	if run == "" && res.Entry != nil {
+		run = res.Entry.Run
+	}
+	prefix := "rdd-plus: "
+	if run != "" {
+		prefix = "rdd-plus: run " + run + ": "
+	}
+	var line string
 	switch {
 	case res.Owed > 0 && res.Pending > 0:
-		return fmt.Sprintf("rdd-plus: %d layer(s) assigned and never invoked, %d ranked target(s) still pending. Want feedback on this run?", res.Owed, res.Pending)
+		line = fmt.Sprintf("%s%d layer(s) assigned and never invoked, %d ranked target(s) still pending. Want feedback on this run?", prefix, res.Owed, res.Pending)
 	case res.Owed > 0:
-		return fmt.Sprintf("rdd-plus: %d layer(s) assigned and never invoked. Want feedback on this run?", res.Owed)
+		line = fmt.Sprintf("%s%d layer(s) assigned and never invoked. Want feedback on this run?", prefix, res.Owed)
 	case res.Pending > 0:
-		return fmt.Sprintf("rdd-plus: %d ranked target(s) still pending. Want feedback on this run?", res.Pending)
+		line = fmt.Sprintf("%s%d ranked target(s) still pending. Want feedback on this run?", prefix, res.Pending)
 	case res.Unreadable > 0:
-		return fmt.Sprintf("rdd-plus: %d breadth table(s) could not be read to the end, so the rows under it were never counted. Want feedback on this run?", res.Unreadable)
+		line = fmt.Sprintf("%s%d breadth table(s) could not be read to the end, so the rows under it were never counted. Want feedback on this run?", prefix, res.Unreadable)
 	case res.Unplanned:
-		return "rdd-plus: the plan has no layer matrix, so the breadth sweep was never planned. Want feedback on this run?"
+		line = prefix + "the plan has no layer matrix, so the breadth sweep was never planned. Want feedback on this run?"
+	case res.Uncounted:
+		line = prefix + "the selected run could not be read completely, so its rows were not counted. Want feedback on this run?"
 	default:
-		return "rdd-plus: the testing plan owes nothing. Want feedback on this run?"
+		line = prefix + "the testing plan owes nothing. Want feedback on this run?"
 	}
+	if res.Unscoped > 0 {
+		line += fmt.Sprintf(" %d unscoped row(s) are not counted; rdd-plus plan gaps --all shows every row", res.Unscoped)
+	}
+	return line
 }

@@ -19,6 +19,8 @@ type Deps struct {
 	Git      func(dir string, args ...string) (string, error)
 	ReadFile func(path string) (string, error)
 	PlanPath string
+	Run      string
+	All      bool
 }
 
 // Result is what the caller prints and exits with.
@@ -40,23 +42,37 @@ func Run(cwd string, d Deps) Result {
 	if d.ReadFile == nil {
 		d.ReadFile = readFile
 	}
+	if d.All && d.Run != "" {
+		return Result{Exit: 2, Text: "check: --run and --all cannot combine"}
+	}
+	if d.Run != "" {
+		if err := plan.ValidateRun("--run", d.Run); err != nil {
+			return Result{Exit: 2, Text: err.Error()}
+		}
+	}
 	rootOut, err := d.Git(cwd, "rev-parse", "--show-toplevel")
 	root := strings.TrimSpace(rootOut)
 	if err != nil || root == "" {
 		return Result{Text: "not a git repository: nothing to check"}
 	}
-	planRelPath := d.PlanPath
-	if planRelPath != "" {
-		if err := plan.ValidatePlanPath("--path", planRelPath); err != nil {
+	if d.PlanPath != "" {
+		if err := plan.ValidatePlanPath("--path", d.PlanPath); err != nil {
 			return Result{Exit: 1, Text: err.Error()}
 		}
-		planRelPath = filepath.Clean(planRelPath)
-	} else {
-		var cfgErr error
-		planRelPath, cfgErr = plan.ResolvePath(root, d.ReadFile)
-		if cfgErr != nil {
-			return Result{Exit: 1, Text: "the plan declaration could not be read: " + cfgErr.Error()}
-		}
+	}
+	resolvedPath, declaredRun, cfgErr := plan.Resolve(root, d.ReadFile)
+	if cfgErr != nil {
+		return Result{Exit: 1, Text: "the plan declaration could not be read: " + cfgErr.Error()}
+	}
+	planRelPath := resolvedPath
+	if d.PlanPath != "" {
+		planRelPath = filepath.Clean(d.PlanPath)
+	}
+	selectedRun := declaredRun
+	if d.All {
+		selectedRun = ""
+	} else if d.Run != "" {
+		selectedRun = d.Run
 	}
 	planFilePath := filepath.Join(root, planRelPath)
 	// The plan is read before the diff so the versioning caveat rides with every verdict, including
@@ -85,12 +101,21 @@ func Run(cwd string, d Deps) Result {
 		return Result{Exit: 1, Files: files, Text: warn + changedLine(files) +
 			"\nthere is no test plan at " + planRelPath + ": run the testing discipline, or write down why this change does not warrant it"}
 	}
-	gaps, err := plan.GapsIn(body)
+	gaps, err := plan.GapsForRun(body, selectedRun)
 	if err != nil {
-		return Result{Exit: 1, Files: files, Text: warn + changedLine(files) + "\nthe plan could not be read: " + err.Error()}
+		return Result{Exit: 2, Files: files, Text: warn + changedLine(files) + "\nthe selected run could not be read: " + err.Error()}
 	}
 	if !gaps.Any() {
-		return Result{Files: files, Text: warn + changedLine(files) + "\n" + planRelPath + " owes nothing: every assigned layer was swept and every ranked target is done"}
+		text := warn + changedLine(files) + "\n"
+		if selectedRun == "" {
+			text += planRelPath + " owes nothing: every assigned layer was swept and every ranked target is done"
+		} else {
+			text += "run " + selectedRun + ": " + planRelPath + " owes nothing: every assigned layer was swept and every ranked target is done"
+			if unscoped := gaps.UnscopedLayers + gaps.UnscopedTargets; unscoped > 0 {
+				text += fmt.Sprintf("\n%d row(s) belong to no run and are not counted; rdd-plus plan gaps --all shows every row", unscoped)
+			}
+		}
+		return Result{Files: files, Text: text}
 	}
 	return Result{Exit: 1, Files: files, Text: warn + changedLine(files) + "\n" + gaps.Report()}
 }

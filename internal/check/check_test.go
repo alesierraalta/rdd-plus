@@ -300,3 +300,96 @@ func TestVersioningCaveatStaysQuietWithoutARepositoryOrAPlan(t *testing.T) {
 		})
 	}
 }
+
+func runScopedPlan(run, layerStatus, targetStatus string) string {
+	return "## Layer matrix\n\n| Layer | Skill | Scope | Status | Run |\n|---|---|---|---|---|\n" +
+		"| Security | `appsec-adversarial-auditor` | input | " + layerStatus + " | " + run + " |\n" +
+		"\n## Ranked targets\n\n| Target | Verdict | Status | Run |\n|---|---|---|---|\n" +
+		"| 1. auth | probe | " + targetStatus + " | " + run + " |\n"
+}
+
+func TestCheckReadsTheDeclaredRun(t *testing.T) {
+	const declared = "redis-pool"
+	repo := &fakeRepo{
+		root:   "/r",
+		status: porcelain(" M src/app.js"),
+		plans: map[string]string{
+			plan.DefaultPath:              owing,
+			"docs/testing/scoped-plan.md": runScopedPlan(declared, "done", "done"),
+		},
+		config: `{"planPath":"docs/testing/scoped-plan.md","run":"` + declared + `"}`,
+	}
+	res := Run(".", repo.deps())
+	if res.Exit != 0 || !strings.Contains(res.Text, declared) || strings.Contains(res.Text, "appsec-adversarial-auditor") {
+		t.Fatalf("declared run was not selected: exit=%d text=%s", res.Exit, res.Text)
+	}
+}
+
+func TestCheckRunFlagBeatsTheDeclaration(t *testing.T) {
+	repo := &fakeRepo{
+		root:   "/r",
+		status: porcelain(" M src/app.js"),
+		plans: map[string]string{
+			plan.DefaultPath:              owing,
+			"docs/testing/scoped-plan.md": runScopedPlan("declared-run", "pending", "pending"),
+		},
+		config: `{"planPath":"docs/testing/scoped-plan.md","run":"declared-run"}`,
+	}
+	deps := repo.deps()
+	deps.Run = "flag-run"
+	res := Run(".", deps)
+	if res.Exit != 1 || !strings.Contains(res.Text, "run flag-run") || !strings.Contains(res.Text, "nobody opened") {
+		t.Fatalf("explicit run did not win: exit=%d text=%s", res.Exit, res.Text)
+	}
+}
+
+func TestCheckAllIgnoresBoth(t *testing.T) {
+	allDoc := runScopedPlan("redis-pool", "done", "done")
+	allDoc = strings.Replace(allDoc, "\n## Ranked targets", "\n| Legacy | `appsec-adversarial-auditor` | old | pending |  |\n\n## Ranked targets", 1)
+	repo := &fakeRepo{
+		root:   "/r",
+		status: porcelain(" M src/app.js"),
+		plans:  map[string]string{plan.DefaultPath: owing, "docs/testing/scoped-plan.md": allDoc},
+		config: `{"planPath":"docs/testing/scoped-plan.md","run":"redis-pool"}`,
+	}
+	deps := repo.deps()
+	deps.All = true
+	res := Run(".", deps)
+	if res.Exit != 1 || !strings.Contains(res.Text, "appsec-adversarial-auditor") || strings.Contains(res.Text, "run redis-pool:") {
+		t.Fatalf("--all did not restore document-wide counting: exit=%d text=%s", res.Exit, res.Text)
+	}
+}
+
+func TestCheckRefusesRunWithAll(t *testing.T) {
+	deps := (&fakeRepo{root: "/r", status: porcelain(" M src/app.js"), plan: settled}).deps()
+	deps.Run, deps.All = "redis-pool", true
+	res := Run(".", deps)
+	if res.Exit != 2 || !strings.Contains(res.Text, "--run and --all") {
+		t.Fatalf("exit=%d text=%s, want usage refusal", res.Exit, res.Text)
+	}
+}
+
+func TestCheckOwesNothingNamesTheRunAndStillDisclosesUnscopedRows(t *testing.T) {
+	doc := "## Layer matrix\n\n| Layer | Skill | Scope | Status | Run |\n|---|---|---|---|---|\n" +
+		"| Security | `appsec-adversarial-auditor` | input | done | redis-pool |\n" +
+		"| Legacy | `appsec-adversarial-auditor` | old | pending |  |\n" +
+		"\n## Ranked targets\n\n| Target | Verdict | Status | Run |\n|---|---|---|---|\n" +
+		"| 1. auth | probe | done | redis-pool |\n" +
+		"| old target | probe | pending |  |\n" +
+		"| other target | probe | pending | other-run |\n"
+	repo := &fakeRepo{
+		root:   "/r",
+		status: porcelain(" M src/app.js"),
+		plan:   doc,
+		config: `{"run":"redis-pool"}`,
+	}
+	res := Run(".", repo.deps())
+	if res.Exit != 0 || !strings.Contains(res.Text, "run redis-pool") || !strings.Contains(res.Text, "owes nothing") || !strings.Contains(res.Text, "2 row(s) belong to no run") {
+		t.Fatalf("scoped settled report is dishonest: exit=%d text=%s", res.Exit, res.Text)
+	}
+	// Another run's row is fully attributed: it is not owed here and it is not named, so a settled run cannot
+	// drag the operator's attention back to work that is not theirs.
+	if strings.Contains(res.Text, "other target") || strings.Contains(res.Text, "other-run") {
+		t.Fatalf("the settled report names another run's row: %s", res.Text)
+	}
+}

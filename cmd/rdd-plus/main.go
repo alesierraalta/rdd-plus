@@ -36,6 +36,7 @@ commands:
   bench    run the testing skill against sealed-key fixtures and score it (run | score | history)
   plan     write the skeleton, check the contract, name what breadth is still owed, record a
            Findings row from flags, and admit every Evidence row (init | check | gaps | upgrade | add-finding | admit)
+  run      open a bounded run or report the active run (start | status)
   check    say what this repository still owes, from git and the plan alone: no hook payload,
            no transcript, no host. Exit 1 when there is something to do.
   feedback record an honest process report on the method itself, or read the reports back
@@ -70,9 +71,11 @@ plan admit [--path <path>] [--execute] [--sandbox] [--sandbox-image <image>] [--
             --record writes the freshly observed digest back into the named rows and requires
             --execute, because a dry run makes no observation to pin; exit 1 when any row is
             refused or a digest cannot be written)
-check [--cwd .] [--path <path>]
+run start <slug> [--path <path>]
+run status
+check [--cwd .] [--path <path>] [--run <slug>] [--all]
 --path: relative values resolve against the worktree root; absolute values are taken as given except in check, which refuses them. Without --path, use the plan declared in .rdd-plus.json when there is one, else docs/testing/test-plan.md
---run: a lowercase slug identifying the active run; plan gaps uses the declaration when omitted, while --all forces whole-document counts
+--run: a lowercase slug identifying the active run; plan gaps and check use the declaration when omitted, while --all forces whole-document counts
 feedback [--config-dir <dir>] [--template] [--file <path>] [--plan <path>] [--summary]
 `
 
@@ -100,6 +103,8 @@ func main() {
 		os.Exit(runBench(os.Args[2:]))
 	case "plan":
 		os.Exit(runPlan(os.Args[2:]))
+	case "run":
+		os.Exit(runRun(os.Args[2:]))
 	case "check":
 		os.Exit(runCheck(os.Args[2:]))
 	case "feedback":
@@ -180,7 +185,13 @@ func runCheck(args []string) int {
 	fs := flag.NewFlagSet("check", flag.ContinueOnError)
 	cwd := fs.String("cwd", ".", "directory inside the repository to check")
 	path := fs.String("path", "", "plan file relative to the repository root")
+	run := fs.String("run", "", "active run slug")
+	all := fs.Bool("all", false, "count every row in the document")
 	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *all && flagSet(fs, "run") {
+		fmt.Fprintln(os.Stderr, "check: --run and --all cannot combine")
 		return 2
 	}
 	if flagSet(fs, "path") {
@@ -189,9 +200,135 @@ func runCheck(args []string) int {
 			return 2
 		}
 	}
-	res := check.Run(*cwd, check.Deps{PlanPath: *path})
+	if flagSet(fs, "run") {
+		if err := plan.ValidateRun("--run", *run); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 2
+		}
+	}
+	res := check.Run(*cwd, check.Deps{PlanPath: *path, Run: *run, All: *all})
 	fmt.Println(strings.TrimRight(res.Text, "\n"))
 	return res.Exit
+}
+
+func runRun(args []string) int {
+	if len(args) == 0 {
+		fmt.Fprint(os.Stderr, usage)
+		return 2
+	}
+	switch args[0] {
+	case "start":
+		if len(args) < 2 {
+			fmt.Fprintln(os.Stderr, "run start: a slug is required")
+			return 2
+		}
+		run := args[1]
+		if err := plan.ValidateRun("run slug", run); err != nil {
+			fmt.Fprintln(os.Stderr, "run start:", err)
+			return 2
+		}
+		fs := flag.NewFlagSet("run start", flag.ContinueOnError)
+		path := fs.String("path", "", "plan file relative to the repository root")
+		if err := fs.Parse(args[2:]); err != nil {
+			return 2
+		}
+		if fs.NArg() != 0 {
+			fmt.Fprintln(os.Stderr, "run start: unexpected argument", fs.Arg(0))
+			return 2
+		}
+		if flagSet(fs, "path") {
+			if err := plan.ValidatePlanPath("--path", *path); err != nil {
+				fmt.Fprintln(os.Stderr, "run start:", err)
+				return 2
+			}
+		}
+		root := feedback.RepoRoot(".")
+		planPath, _, err := resolveRunPlan(root, *path)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "run start:", err)
+			return 1
+		}
+		seeded, err := plan.StartRun(planPath, run)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "run start:", err)
+			return 1
+		}
+		var declarationPath []string
+		if flagSet(fs, "path") && !filepath.IsAbs(*path) {
+			declarationPath = []string{filepath.Clean(*path)}
+		}
+		if err := plan.DeclareRun(root, run, declarationPath...); err != nil {
+			fmt.Fprintln(os.Stderr, "run start:", err)
+			return 1
+		}
+		if seeded {
+			fmt.Printf("started run %s in %s: seeded six layer rows and declared it active\n", run, planPath)
+		} else {
+			fmt.Printf("run %s is already open in %s: no layer rows seeded\n", run, planPath)
+		}
+		return 0
+	case "status":
+		if len(args) > 1 {
+			fmt.Fprintln(os.Stderr, "run status: unexpected argument", args[1])
+			return 2
+		}
+		return runStatus()
+	default:
+		fmt.Fprint(os.Stderr, usage)
+		return 2
+	}
+}
+
+func resolveRunPlan(root, explicit string) (string, string, error) {
+	rel, declaredRun, err := plan.Resolve(root, nil)
+	if err != nil {
+		return "", "", fmt.Errorf("the plan declaration could not be read: %w", err)
+	}
+	if explicit != "" {
+		path, err := plan.ResolveFromRoot(root, "--path", explicit)
+		return path, declaredRun, err
+	}
+	return filepath.Join(root, rel), declaredRun, nil
+}
+
+func runStatus() int {
+	root := feedback.RepoRoot(".")
+	path, run, err := resolveRunPlan(root, "")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "run status:", err)
+		return 1
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "run status:", err)
+		return 1
+	}
+	if run == "" {
+		gaps, err := plan.GapsIn(string(raw))
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "run status:", err)
+			return 1
+		}
+		fmt.Printf("no active run declared; reporting %s document-wide\n", path)
+		fmt.Print(gaps.Report())
+		fmt.Printf("unscoped rows: %d\n", plan.UnscopedRows(string(raw)))
+		if gaps.Any() {
+			return 1
+		}
+		return 0
+	}
+	gaps, err := plan.GapsForRun(string(raw), run)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "run status:", err)
+		return 1
+	}
+	fmt.Printf("active run: %s\n", run)
+	fmt.Print(gaps.Report())
+	fmt.Printf("unscoped rows: %d\n", gaps.UnscopedLayers+gaps.UnscopedTargets)
+	if gaps.Any() {
+		return 1
+	}
+	return 0
 }
 
 // flagSet reports whether the operator passed the named flag, which is how an explicit empty value is

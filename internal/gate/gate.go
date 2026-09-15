@@ -73,6 +73,7 @@ type Entry struct {
 	Skipped       string   `json:"skipped,omitempty"`
 	OptedOut      bool     `json:"opted_out,omitempty"`
 	Plan          string   `json:"plan,omitempty"`
+	Run           string   `json:"run,omitempty"`
 }
 
 type Result struct {
@@ -81,6 +82,7 @@ type Result struct {
 	Reason string
 	Files  []string
 	Entry  *Entry
+	Run    string
 	// Owed and Pending are the decision itself, structured: layers assigned and never invoked, and
 	// ranked targets still pending. The operator line reads them instead of counting phrases inside
 	// Reason — prose this package writes and is free to reword, which is how the line-anchored report
@@ -91,6 +93,10 @@ type Result struct {
 	// both make Gaps.Any() true without raising Owed or Pending.
 	Unreadable int
 	Unplanned  bool
+	// Uncounted means the selected run could not be attributed to readable rows, so the operator line must
+	// not collapse the fail-closed result into "owes nothing".
+	Uncounted bool
+	Unscoped  int // breadth rows with no Run cell; disclosed but excluded from a scoped count
 	// Problem is a repository state the gate could not act on: a plan declaration it cannot read. It is
 	// not an audit — nothing was read — and it is never silence: the model and the operator both hear it.
 	Problem string
@@ -305,11 +311,12 @@ func Decide(in Input, d Deps) Result {
 		Repo:         filepath.Base(root),
 		SkillsLoaded: []string{},
 	}
-	rel, cfgErr := plan.ResolvePath(root, func(path string) (string, error) {
+	rel, declaredRun, cfgErr := plan.Resolve(root, func(path string) (string, error) {
 		return readPlan(d, path)
 	})
 	if cfgErr == nil {
 		entry.Plan = rel
+		entry.Run = declaredRun
 	}
 	statusOut, err := d.Git(root, "status", "--porcelain", "-z", "-uall")
 	if err != nil {
@@ -363,15 +370,20 @@ func Decide(in Input, d Deps) Result {
 		}
 		planPath := filepath.Join(root, rel)
 		if body, err := readPlan(d, planPath); err == nil {
-			if gaps, err := plan.GapsIn(body); err == nil {
+			if gaps, err := plan.GapsForRun(body, declaredRun); err == nil {
 				res.Audit = true
 				entry.Audited = true
+				res.Run = declaredRun
 				res.Owed, res.Pending = len(gaps.UnsweptLayers), len(gaps.PendingTargets)
 				res.Unreadable, res.Unplanned = len(gaps.InterruptedTables), gaps.NoLayerMatrix
+				res.Uncounted = gaps.RunMissing || len(gaps.RunProblems) > 0
+				res.Unscoped = gaps.UnscopedLayers + gaps.UnscopedTargets
 				if gaps.Any() {
-					res.Reason = BuildAuditReason(rel, gaps.Report())
+					res.Reason = BuildAuditReason(rel, declaredRun, gaps.Report())
+				} else if gaps.UnscopedLayers+gaps.UnscopedTargets > 0 {
+					res.Reason = BuildCompleteReason(rel, declaredRun, gaps.Report())
 				} else {
-					res.Reason = BuildCompleteReason(rel)
+					res.Reason = BuildCompleteReason(rel, declaredRun)
 				}
 			}
 		}

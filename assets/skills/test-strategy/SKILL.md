@@ -102,11 +102,15 @@ reverse-engineered, and whether the method earned its keep — is recorded with
 | No declared plan (`.rdd-plus.json` absent or has no `planPath`) | PLAN the blast radius when the change is bounded (a scoped run), the whole app when it is not, then EXECUTE the first rows, same run |
 | Plan exists but predates the template (missing sections or `Baseline:`) | Migrate it: add the missing sections empty, record the baseline (`assets/fingerprint.sh`), treat the tree as changed, then EXECUTE |
 | Plan exists, fingerprint unchanged | EXECUTE from the first `pending` row |
+| Plan exists and the active run's layers are all `pending` with no ranked targets | PLAN this run's targets inside the existing plan, then EXECUTE |
 | Plan exists, files differ from the plan baseline | Refresh rows in that diff's blast radius, rank first, EXECUTE |
 | Plan exists, baseline diff is large or structural | PLAN refresh (keep statuses), then EXECUTE |
 | User says "plan only" / "solo el plan" | PLAN, stop |
 | User says "calibra el testing" | CALIBRATE ([references/calibration.md](references/calibration.md)) |
 | Monorepo with several apps, none named | Ask one question: which app |
+
+**A run that is not the repository's first starts with `rdd-plus run start <slug>`.** This opens the
+run, seeds its six layer rows, and declares which run the following PLAN and EXECUTE steps read.
 
 **A bounded run plans scoped.** When the trigger is bounded — the operator names one area, file or
 module to test, or the diff is confined to one or two files — and it touches none of the classes
@@ -158,9 +162,13 @@ example `docs/testing/test-plan-reports.md` beside an existing `test-plan.md` �
    [assets/test-plan-template.md](assets/test-plan-template.md) with every table in place; rows
    start `pending`, `none` rows start `n/a`. Close the run with `rdd-plus plan check` (rule 12).
 
+   PLAN stamps every row it writes with the active run in its `Run` cell. A blank `Run` cell belongs
+   to no run and is not counted; never leave that omission silent.
+
 **EXECUTE**
 
-1. Pick the first `pending` row, or the one the user names.
+1. Pick the first `pending` row for the active run, or the one the user names; never select a row
+   owned by another run.
 2. Sandbox: throwaway worktree or ephemeral container; environment proof; probes in scratchpad
    or gitignored `testLocales/`.
 3. Invoke the assigned sibling (read its `SKILL.md` and apply it inline where no Skill tool

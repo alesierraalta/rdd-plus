@@ -14,6 +14,7 @@ import (
 
 	"github.com/alesierraalta/rdd-plus/internal/buildinfo"
 	"github.com/alesierraalta/rdd-plus/internal/evidence"
+	"github.com/alesierraalta/rdd-plus/internal/plan"
 )
 
 // buildCLI compiles the command once per test binary; the contract under test is the process's,
@@ -817,6 +818,117 @@ func runCLIAt(t *testing.T, dir, bin string, args ...string) (string, int) {
 	}
 	t.Fatalf("run %v: %v", args, err)
 	return "", -1
+}
+
+func scratchPlanRepo(t *testing.T, bin string) string {
+	t.Helper()
+	dir := t.TempDir()
+	if out, err := exec.Command("git", "init", dir).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	out, code := runCLIAt(t, dir, bin, "plan", "init")
+	if code != 0 {
+		t.Fatalf("plan init = %d\n%s", code, out)
+	}
+	return dir
+}
+
+func TestRunStartSeedsTheSixLayerRows(t *testing.T) {
+	bin := buildCLI(t)
+	dir := scratchPlanRepo(t, bin)
+	out, code := runCLIAt(t, dir, bin, "run", "start", "redis-pool")
+	if code != 0 {
+		t.Fatalf("run start = %d\n%s", code, out)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "docs", "testing", "test-plan.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(string(raw), "| redis-pool |\n"); got != 6 {
+		t.Fatalf("seeded run rows = %d, want six\n%s", got, raw)
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		if strings.Contains(line, "| redis-pool |") && !strings.Contains(line, "| pending | redis-pool |") {
+			t.Fatalf("seeded row is not pending: %s", line)
+		}
+	}
+	declaration, err := os.ReadFile(filepath.Join(dir, plan.ConfigName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(declaration) != `{"run":"redis-pool"}` {
+		t.Fatalf("declaration = %q", declaration)
+	}
+}
+
+func TestRunStartIsIdempotent(t *testing.T) {
+	bin := buildCLI(t)
+	dir := scratchPlanRepo(t, bin)
+	if out, code := runCLIAt(t, dir, bin, "run", "start", "redis-pool"); code != 0 {
+		t.Fatalf("first run start = %d\n%s", code, out)
+	}
+	before, err := os.ReadFile(filepath.Join(dir, "docs", "testing", "test-plan.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, code := runCLIAt(t, dir, bin, "run", "start", "redis-pool")
+	if code != 0 || !strings.Contains(out, "no layer rows seeded") {
+		t.Fatalf("second run start = %d\n%s", code, out)
+	}
+	after, err := os.ReadFile(filepath.Join(dir, "docs", "testing", "test-plan.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("idempotent run start changed the plan")
+	}
+}
+
+func TestRunStartRefusesAPlanWithoutTheRunColumn(t *testing.T) {
+	bin := buildCLI(t)
+	dir := t.TempDir()
+	if out, err := exec.Command("git", "init", dir).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	path := filepath.Join(dir, "plan.md")
+	doc := "## Layer matrix\n\n| Layer | Skill | Scope | Status |\n|---|---|---|---|\n| Security | appsec | input | pending |\n"
+	if err := os.WriteFile(path, []byte(doc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, code := runCLIAt(t, dir, bin, "run", "start", "redis-pool", "--path", "plan.md")
+	if code != 1 || !strings.Contains(out, "plan upgrade") {
+		t.Fatalf("legacy run start = %d\n%s", code, out)
+	}
+}
+
+func TestRunStartRefusesABadSlug(t *testing.T) {
+	bin := buildCLI(t)
+	dir := t.TempDir()
+	out, code := runCLIAt(t, dir, bin, "run", "start", "Bad_Slug")
+	if code != 2 || !strings.Contains(out, "run slug") {
+		t.Fatalf("bad slug = %d\n%s", code, out)
+	}
+}
+
+func TestRunStatusNamesTheRunAndTheUnscopedRows(t *testing.T) {
+	bin := buildCLI(t)
+	dir := scratchPlanRepo(t, bin)
+	if out, code := runCLIAt(t, dir, bin, "run", "start", "redis-pool"); code != 0 {
+		t.Fatalf("run start = %d\n%s", code, out)
+	}
+	path := filepath.Join(dir, "docs", "testing", "test-plan.md")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw = bytes.Replace(raw, []byte("| Security | `appsec-adversarial-auditor` | auth boundaries, untrusted input, secrets | pending |  |"), []byte("| Legacy | appsec | old | pending |  |\n| Security | `appsec-adversarial-auditor` | auth boundaries, untrusted input, secrets | pending |  |"), 1)
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, code := runCLIAt(t, dir, bin, "run", "status")
+	if code != 1 || !strings.Contains(out, "redis-pool") || !strings.Contains(out, "unscoped rows: 7") {
+		t.Fatalf("run status = %d\n%s", code, out)
+	}
 }
 
 func TestPlanScopedCLIRealRun(t *testing.T) {
