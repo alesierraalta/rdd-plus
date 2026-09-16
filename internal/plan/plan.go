@@ -958,20 +958,38 @@ func tableProblems(doc string) []string {
 	lines := strings.Split(doc, "\n")
 	var problems []string
 	for _, region := range headingRegions(lines) {
-		for start := region.start; start < region.end; {
-			scan := scanTable(lines, start, region.end)
-			if scan.header != nil {
-				for _, r := range scan.rows {
-					if len(r.cells) != len(scan.header) {
-						problems = append(problems, cellCountBreach(region.name, cell(r.cells, 0), len(r.cells), len(scan.header)))
-					}
-				}
-			}
-			// The block closed at a line inside this region: the next table of the same section may follow it.
-			if scan.ended == 0 || scan.ended <= start || scan.ended >= region.end {
-				break
-			}
-			start = scan.ended
+		problems = append(problems, regionTableProblems(lines, region)...)
+	}
+	return problems
+}
+
+// regionTableProblems walks every table one heading region holds. A region can hold more than one: a table ends
+// at the first line that is not a row of it, and the next table of the same section may follow that line.
+func regionTableProblems(lines []string, region headingRegion) []string {
+	var problems []string
+	for start := region.start; start < region.end; {
+		scan := scanTable(lines, start, region.end)
+		problems = append(problems, tableRowBreaches(region.name, scan)...)
+		// The block closed at a line inside this region: the next table of the same section may follow it.
+		if scan.ended == 0 || scan.ended <= start || scan.ended >= region.end {
+			break
+		}
+		start = scan.ended
+	}
+	return problems
+}
+
+// tableRowBreaches reports the rows of one table that do not carry the cells their header declares. A table with
+// no header has no count to hold a row to, so it earns nothing here — whether a section owes a table is a
+// different question, asked elsewhere.
+func tableRowBreaches(table string, scan tableScan) []string {
+	if scan.header == nil {
+		return nil
+	}
+	var problems []string
+	for _, r := range scan.rows {
+		if len(r.cells) != len(scan.header) {
+			problems = append(problems, cellCountBreach(table, cell(r.cells, 0), len(r.cells), len(scan.header)))
 		}
 	}
 	return problems
