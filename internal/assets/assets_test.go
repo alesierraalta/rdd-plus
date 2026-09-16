@@ -74,3 +74,25 @@ func TestNoRunArtifactsAreEmbedded(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// F24: every number `plan gaps` prints is read from the plan's own cells, so a status saying a sibling was
+// invoked is believed even when nothing can prove it, and an inline run of a sibling is indistinguishable from a
+// skipped one. The mitigation is disclosure, and this skill is what tells the session to write it: the routing
+// ledger entry for an invoked sibling has to say which mode it ran in. This pins that rule, because its removal
+// is what puts the plan back to reporting coverage nobody can check.
+func TestStrategySkillRequiresTheInvocationModeInTheRoutingLedger(t *testing.T) {
+	data, err := fs.ReadFile(Skills(), "test-strategy/SKILL.md")
+	if err != nil {
+		t.Fatalf("SKILL.md missing: %v", err)
+	}
+	text := string(data)
+	for _, want := range []struct{ phrase, contract string }{
+		{"routing ledger", "the reply section that carries the per-sibling verdicts, so the mode has somewhere to live"},
+		{"`inline: <path to its SKILL.md>`", "the mode an inline run has to report, which is the only thing that separates it from a skipped one"},
+		{"`skipped`", "the other entry the same ledger rule has to carry"},
+	} {
+		if !strings.Contains(text, want.phrase) {
+			t.Errorf("test-strategy no longer names %s: %s", want.phrase, want.contract)
+		}
+	}
+}
