@@ -42,9 +42,11 @@ type Deps struct {
 // Run admits the requested Evidence rows and returns the process exit code: 0 when no row was refused, 1 when
 // a row was refused or the plan could not be read or written, and 2 when a flag precondition or a named id is
 // wrong. It writes the row lines and the summary to deps.Out and every refusal to deps.Err.
-// Run admits the requested Evidence rows and returns the process exit code: 0 when no row was refused, 1 when
-// a row was refused or the plan could not be read or written, and 2 when a flag precondition or a named id is
-// wrong. It writes the row lines and the summary to deps.Out and every refusal to deps.Err.
+//
+// The default run is a dry run: every runnable row is checked and every refusal still fires, but no command
+// executes, so each such row reports would-run and stays unadmitted, and --record and --sandbox are refused
+// because a dry run makes no observation to pin and nothing to confine. Under --execute the commands run, an
+// admitted row is recorded into the plan, and the run may rewrite the plan it read.
 //
 // It is the pipeline the subcommand is: check the request, read the document it names, admit the rows, report
 // them, and write what was recorded back. Each of those is a function, because each has an outcome a reader can
