@@ -83,59 +83,97 @@ func addFinding(path string, f Finding) (int, error) {
 	}
 	lines := strings.Split(string(raw), "\n")
 
-	heading, end := sectionRegion(lines, "Findings")
-	if heading < 0 {
-		return 0, fmt.Errorf("the plan has no ## Findings section, so there is nowhere to record the row")
-	}
-	table := scanTable(lines, heading+1, end)
-	if table.header == nil {
-		return 0, fmt.Errorf("the Findings section has no table, so the row has no columns to land in")
-	}
-	// A row in a cut table sits in the file and never in the plan; interruptedTable already names the cut.
-	if _, message := interruptedTable("Findings", table); message != "" {
-		return 0, fmt.Errorf("%s; writing into a cut table is how rows get lost", message)
-	}
-
-	if err := f.checkValues(); err != nil {
-		return 0, err
-	}
-	status, err := f.checkStatus()
+	table, err := findingsTable(lines)
 	if err != nil {
 		return 0, err
 	}
-	if err := f.checkTest(status); err != nil {
+	row, err := rowFor(f, table.header)
+	if err != nil {
 		return 0, err
+	}
+	if err := refuseDuplicate(table, f.ID); err != nil {
+		return 0, err
+	}
+	if !pathCiteRe.MatchString(f.Location) {
+		return 0, usagef("--location %s is not path:line, so nothing can be located", quote(f.Location))
+	}
+	if err := checkEvidence(lines, f.Evidence); err != nil {
+		return 0, err
+	}
+	return insertRow(path, lines, table, row)
+}
+
+// findingsTable locates the table a finding row lands in, and refuses the three shapes that leave it nowhere to
+// land: no section, no table, and a table a stray line cut in two — a row in a cut table sits in the file and
+// never in the plan, which is how rows get lost.
+func findingsTable(lines []string) (tableScan, error) {
+	heading, end := sectionRegion(lines, "Findings")
+	if heading < 0 {
+		return tableScan{}, fmt.Errorf("the plan has no ## Findings section, so there is nowhere to record the row")
+	}
+	table := scanTable(lines, heading+1, end)
+	if table.header == nil {
+		return tableScan{}, fmt.Errorf("the Findings section has no table, so the row has no columns to land in")
+	}
+	if _, message := interruptedTable("Findings", table); message != "" {
+		return tableScan{}, fmt.Errorf("%s; writing into a cut table is how rows get lost", message)
+	}
+	return table, nil
+}
+
+// rowFor validates the values the caller supplied and renders the row they describe: the three checks a finding
+// owes, the placeholder an absent fingerprint has a spelling for, and the row itself.
+func rowFor(f Finding, header []string) (string, error) {
+	if err := f.checkValues(); err != nil {
+		return "", err
+	}
+	status, err := f.checkStatus()
+	if err != nil {
+		return "", err
+	}
+	if err := f.checkTest(status); err != nil {
+		return "", err
 	}
 	// An absent fingerprint has a spelling: the placeholder the template uses for a digest not computed.
 	if strings.TrimSpace(f.Fingerprint) == "" {
 		f.Fingerprint = "-"
 	}
-	row, err := f.row(table.header, status)
-	if err != nil {
-		return 0, err
-	}
+	return f.row(header, status)
+}
+
+// refuseDuplicate keeps the writer what the checker assumes: an id names one row, so a row already carrying the
+// id is refused rather than overwritten.
+func refuseDuplicate(table tableScan, id string) error {
 	for _, r := range table.rows {
-		if strings.EqualFold(strings.TrimSpace(cell(r.cells, 0)), strings.TrimSpace(f.ID)) {
-			return 0, fmt.Errorf("finding %s is already row %d: this command never overwrites a verdict", quote(f.ID), r.line)
+		if strings.EqualFold(strings.TrimSpace(cell(r.cells, 0)), strings.TrimSpace(id)) {
+			return fmt.Errorf("finding %s is already row %d: this command never overwrites a verdict", quote(id), r.line)
 		}
 	}
-	if !pathCiteRe.MatchString(f.Location) {
-		return 0, usagef("--location %s is not path:line, so nothing can be located", quote(f.Location))
-	}
-	// The ids are read exactly as the checker reads them, so the writer validates what the checker will.
+	return nil
+}
+
+// checkEvidence reads the ids the finding cites against the ledger, exactly as the checker reads them, so the
+// writer validates what the checker will: an id that names no ledger row has to be added to the ledger first,
+// because this command writes findings only.
+func checkEvidence(lines []string, evidence string) error {
 	ledger := scanSection(lines, "Evidence ledger")
 	known := map[string]bool{}
 	for _, r := range ledger.rows {
 		known[cell(r.cells, 0)] = true
 	}
-	for _, part := range strings.FieldsFunc(f.Evidence, func(r rune) bool { return r == ',' || r == ';' || r == '/' || r == ' ' }) {
+	for _, part := range strings.FieldsFunc(evidence, func(r rune) bool { return r == ',' || r == ';' || r == '/' || r == ' ' }) {
 		id := strings.Trim(part, "`")
 		if id == "" || known[id] {
 			continue
 		}
-		return 0, fmt.Errorf("--evidence names %s, which is not a row in the Evidence ledger: add the ledger row first, this command writes findings only", quote(id))
+		return fmt.Errorf("--evidence names %s, which is not a row in the Evidence ledger: add the ledger row first, this command writes findings only", quote(id))
 	}
+	return nil
+}
 
+// insertRow puts the row at the end of the Findings table and writes the plan once, after the checker has accepted
+// the document it would produce: a row this command wrote is a row the checker reads.
+func insertRow(path string, lines []string, table tableScan, row string) (int, error) {
 	after := findingsEnd(table)
 	candidate := strings.Join(insertLine(lines, after, row), "\n")
 	if problems := CheckDocument(candidate); len(problems) > 0 {
