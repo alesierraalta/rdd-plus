@@ -178,6 +178,12 @@ func GapsIn(doc string) (Gaps, error) {
 
 // GapsForRun reports only the breadth rows owned by run. Blank Run cells are disclosed as unscoped, rows
 // carrying another valid slug are ignored, and malformed cells fail closed without being counted.
+// GapsForRun reports only the breadth rows owned by run. Blank Run cells are disclosed as unscoped, rows
+// carrying another valid slug are ignored, and malformed cells fail closed without being counted.
+//
+// It reads the two tables the counters come from and hands each to its own pass, because the two passes look
+// alike and answer different questions: what a layer owes versus what a ranked target owes, with their own
+// sentences for the same state.
 func GapsForRun(doc, run string) (Gaps, error) {
 	if run != "" {
 		if err := ValidateRun("--run", run); err != nil {
@@ -186,87 +192,119 @@ func GapsForRun(doc, run string) (Gaps, error) {
 	}
 	lines := strings.Split(doc, "\n")
 	g := Gaps{Run: run}
-	matched := false
 
 	layers := scanSection(lines, "Layer matrix")
 	if layers.header == nil {
 		g.NoLayerMatrix = true
-	} else {
+	}
+	matched := layersGaps(&g, layers, run)
+	ranked := scanSection(lines, "Ranked targets")
+	matched = rankedGaps(&g, ranked, run) || matched
+	if run != "" && !matched {
+		g.RunMissing = true
+	}
+	return g, nil
+}
+
+// ownedRows returns the rows of one table that a scoped run owns, reporting the table that carries no Run
+// column and the rows another run or an empty cell owns as it goes. An unscoped run owns every row, which is
+// what GapsIn asks for. The two tables scope the same way, so the rule lives once.
+func ownedRows(g *Gaps, table string, scan tableScan, iRun int, run string) ([]row, bool) {
+	if run == "" {
+		return scan.rows, false
+	}
+	if iRun < 0 {
+		g.RunProblems = append(g.RunProblems, missingRunColumn(table, run))
+		return nil, false
+	}
+	var owned []row
+	matched := false
+	for _, r := range scan.rows {
+		isMine, include := scopedRow(g, table, r, iRun, run)
+		if !include {
+			continue
+		}
+		matched = matched || isMine
+		owned = append(owned, r)
+	}
+	return owned, matched
+}
+
+// layersGaps reads the Layer matrix: every row that is not n/a counts towards the sweep, a row marked done is
+// swept, and anything else is owed with the line it sits on and the owner beside it — plus the name of the value
+// when the status cell is not a status at all. matched reports whether the run owns any row at all.
+func layersGaps(g *Gaps, layers tableScan, run string) bool {
+	matched := false
+	if layers.header != nil {
 		iSkill := columnIndex(layers.header, "skill")
 		iStatus := columnIndex(layers.header, "status")
-		iRun := columnIndex(layers.header, "run")
-		if run != "" && iRun < 0 {
-			g.RunProblems = append(g.RunProblems, missingRunColumn("Layer matrix", run))
-		}
-		for _, r := range layers.rows {
-			if run != "" {
-				owned, include := scopedRow(&g, "Layer matrix", r, iRun, run)
-				if !include {
-					continue
-				}
-				matched = matched || owned
-			}
-			status := cell(r.cells, iStatus)
-			if naStatus.MatchString(status) {
-				continue
-			}
-			g.LayersTotal++
-			if doneStatus.MatchString(status) {
-				g.LayersDone++
-				continue
-			}
-			label := quote(cell(r.cells, 0))
-			name := label
-			if owner := quote(strings.Trim(cell(r.cells, iSkill), "`")); owner != "[empty]" {
-				name += " (" + owner + ")"
-			}
-			g.UnsweptLayers = append(g.UnsweptLayers, fmt.Sprintf("(line %d): %s", r.line, name))
-			// The label alone: the owner is already named by the unswept line above it.
-			if message := unrecognizedStatus(status, r.line, label, "never swept"); message != "" {
-				g.UnrecognizedStatuses = append(g.UnrecognizedStatuses, message)
-			}
+		var rows []row
+		rows, matched = ownedRows(g, "Layer matrix", layers, columnIndex(layers.header, "run"), run)
+		for _, r := range rows {
+			layerRowGaps(g, r, iSkill, iStatus)
 		}
 	}
 	if _, message := interruptedTable("Layer matrix", layers); message != "" {
 		g.InterruptedTables = append(g.InterruptedTables, message)
 	}
+	return matched
+}
 
-	ranked := scanSection(lines, "Ranked targets")
-	iStatus := columnIndex(ranked.header, "status")
-	iRun := columnIndex(ranked.header, "run")
-	if run != "" && iRun < 0 {
-		g.RunProblems = append(g.RunProblems, missingRunColumn("Ranked targets", run))
+// layerRowGaps reads one Layer matrix row into the report: n/a does not count towards the sweep, done counts as
+// swept, and anything else is owed with the line it sits on and the owner beside it — plus the value itself when
+// the status cell is not a status at all.
+func layerRowGaps(g *Gaps, r row, iSkill, iStatus int) {
+	status := cell(r.cells, iStatus)
+	if naStatus.MatchString(status) {
+		return
 	}
-	for _, r := range ranked.rows {
-		if run != "" {
-			owned, include := scopedRow(&g, "Ranked targets", r, iRun, run)
-			if !include {
-				continue
-			}
-			matched = matched || owned
-		}
-		status := cell(r.cells, iStatus)
-		if naStatus.MatchString(status) {
-			continue
-		}
-		g.TargetsTotal++
-		if doneStatus.MatchString(status) {
-			g.TargetsDone++
-			continue
-		}
-		name := quote(cell(r.cells, 0))
-		g.PendingTargets = append(g.PendingTargets, fmt.Sprintf("(line %d): %s", r.line, name))
-		if message := unrecognizedStatus(status, r.line, name, "still owed"); message != "" {
-			g.UnrecognizedStatuses = append(g.UnrecognizedStatuses, message)
-		}
+	g.LayersTotal++
+	if doneStatus.MatchString(status) {
+		g.LayersDone++
+		return
+	}
+	label := quote(cell(r.cells, 0))
+	name := label
+	if owner := quote(strings.Trim(cell(r.cells, iSkill), "`")); owner != "[empty]" {
+		name += " (" + owner + ")"
+	}
+	g.UnsweptLayers = append(g.UnsweptLayers, fmt.Sprintf("(line %d): %s", r.line, name))
+	// The label alone: the owner is already named by the unswept line above it.
+	if message := unrecognizedStatus(status, r.line, label, "never swept"); message != "" {
+		g.UnrecognizedStatuses = append(g.UnrecognizedStatuses, message)
+	}
+}
+
+// rankedRowGaps reads one Ranked targets row into the report, which counts the same way one table over: a row
+// that is not n/a is reached or still owed, and what is neither is reported with this table's sentence for it.
+func rankedRowGaps(g *Gaps, r row, iStatus int) {
+	status := cell(r.cells, iStatus)
+	if naStatus.MatchString(status) {
+		return
+	}
+	g.TargetsTotal++
+	if doneStatus.MatchString(status) {
+		g.TargetsDone++
+		return
+	}
+	name := quote(cell(r.cells, 0))
+	g.PendingTargets = append(g.PendingTargets, fmt.Sprintf("(line %d): %s", r.line, name))
+	if message := unrecognizedStatus(status, r.line, name, "still owed"); message != "" {
+		g.UnrecognizedStatuses = append(g.UnrecognizedStatuses, message)
+	}
+}
+
+// rankedGaps reads the Ranked targets table, which counts the same way one table over: a row that is not n/a is
+// owed or reached, and what is neither is reported with the sentence this table uses for it.
+func rankedGaps(g *Gaps, ranked tableScan, run string) bool {
+	rows, matched := ownedRows(g, "Ranked targets", ranked, columnIndex(ranked.header, "run"), run)
+	for _, r := range rows {
+		rankedRowGaps(g, r, columnIndex(ranked.header, "status"))
 	}
 	if _, message := interruptedTable("Ranked targets", ranked); message != "" {
 		g.InterruptedTables = append(g.InterruptedTables, message)
 	}
-	if run != "" && !matched {
-		g.RunMissing = true
-	}
-	return g, nil
+	return matched
 }
 
 // missingRunColumn is the diagnostic for a breadth table whose header carries no Run column while a run is

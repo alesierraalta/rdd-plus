@@ -197,6 +197,117 @@ func TestCheckReportsRowsWhoseCellsDoNotMatchTheirHeader(t *testing.T) {
 	}
 }
 
+// An example table inside a code fence is documentation: the rows the checker validates are the ones outside
+// it. A second reader with rules of its own invented a breach about a table nobody reads.
+func TestCheckDoesNotBlameRowsInsideAFencedExample(t *testing.T) {
+	const finding = "| F1 | `src/a.js:5` x | M | yes | E1 | t.js :: x | fixed | me | - | - |\n"
+	const ledgerRow = "| E1 | c | cmd | i | o | m | r | observado |\n"
+	plan := header + finding + ledger + ledgerRow +
+		"\n## How a row looks\n\n```markdown\n| a | b | c |\n|---|---|---|\n| only one |\n```\n"
+	p := write(t, t.TempDir(), "plan.md", plan)
+	problems, err := Check(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(problems) != 0 {
+		t.Fatalf("a fenced example owes no breach: %v", problems)
+	}
+}
+
+// A blank line inside a table does not restart it, which is what the row readers already know. Reading the
+// document with a private loop made this row the next table's header, so the count mismatch that moves every
+// column to its right was never reported and only its symptoms were.
+func TestCheckBlamesTheCellCountWhenABlankLineSplitsTheTable(t *testing.T) {
+	const ledgerRow = "| E1 | c | cmd | i | o | m | r | observado |\n"
+	plan := header + "\n| F1 | `src/a.js:5` x | M | yes |\n" + ledger + ledgerRow
+	p := write(t, t.TempDir(), "plan.md", plan)
+	problems, err := Check(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(problems, "\n")
+	if !strings.Contains(joined, "4 cells") || !strings.Contains(joined, "header's 10") {
+		t.Fatalf("the count mismatch is the breach that explains the rest: %v", problems)
+	}
+}
+
+// A line that is not a row closes the block, not the region: the next `|` line of the same section opens
+// another table, and a malformed row there earns its breach. A walk that stopped at the first close would
+// read the second table and report nothing, which is the drift this test is here to catch.
+func TestCheckContinuesTheRegionWalkAfterABlockCloses(t *testing.T) {
+	const finding = "| F1 | `src/a.js:5` x | M | yes | E1 | t.js :: x | fixed | me | - | - |\n"
+	const ledgerRow = "| E1 | c | cmd | i | o | m | r | observado |\n"
+	plan := header + finding + ledger + ledgerRow +
+		"\n## How a row looks\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\nprose closes the block\n\n| c | d |\n|---|---|\n| only one |\n"
+	p := write(t, t.TempDir(), "plan.md", plan)
+	problems, err := Check(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(problems, "\n")
+	if len(problems) != 1 || !strings.Contains(joined, `the How a row looks table row "only one" has 1 cells against the header's 2`) {
+		t.Fatalf("the table after the close is still read: %v", problems)
+	}
+}
+
+// Text before the first heading belongs to no region: no reader reads a table there, so the walk does not
+// measure one either, and a malformed preamble row earns no breach. A walk that started measuring at the
+// top of the document would refuse a plan whose tables are all well formed.
+func TestCheckIgnoresTablesBeforeTheFirstHeading(t *testing.T) {
+	const finding = "| F1 | `src/a.js:5` x | M | yes | E1 | t.js :: x | fixed | me | - | - |\n"
+	const ledgerRow = "| E1 | c | cmd | i | o | m | r | observado |\n"
+	plan := "| x | y |\n|---|---|\n| only one |\n\n" + header + finding + ledger + ledgerRow
+	p := write(t, t.TempDir(), "plan.md", plan)
+	problems, err := Check(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(problems) != 0 {
+		t.Fatalf("the preamble is not a region: %v", problems)
+	}
+}
+
+// Regions are cut at every heading, fence or not: a `## ` line inside a fenced example still ends the
+// region above it and opens one of its own, so the example's table is read as a real table and its short
+// row is blamed. That is the reader's behavior today, pinned here so making the walk fence-aware is a
+// deliberate change and never a silent one.
+func TestCheckTreatsAHeadingInsideAFenceAsARegionBoundary(t *testing.T) {
+	const finding = "| F1 | `src/a.js:5` x | M | yes | E1 | t.js :: x | fixed | me | - | - |\n"
+	const ledgerRow = "| E1 | c | cmd | i | o | m | r | observado |\n"
+	plan := header + finding + ledger + ledgerRow +
+		"\n## How a row looks\n\n```markdown\n## Example\n| a | b |\n|---|---|\n| only one |\n```\n"
+	p := write(t, t.TempDir(), "plan.md", plan)
+	problems, err := Check(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(problems, "\n")
+	if len(problems) != 1 || !strings.Contains(joined, `the Example table row "only one" has 1 cells against the header's 2`) {
+		t.Fatalf("a heading inside a fence still opens a region: %v", problems)
+	}
+}
+
+// A placeholder row is not a data row: a row whose first cell the placeholder vocabulary reads (empty,
+// `-`, `n/a`) is skipped before its cells are counted, so the short placeholder row earns no breach. The
+// malformed data row beside it still earns one, which is what proves the table itself was read. `n/a` is
+// the first cell on purpose: a row of dashes and blanks is already skipped as a separator, so it would pin
+// the separator rule and leave the placeholder exemption unproven.
+func TestCheckExemptsPlaceholderRowsFromTheCellCount(t *testing.T) {
+	const finding = "| F1 | `src/a.js:5` x | M | yes | E1 | t.js :: x | fixed | me | - | - |\n"
+	const ledgerRow = "| E1 | c | cmd | i | o | m | r | observado |\n"
+	plan := header + finding + ledger + ledgerRow +
+		"\n## How a row looks\n\n| a | b | c |\n|---|---|---|\n| n/a |  |\n| x | y |\n"
+	p := write(t, t.TempDir(), "plan.md", plan)
+	problems, err := Check(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(problems, "\n")
+	if len(problems) != 1 || !strings.Contains(joined, `the How a row looks table row "x" has 2 cells against the header's 3`) {
+		t.Fatalf("the placeholder row is exempt and the data row is not: %v", problems)
+	}
+}
+
 // scopedPlan is the smallest compliant plan with a ranked target and a layer matrix, so a test varies
 // only what the scoped-run rule reads: the `Light:` declaration, whether the plan corroborates the
 // target it names, and the reason a skipped layer carries.
@@ -610,11 +721,41 @@ func TestLedgerResolvesTheColumnsOfTheShippedHeader(t *testing.T) {
 	}
 }
 
+// A fenced example before the real ledger is documentation. The old section reader took its first pipe row as
+// the header and stopped at the closing fence, so the machine read an example row instead of the ledger.
+func TestLedgerSkipsFencedExamplesBeforeTheRealTable(t *testing.T) {
+	doc := "## Evidence ledger\n\n```markdown\n| Example | Value |\n|---|---|\n| not-a-row | documentation |\n```\n\n" +
+		strings.TrimPrefix(machineHeader, "## Evidence ledger\n\n") +
+		"| E1 | claim | executed | admit | inputs | observed | sha256:1111 | mutation | reproduction | observado |\n"
+
+	got := Ledger(doc)
+	if len(got) != 1 || got[0].ID != "E1" {
+		t.Fatalf("ledger rows = %#v, want the real E1 row after the fenced example", got)
+	}
+}
+
+// RecordDigest must splice the real ledger row after documentation, not refuse because the example supplied the
+// first header. The write is still byte-preserving: only the named Digest cell may change.
+func TestRecordDigestSkipsFencedExamplesBeforeTheRealTable(t *testing.T) {
+	doc := "## Evidence ledger\n\n```markdown\n| Example | Value |\n|---|---|\n| not-a-row | documentation |\n```\n\n" +
+		strings.TrimPrefix(machineHeader, "## Evidence ledger\n\n") + recordRow(oldDigest)
+
+	got, err := RecordDigest(doc, "E1", newDigest)
+	if err != nil {
+		t.Fatalf("RecordDigest = %v", err)
+	}
+	want := strings.Replace(doc, oldDigest, newDigest, 1)
+	if got != want {
+		t.Fatalf("RecordDigest rewrote bytes outside the real ledger cell:\ngot  %q\nwant %q", got, want)
+	}
+}
+
 // Historical column names use substring matching, so the collisions are pinned: `Admit` must not resolve
 // to `Executed`, `Digest` must not resolve to another column, and no two names may share a column. The Run
 // column is the deliberate exact-match exception because `Target rung` contains the same substring.
 func TestLedgerColumnNamesResolveToDistinctColumns(t *testing.T) {
-	_, header := table(section(machineHeader, "Evidence ledger"))
+	scan := scanSection(strings.Split(machineHeader, "\n"), "Evidence ledger")
+	header := scan.header
 	if header == nil {
 		t.Fatal("the shipped header has no table")
 	}
@@ -886,6 +1027,43 @@ func TestCheckNamesAStatusOutsideTheFindingsVocabulary(t *testing.T) {
 			}
 			if tc.wantNot != "" && strings.Contains(joined, tc.wantNot) {
 				t.Fatalf("problems = %v, want none containing %q", problems, tc.wantNot)
+			}
+		})
+	}
+}
+
+// A ledger row's id is what a finding cites, so two rows sharing one id make every citation that names it
+// ambiguous: the checker collapsed both into one entry and said nothing, and the document still read as `well
+// formed`. Two findings sharing an id has the same shape, one table over.
+func TestCheckRefusesTwoRowsCarryingTheSameId(t *testing.T) {
+	cases := []struct {
+		name string
+		plan string
+		want string
+	}{
+		{
+			name: "two ledger rows with one id",
+			plan: header +
+				"| F1 | `src/a.js:5` x | M | yes | E1 | t.js :: x | fixed | me | - | - |\n" +
+				ledger +
+				"| E1 | c | cmd | i | o | m | r | observado |\n" +
+				"\n| E1 | other claim | cmd | i | o | m | r | observado |\n",
+			want: "evidence E1 repeats the id of the row on line",
+		},
+		{
+			name: "two findings with one id",
+			plan: header +
+				"| F1 | `src/a.js:5` x | M | yes | E1 | t.js :: x | fixed | me | - | - |\n" +
+				"\n| F1 | `src/b.js:9` y | M | yes | E1 | t.js :: x | fixed | me | - | - |\n" +
+				ledger + "| E1 | c | cmd | i | o | m | r | observado |\n",
+			want: "finding F1 repeats the id of the row on line",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			joined := strings.Join(CheckDocument(tc.plan), "\n")
+			if !strings.Contains(joined, tc.want) {
+				t.Fatalf("problems = %v, want one containing %q", joined, tc.want)
 			}
 		})
 	}

@@ -50,11 +50,11 @@ type Finding struct {
 // regular file and left the real plan untouched.
 func AddFinding(path string, f Finding) (int, error) {
 	target := canonicalPath(path)
-	lock, err := lockPlan(target)
+	lock, err := LockPlan(target)
 	if err != nil {
 		return 0, err
 	}
-	defer unlockPlan(lock)
+	defer UnlockPlan(lock)
 	return addFinding(target, f)
 }
 
@@ -83,59 +83,97 @@ func addFinding(path string, f Finding) (int, error) {
 	}
 	lines := strings.Split(string(raw), "\n")
 
-	heading, end := sectionRegion(lines, "Findings")
-	if heading < 0 {
-		return 0, fmt.Errorf("the plan has no ## Findings section, so there is nowhere to record the row")
-	}
-	table := scanTable(lines, heading+1, end)
-	if table.header == nil {
-		return 0, fmt.Errorf("the Findings section has no table, so the row has no columns to land in")
-	}
-	// A row in a cut table sits in the file and never in the plan; interruptedTable already names the cut.
-	if _, message := interruptedTable("Findings", table); message != "" {
-		return 0, fmt.Errorf("%s; writing into a cut table is how rows get lost", message)
-	}
-
-	if err := f.checkValues(); err != nil {
-		return 0, err
-	}
-	status, err := f.checkStatus()
+	table, err := findingsTable(lines)
 	if err != nil {
 		return 0, err
 	}
-	if err := f.checkTest(status); err != nil {
+	row, err := rowFor(f, table.header)
+	if err != nil {
 		return 0, err
+	}
+	if err := refuseDuplicate(table, f.ID); err != nil {
+		return 0, err
+	}
+	if !pathCiteRe.MatchString(f.Location) {
+		return 0, usagef("--location %s is not path:line, so nothing can be located", quote(f.Location))
+	}
+	if err := checkEvidence(lines, f.Evidence); err != nil {
+		return 0, err
+	}
+	return insertRow(path, lines, table, row)
+}
+
+// findingsTable locates the table a finding row lands in, and refuses the three shapes that leave it nowhere to
+// land: no section, no table, and a table a stray line cut in two — a row in a cut table sits in the file and
+// never in the plan, which is how rows get lost.
+func findingsTable(lines []string) (tableScan, error) {
+	heading, end := sectionRegion(lines, "Findings")
+	if heading < 0 {
+		return tableScan{}, fmt.Errorf("the plan has no ## Findings section, so there is nowhere to record the row")
+	}
+	table := scanTable(lines, heading+1, end)
+	if table.header == nil {
+		return tableScan{}, fmt.Errorf("the Findings section has no table, so the row has no columns to land in")
+	}
+	if _, message := interruptedTable("Findings", table); message != "" {
+		return tableScan{}, fmt.Errorf("%s; writing into a cut table is how rows get lost", message)
+	}
+	return table, nil
+}
+
+// rowFor validates the values the caller supplied and renders the row they describe: the three checks a finding
+// owes, the placeholder an absent fingerprint has a spelling for, and the row itself.
+func rowFor(f Finding, header []string) (string, error) {
+	if err := f.checkValues(); err != nil {
+		return "", err
+	}
+	status, err := f.checkStatus()
+	if err != nil {
+		return "", err
+	}
+	if err := f.checkTest(status); err != nil {
+		return "", err
 	}
 	// An absent fingerprint has a spelling: the placeholder the template uses for a digest not computed.
 	if strings.TrimSpace(f.Fingerprint) == "" {
 		f.Fingerprint = "-"
 	}
-	row, err := f.row(table.header, status)
-	if err != nil {
-		return 0, err
-	}
+	return f.row(header, status)
+}
+
+// refuseDuplicate keeps the writer what the checker assumes: an id names one row, so a row already carrying the
+// id is refused rather than overwritten.
+func refuseDuplicate(table tableScan, id string) error {
 	for _, r := range table.rows {
-		if strings.EqualFold(strings.TrimSpace(cell(r.cells, 0)), strings.TrimSpace(f.ID)) {
-			return 0, fmt.Errorf("finding %s is already row %d: this command never overwrites a verdict", quote(f.ID), r.line)
+		if strings.EqualFold(strings.TrimSpace(cell(r.cells, 0)), strings.TrimSpace(id)) {
+			return fmt.Errorf("finding %s is already row %d: this command never overwrites a verdict", quote(id), r.line)
 		}
 	}
-	if !pathCiteRe.MatchString(f.Location) {
-		return 0, usagef("--location %s is not path:line, so nothing can be located", quote(f.Location))
-	}
-	// The ids are read exactly as the checker reads them, so the writer validates what the checker will.
+	return nil
+}
+
+// checkEvidence reads the ids the finding cites against the ledger, exactly as the checker reads them, so the
+// writer validates what the checker will: an id that names no ledger row has to be added to the ledger first,
+// because this command writes findings only.
+func checkEvidence(lines []string, evidence string) error {
 	ledger := scanSection(lines, "Evidence ledger")
 	known := map[string]bool{}
 	for _, r := range ledger.rows {
 		known[cell(r.cells, 0)] = true
 	}
-	for _, part := range strings.FieldsFunc(f.Evidence, func(r rune) bool { return r == ',' || r == ';' || r == '/' || r == ' ' }) {
+	for _, part := range strings.FieldsFunc(evidence, func(r rune) bool { return r == ',' || r == ';' || r == '/' || r == ' ' }) {
 		id := strings.Trim(part, "`")
 		if id == "" || known[id] {
 			continue
 		}
-		return 0, fmt.Errorf("--evidence names %s, which is not a row in the Evidence ledger: add the ledger row first, this command writes findings only", quote(id))
+		return fmt.Errorf("--evidence names %s, which is not a row in the Evidence ledger: add the ledger row first, this command writes findings only", quote(id))
 	}
+	return nil
+}
 
+// insertRow puts the row at the end of the Findings table and writes the plan once, after the checker has accepted
+// the document it would produce: a row this command wrote is a row the checker reads.
+func insertRow(path string, lines []string, table tableScan, row string) (int, error) {
 	after := findingsEnd(table)
 	candidate := strings.Join(insertLine(lines, after, row), "\n")
 	if problems := CheckDocument(candidate); len(problems) > 0 {
@@ -273,7 +311,11 @@ func insertLine(lines []string, at int, row string) []string {
 	return append(out, lines[at:]...)
 }
 
-// lockPlan takes the exclusive lock that serializes every write to the plan at path and returns it.
+// LockPlan takes the exclusive lock that serializes every write to the plan at path and returns it.
+//
+// Every writer of the plan takes this lock — `plan add-finding`, `plan upgrade` and a recording
+// `plan admit` — so a check a writer makes about the file it is about to replace cannot be invalidated by
+// another writer between the check and the write.
 //
 // It is an advisory lock on a file in the user's own cache directory, keyed on the plan's canonical absolute
 // path, so every spelling of one plan is one lock. A lock is released by the kernel when the process holding it
@@ -284,7 +326,7 @@ func insertLine(lines []string, at int, row string) []string {
 //
 // A lock that cannot be taken is an error, never a silent write without it: an unserialized write is the lost
 // row this lock exists to prevent.
-func lockPlan(path string) (*os.File, error) {
+func LockPlan(path string) (*os.File, error) {
 	name, err := planLockPath(canonicalPath(path))
 	if err != nil {
 		return nil, err
@@ -336,10 +378,10 @@ func lockRoot() (string, error) {
 	return root, nil
 }
 
-// unlockPlan releases the lock AddFinding held, and closes it every time the lock was taken — the write path's
+// UnlockPlan releases the lock LockPlan took, and closes it every time the lock was taken — the write path's
 // defer, so a refusal on the read or on the candidate gives the lock back. The unlock is best effort: closing
 // the descriptor releases the lock anyway, and the kernel releases whatever a process still holds when it exits.
-func unlockPlan(file *os.File) {
+func UnlockPlan(file *os.File) {
 	_ = unlockFile(file)
 	_ = file.Close()
 }

@@ -289,14 +289,9 @@ func Decide(in Input, d Deps) Result {
 	if cwd == "" {
 		cwd = d.WorkDir
 	}
-	since := d.Now.Add(-wideWindow)
-	if rc := openOrNil(d, in.TranscriptPath); rc != nil {
-		since = SessionStart(rc, d.Now)
-		rc.Close()
-	}
-	rootOut, err := d.Git(cwd, "rev-parse", "--show-toplevel")
-	root := strings.TrimSpace(rootOut)
-	if err != nil || root == "" {
+	since := sessionStart(d, in.TranscriptPath)
+	root, ok := repoRoot(d, cwd)
+	if !ok {
 		return Result{}
 	}
 	entry := &Entry{
@@ -311,16 +306,86 @@ func Decide(in Input, d Deps) Result {
 	if cfgErr == nil {
 		entry.Plan = rel
 	}
-	statusOut, err := d.Git(root, "status", "--porcelain", "-z", "-uall")
+	entries, ok := statusEntries(d, root, entry)
+	if !ok {
+		return Result{Entry: entry}
+	}
+	files := changedSources(d, root, entries, since)
+	entry.ChangedSource = len(files)
+	if _, err := d.Stat(filepath.Join(root, ".no-testing-gate")); err == nil {
+		entry.OptedOut = true
+	}
+	judged, ran := judgedBy(d, in, files, entry)
+	fire := judged && !ran
+	entry.Fired = fire
+	res := Result{Fire: fire, Files: files, Entry: entry}
+	if fire {
+		res.Reason = BuildReason(files)
+		return res
+	}
+	// The discipline ran, and the second question is whether it ran all the way.
+	if judged && ran {
+		return audit(d, root, rel, cfgErr, res, entry)
+	}
+	return res
+}
+
+// judgedBy reports whether this stop had anything to judge and whether the adversarial skills ran for it. A stop
+// with no changed source, or one that opted out, has nothing to judge: it neither fires nor audits, and the two
+// questions stay separate because "nothing changed" is not "the discipline ran".
+func judgedBy(d Deps, in Input, files []string, entry *Entry) (judged, ran bool) {
+	if len(files) == 0 || entry.OptedOut {
+		return false, false
+	}
+	if rc := openOrNil(d, in.TranscriptPath); rc != nil {
+		entry.SkillsLoaded = SkillsLoaded(rc)
+		rc.Close()
+	}
+	return true, isAdversarial(entry.SkillsLoaded)
+}
+
+// sessionStart is the window the run is measured against: the session's own start when its transcript can be
+// read, and a wide window back from now when it cannot. A transcript that is missing or unreadable is the
+// ordinary case outside a host that keeps one, so it is not an error.
+func sessionStart(d Deps, transcriptPath string) time.Time {
+	since := d.Now.Add(-wideWindow)
+	if rc := openOrNil(d, transcriptPath); rc != nil {
+		since = SessionStart(rc, d.Now)
+		rc.Close()
+	}
+	return since
+}
+
+// repoRoot is the repository the run happened in. A directory that is not one, or a git that cannot answer,
+// leaves the gate nothing to decide about.
+func repoRoot(d Deps, cwd string) (string, bool) {
+	out, err := d.Git(cwd, "rev-parse", "--show-toplevel")
+	root := strings.TrimSpace(out)
+	if err != nil || root == "" {
+		return "", false
+	}
+	return root, true
+}
+
+// statusEntries reads what the repository says changed, and refuses a stop whose status is too large to judge:
+// the count would be a guess, and the entry records the skip instead.
+func statusEntries(d Deps, root string, entry *Entry) ([]string, bool) {
+	out, err := d.Git(root, "status", "--porcelain", "-z", "-uall")
 	if err != nil {
 		entry.Skipped = "git_status_failed"
-		return Result{Entry: entry}
+		return nil, false
 	}
-	entries := ParsePorcelain(statusOut)
+	entries := ParsePorcelain(out)
 	if len(entries) > MaxStatusEntries {
 		entry.Skipped = "too_many_entries"
-		return Result{Entry: entry}
+		return nil, false
 	}
+	return entries, true
+}
+
+// changedSources keeps the production files this run touched since the window opened: each path counted once,
+// and a path whose metadata cannot be read left out rather than assumed changed.
+func changedSources(d Deps, root string, entries []string, since time.Time) []string {
 	files := []string{}
 	seen := map[string]bool{}
 	for _, p := range entries {
@@ -336,43 +401,30 @@ func Decide(in Input, d Deps) Result {
 			files = append(files, p)
 		}
 	}
-	entry.ChangedSource = len(files)
-	if _, err := d.Stat(filepath.Join(root, ".no-testing-gate")); err == nil {
-		entry.OptedOut = true
-	}
-	if len(files) > 0 && !entry.OptedOut {
-		if rc := openOrNil(d, in.TranscriptPath); rc != nil {
-			entry.SkillsLoaded = SkillsLoaded(rc)
-			rc.Close()
-		}
-	}
-	fire := len(files) > 0 && !entry.OptedOut && !isAdversarial(entry.SkillsLoaded)
-	entry.Fired = fire
-	res := Result{Fire: fire, Files: files, Entry: entry}
-	if fire {
-		res.Reason = BuildReason(files)
+	return files
+}
+
+// audit asks the second question: the discipline ran, but did it run all the way? A layer assigned and never
+// invoked leaves the report reading as coverage of a surface nobody examined, so the plan's breadth counters
+// are read back and one of three reasons is attached — what is owed, what the plan could not be read for, or
+// that it is complete.
+func audit(d Deps, root, rel string, cfgErr error, res Result, entry *Entry) Result {
+	if cfgErr != nil {
+		entry.Skipped = "plan_config_invalid"
+		res.Problem = BuildDeclarationProblem(cfgErr)
 		return res
 	}
-	// The discipline ran. The second question is whether it ran all the way: a layer assigned
-	// and never invoked leaves the report reading as coverage of a surface nobody examined.
-	if len(files) > 0 && !entry.OptedOut && isAdversarial(entry.SkillsLoaded) {
-		if cfgErr != nil {
-			entry.Skipped = "plan_config_invalid"
-			res.Problem = BuildDeclarationProblem(cfgErr)
-			return res
-		}
-		planPath := filepath.Join(root, rel)
-		if body, err := readPlan(d, planPath); err == nil {
-			if gaps, err := plan.GapsIn(body); err == nil {
-				res.Audit = true
-				entry.Audited = true
-				res.Owed, res.Pending = len(gaps.UnsweptLayers), len(gaps.PendingTargets)
-				res.Unreadable, res.Unplanned = len(gaps.InterruptedTables), gaps.NoLayerMatrix
-				if gaps.Any() {
-					res.Reason = BuildAuditReason(rel, gaps.Report())
-				} else {
-					res.Reason = BuildCompleteReason(rel)
-				}
+	planPath := filepath.Join(root, rel)
+	if body, err := readPlan(d, planPath); err == nil {
+		if gaps, err := plan.GapsIn(body); err == nil {
+			res.Audit = true
+			entry.Audited = true
+			res.Owed, res.Pending = len(gaps.UnsweptLayers), len(gaps.PendingTargets)
+			res.Unreadable, res.Unplanned = len(gaps.InterruptedTables), gaps.NoLayerMatrix
+			if gaps.Any() {
+				res.Reason = BuildAuditReason(rel, gaps.Report())
+			} else {
+				res.Reason = BuildCompleteReason(rel)
 			}
 		}
 	}

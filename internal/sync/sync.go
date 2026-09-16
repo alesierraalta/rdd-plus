@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/alesierraalta/rdd-plus/internal/assets"
+	"github.com/alesierraalta/rdd-plus/internal/skilltree"
 )
 
 // Options controls a sync run.
@@ -178,59 +179,84 @@ func syncHost(host Host, binPath string, opts Options) (HostReport, error) {
 		}
 		report.SettingsRead = true
 	}
+	if err := installSkills(host, opts, &report); err != nil {
+		return report, err
+	}
+	if err := applyHook(host, binPath, opts, settings, raw, &report); err != nil {
+		return report, err
+	}
+	return report, nil
+}
 
+// installSkills writes every embedded skill under the host's skills directory, one skill at a time.
+func installSkills(host Host, opts Options, report *HostReport) error {
 	skills := assets.Skills()
 	for _, name := range assets.SkillNames() {
-		target := filepath.Join(host.SkillsDir, name)
-		same, err := identical(skills, name, target)
-		if err != nil {
-			return report, err
+		if err := installSkill(skills, host, name, opts, report); err != nil {
+			return err
 		}
-		if same {
-			report.Unchanged = append(report.Unchanged, name)
-			continue
-		}
-		if _, err := os.Stat(target); err == nil {
-			backup := nextBackupPath(host.SkillsDir, name)
-			report.BackedUp[name] = backup
-			if !opts.DryRun {
-				if err := os.MkdirAll(filepath.Dir(backup), 0o755); err != nil {
-					return report, err
-				}
-				if err := os.Rename(target, backup); err != nil {
-					return report, err
-				}
-			}
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return report, err
-		}
-		if !opts.DryRun {
-			if err := writeSkill(skills, name, target); err != nil {
-				return report, err
-			}
-		}
-		report.Written = append(report.Written, name)
 	}
+	return nil
+}
 
+// installSkill writes one skill into the host, moving the installed copy aside first when there is one to move: a
+// differing skill is replaced rather than merged, and the copy it replaced is kept where the operator can find it.
+// A dry run records what it would do and writes nothing.
+func installSkill(skills fs.FS, host Host, name string, opts Options, report *HostReport) error {
+	target := filepath.Join(host.SkillsDir, name)
+	same, err := identical(skills, name, target)
+	if err != nil {
+		return err
+	}
+	if same {
+		report.Unchanged = append(report.Unchanged, name)
+		return nil
+	}
+	if _, err := os.Stat(target); err == nil {
+		backup := nextBackupPath(host.SkillsDir, name)
+		report.BackedUp[name] = backup
+		if !opts.DryRun {
+			if err := os.MkdirAll(filepath.Dir(backup), 0o755); err != nil {
+				return err
+			}
+			if err := os.Rename(target, backup); err != nil {
+				return err
+			}
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if !opts.DryRun {
+		if err := writeSkill(skills, name, target); err != nil {
+			return err
+		}
+	}
+	report.Written = append(report.Written, name)
+	return nil
+}
+
+// applyHook wires the Stop hook into the settings this run read, and writes the file back when that changed
+// anything: a settings file that was absent counts as a change, because the hook has to be written into one. Only
+// the claude host has settings to wire; every other host receives skills only. A dry run reports the change and
+// writes nothing.
+func applyHook(host Host, binPath string, opts Options, settings map[string]any, raw []byte, report *HostReport) error {
 	if host.Name != "claude" {
-		return report, nil
+		return nil
 	}
 	changed, removed := wireHook(settings, HookCommand(binPath))
 	report.RemovedHooks = removed
 	report.SettingsChanged = changed || raw == nil
-	if report.SettingsChanged && !opts.DryRun {
-		if err := os.MkdirAll(host.ConfigDir, 0o755); err != nil {
-			return report, err
-		}
-		out, err := marshalSettings(settings)
-		if err != nil {
-			return report, err
-		}
-		if err := os.WriteFile(report.SettingsPath, out, 0o644); err != nil {
-			return report, err
-		}
+	if !report.SettingsChanged || opts.DryRun {
+		return nil
 	}
-	return report, nil
+	if err := os.MkdirAll(host.ConfigDir, 0o755); err != nil {
+		return err
+	}
+	out, err := marshalSettings(settings)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(report.SettingsPath, out, 0o644)
 }
 
 func nextBackupPath(skillsDir, name string) string {
@@ -275,27 +301,12 @@ func marshalSettings(settings map[string]any) ([]byte, error) {
 
 // identical reports whether every embedded file of the skill exists at target with the same
 // bytes; files the user added next to them (run artifacts, notes) do not count as a difference.
+//
+// The comparison itself lives in `internal/skilltree`: the doctor asks the same question about the same tree,
+// and an answer written twice is an answer that drifts. A tree this could not walk is an error here, so sync
+// refuses to replace a copy it could not compare rather than overwriting one it never read.
 func identical(skills fs.FS, name, target string) (bool, error) {
-	if _, err := os.Stat(target); err != nil {
-		return false, nil
-	}
-	same := true
-	err := fs.WalkDir(skills, name, func(p string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || !same {
-			return err
-		}
-		want, err := fs.ReadFile(skills, p)
-		if err != nil {
-			return err
-		}
-		rel, _ := filepath.Rel(name, filepath.FromSlash(p))
-		got, err := os.ReadFile(filepath.Join(target, rel))
-		if err != nil || !bytes.Equal(want, got) {
-			same = false
-		}
-		return nil
-	})
-	return same, err
+	return skilltree.Identical(skills, name, target)
 }
 
 func writeSkill(skills fs.FS, name, target string) error {

@@ -28,6 +28,12 @@ import (
 	"github.com/alesierraalta/rdd-plus/internal/sync"
 )
 
+// exitArtifact is what the CLI returns when its machine-readable output could not be written: the run
+// finished, the report exists, and the consumer did not receive it. It is the number the benchmark returns
+// for a record it could not persist, used here for the same fact — a document nobody got is not a document,
+// and exit 0 would say it arrived.
+const exitArtifact = bench.ExitArtifact
+
 const usage = `usage: rdd-plus <command> [flags]
 
 commands:
@@ -218,7 +224,10 @@ func runDoctor(args []string) int {
 	if *asJSON {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
-		_ = enc.Encode(report)
+		if err := enc.Encode(report); err != nil {
+			fmt.Fprintln(os.Stderr, "doctor:", err)
+			return exitArtifact
+		}
 	} else {
 		fmt.Print(report.String())
 	}
@@ -675,13 +684,19 @@ func runBenchScore(args []string) int {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	if *planFile != "" {
-		_ = enc.Encode(bench.ScorePlanFile(*planFile, key))
+		if err := enc.Encode(bench.ScorePlanFile(*planFile, key)); err != nil {
+			fmt.Fprintln(os.Stderr, "score:", err)
+			return exitArtifact
+		}
 		return 0
 	}
 	res := bench.ScoreWorkspace(*ws, key)
 	res.Catch = bench.Discriminate(*caseDir, *ws, key, 10*time.Minute)
 	res.Caught = res.Catch.Count()
-	_ = enc.Encode(res)
+	if err := enc.Encode(res); err != nil {
+		fmt.Fprintln(os.Stderr, "score:", err)
+		return exitArtifact
+	}
 	return 0
 }
 

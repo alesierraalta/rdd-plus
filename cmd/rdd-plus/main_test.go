@@ -15,6 +15,7 @@ import (
 	"github.com/alesierraalta/rdd-plus/internal/admit"
 	"github.com/alesierraalta/rdd-plus/internal/buildinfo"
 	"github.com/alesierraalta/rdd-plus/internal/evidence"
+	plancheck "github.com/alesierraalta/rdd-plus/internal/plan"
 )
 
 // buildCLI compiles the command once per test binary; the contract under test is the process's,
@@ -511,6 +512,54 @@ func runCLI(t *testing.T, bin string, args ...string) (string, int) {
 	return "", -1
 }
 
+// runCLIWithoutStdout runs the binary with its stdout on a device that refuses every write, and returns what
+// it said on stderr plus its exit code. A CLI whose machine-readable output vanished must not exit 0: the
+// consumer parses a truncated document and the exit code says it went fine.
+func runCLIWithoutStdout(t *testing.T, bin string, args ...string) (string, int) {
+	t.Helper()
+	refuses, err := os.OpenFile("/dev/full", os.O_WRONLY, 0)
+	if err != nil {
+		t.Skipf("no device here that refuses writes: %v", err)
+	}
+	defer refuses.Close()
+	cmd := exec.Command(bin, args...)
+	cmd.Stdout = refuses
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	err = cmd.Run()
+	if err == nil {
+		return stderr.String(), 0
+	}
+	var ee exec.ExitError
+	if asExit(err, &ee) {
+		return stderr.String(), ee.ExitCode()
+	}
+	t.Fatalf("run %v: %v", args, err)
+	return "", -1
+}
+
+// The doctor's `--json` report is the machine-readable half of the command, and it goes to stdout. A write
+// that fails there used to be dropped: with a healthy configuration the tool delivered nothing, said nothing,
+// and returned 0, so a caller could not tell a report from a fragment of one — or from no report at all. It now
+// names the failure on stderr and returns the artifact code.
+//
+// The configuration is synced first on purpose: a healthy doctor is the case where the old exit code was 0 for
+// a report nobody received, and an unhealthy one returns 1 for a reason that has nothing to do with the write.
+func TestDoctorJSONReportsTheReportItCouldNotWrite(t *testing.T) {
+	bin := buildCLI(t)
+	configDir := t.TempDir()
+	if got, code := runCLI(t, bin, "sync", "--config-dir", configDir); code != 0 {
+		t.Fatalf("sync exited %d, so the test's premise (a healthy doctor) does not hold\n%s", code, got)
+	}
+	stderr, code := runCLIWithoutStdout(t, bin, "doctor", "--json", "--config-dir", configDir)
+	if code != exitArtifact {
+		t.Fatalf("code = %d, want %d: the JSON report was not written\nstderr: %s", code, exitArtifact, stderr)
+	}
+	if !strings.Contains(stderr, "doctor:") {
+		t.Fatalf("the failure must name the command whose output was lost:\n%s", stderr)
+	}
+}
+
 // A usage text that does not list a command it accepts sends users to the wrong place.
 func TestUsageListsEveryBenchSubcommand(t *testing.T) {
 	for _, sub := range []string{"bench run", "bench score", "bench history", "bench compare", "bench rescore", "plan init", "plan check", "plan gaps", "plan upgrade", "plan add-finding", "plan admit"} {
@@ -924,6 +973,41 @@ func TestBenchDoesNotPrintAResultsPathItCouldNotWrite(t *testing.T) {
 	}
 }
 
+// The score command's JSON is its whole output, and the `--plan` path is the one a caller scores a finished run
+// with. A write that fails there was dropped like the doctor's: the tool printed nothing, said nothing and
+// returned 0, so a caller could not tell a score from no score at all.
+//
+// The `--workspace` path takes the same branch, and it is not pinned here on purpose: reaching its encode means
+// running the case's suites, which belongs to the benchmark and to its own budget, not to this test.
+func TestBenchScoreReportsTheScoreItCouldNotWrite(t *testing.T) {
+	bin := buildCLI(t)
+	caseDir := t.TempDir()
+	key := `{"id":"t","language":"go","suite":"a_test.go","defects":[{"id":"D1","file":"src/a.js","line":5,"keywords":["alpha"]}]}`
+	if err := os.WriteFile(filepath.Join(caseDir, "KEY.json"), []byte(key), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	planFile := filepath.Join(t.TempDir(), "plan.md")
+	plan := "## Findings\n\n| Id | Finding | Severity | Data safe? | Evidence id | Pinning test | Status | Verdict by / date | Reason | Fingerprint |\n|---|---|---|---|---|---|---|---|---|---|\n" +
+		"| F1 | `src/a.js:5` alpha | M | yes | E1 | t.js :: x | fixed | me | - | - |\n\n" +
+		"## Evidence ledger\n\n| Id | Claim | Executed | Admit | Inputs and parameters | Observed | Digest | Normalize | Mode | Mutate | Mutation or negative control → result | Reproduction | Label |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|\n" +
+		"| E1 | the claim | go test ./... | go test ./... | none | the observation | sha256:aaaa | none | host | none | reverted → red | rerun it | observado |\n"
+	// The fixture is a plan this repository's own checker accepts: a row that declares thirteen columns and writes
+	// eight is the cell-count breach the checker refuses, and a fixture is where that mistake would be copied from.
+	if problems := plancheck.CheckDocument(plan); len(problems) != 0 {
+		t.Fatalf("the fixture is not a plan the checker accepts: %v", problems)
+	}
+	if err := os.WriteFile(planFile, []byte(plan), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stderr, code := runCLIWithoutStdout(t, bin, "bench", "score", "--case", caseDir, "--plan", planFile)
+	if code != exitArtifact {
+		t.Fatalf("code = %d, want %d: the JSON score was not written\nstderr: %s", code, exitArtifact, stderr)
+	}
+	// The line has to name the command and the write that failed: a prefix check passes for any message.
+	if !strings.Contains(stderr, "score:") || !strings.Contains(stderr, "/dev/stdout") {
+		t.Fatalf("the failure must name the command and where the write went:\n%s", stderr)
+	}
+}
 func syncTestHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()

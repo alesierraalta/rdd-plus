@@ -206,12 +206,6 @@ func TestScorerCanBeStated(t *testing.T) {
 	}
 }
 
-func TestScorerRevisionIsNeverEmpty(t *testing.T) {
-	if scorerRevision() == "" {
-		t.Fatal("a row must always be attributable to something, even outside a repository")
-	}
-}
-
 // A build made from an uncommitted tree cannot be recovered from its commit, so numbers recorded
 // under it are not reproducible. The row already says so; the run has to say it out loud, before
 // the money is spent rather than after.

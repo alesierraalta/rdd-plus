@@ -6,9 +6,10 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime/debug"
 	"strings"
 	"time"
+
+	"github.com/alesierraalta/rdd-plus/internal/buildinfo"
 )
 
 // HistoryEntry is one benchmark run as remembered across skill versions.
@@ -65,7 +66,7 @@ func AppendHistory(benchDir string, e HistoryEntry) error {
 		e.Kind = KindRun
 	}
 	if e.Scorer == "" {
-		e.Scorer = scorerRevision()
+		e.Scorer = buildinfo.Revision()
 	}
 	if e.Kind == KindRescore {
 		e.CostUSD = 0 // the run it re-reads already carries that cost
@@ -134,35 +135,6 @@ func SkillVersion(skillFile string) string {
 // Stamp is the results directory name for a run started at t.
 func Stamp(t time.Time) string {
 	return t.UTC().Format("20060102-150405")
-}
-
-// scorerRevision identifies the build whose rules produced a row. Go embeds the commit when the
-// binary is built inside a repository; a build without that information still names itself, so
-// a row is never unattributable.
-func scorerRevision() string {
-	info, ok := debug.ReadBuildInfo()
-	if !ok {
-		return "unknown"
-	}
-	rev, dirty := "", false
-	for _, s := range info.Settings {
-		switch s.Key {
-		case "vcs.revision":
-			rev = s.Value
-		case "vcs.modified":
-			dirty = s.Value == "true"
-		}
-	}
-	if rev == "" {
-		return "unknown"
-	}
-	if len(rev) > 7 {
-		rev = rev[:7]
-	}
-	if dirty {
-		return rev + "+dirty"
-	}
-	return rev
 }
 
 // ScorerIsProvisional reports whether a scorer revision fails to identify the code that produced

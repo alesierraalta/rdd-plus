@@ -133,45 +133,107 @@ func CheckDocument(doc string) []string {
 	} {
 		problems = append(problems, runColumnProblems(t.name, t.scan)...)
 	}
-	ledgerIDs := map[string]bool{}
+	ledgerIDs, ledgerIssues := ledgerProblems(ledger)
+	problems = append(problems, ledgerIssues...)
+	problems = append(problems, findingProblems(findings, ledgerIDs)...)
+	if lightProblems, declared := lightReport(lines); declared {
+		problems = append(problems, lightProblems...)
+	}
+	return problems
+}
+
+// ledgerProblems reads the ledger back: the ids a finding may cite, the id that names two rows, and the
+// hypothesis that belongs under Hypotheses. The ids come back with the problems because the findings pass
+// resolves citations against them.
+//
+// The id is what a finding cites, so the line that first carried one is kept: a repeat is reported against that
+// line, because a citation naming the id would resolve to one of two rows and nothing would say which.
+func ledgerProblems(ledger tableScan) (map[string]bool, []string) {
+	ids := map[string]bool{}
+	idLine := map[string]int{}
+	var problems []string
 	for _, r := range ledger.rows {
 		id := cell(r.cells, 0)
-		ledgerIDs[id] = true
+		if first, seen := idLine[id]; seen {
+			problems = append(problems, fmt.Sprintf("line %d: evidence %s repeats the id of the row on line %d, so a citation naming it points at two rows", r.line, quote(id), first))
+		} else {
+			idLine[id] = r.line
+		}
+		ids[id] = true
 		if label := cell(r.cells, len(r.cells)-1); strings.EqualFold(label, "razonado") {
 			problems = append(problems, fmt.Sprintf("line %d: evidence %s is labelled razonado: a hypothesis belongs under Hypotheses, never in the ledger", r.line, quote(id)))
 		}
 	}
+	return ids, problems
+}
 
-	iFind := columnIndex(findings.header, "finding")
-	iEvidence := columnIndex(findings.header, "evidence")
-	iPin := columnIndex(findings.header, "pinning test")
-	iStatus := columnIndex(findings.header, "status")
+// findingColumns are the four machine columns a finding row is read by, resolved by name so a column that
+// moves does not move the reading with it.
+type findingColumns struct {
+	find     int
+	evidence int
+	pin      int
+	status   int
+}
+
+func columnsOf(header []string) findingColumns {
+	return findingColumns{
+		find:     columnIndex(header, "finding"),
+		evidence: columnIndex(header, "evidence"),
+		pin:      columnIndex(header, "pinning test"),
+		status:   columnIndex(header, "status"),
+	}
+}
+
+// findingProblems reads every finding row, and reports a repeated id against the line that first carried it.
+func findingProblems(findings tableScan, ledgerIDs map[string]bool) []string {
+	cols := columnsOf(findings.header)
+	idLine := map[string]int{}
+	var problems []string
 	for _, r := range findings.rows {
 		id := quote(cell(r.cells, 0))
-		if iFind >= 0 && !pathCiteRe.MatchString(cell(r.cells, iFind)) {
-			problems = append(problems, fmt.Sprintf("line %d: finding %s cites no path:line, so nothing can be located", r.line, id))
+		if first, seen := idLine[cell(r.cells, 0)]; seen {
+			problems = append(problems, fmt.Sprintf("line %d: finding %s repeats the id of the row on line %d, so the row a verdict or a pinning test belongs to is ambiguous", r.line, id, first))
+		} else {
+			idLine[cell(r.cells, 0)] = r.line
 		}
-		ev := cell(r.cells, iEvidence)
-		switch {
-		case iEvidence < 0 || placeholder.MatchString(ev):
-			problems = append(problems, fmt.Sprintf("line %d: finding %s cites no evidence row", r.line, id))
-		default:
-			for _, part := range strings.FieldsFunc(ev, func(r rune) bool { return r == ',' || r == ';' || r == '/' || r == ' ' }) {
-				if part = strings.Trim(part, "`"); part != "" && !ledgerIDs[part] {
-					problems = append(problems, fmt.Sprintf("line %d: finding %s cites evidence %s, which is not a row in the Evidence ledger", r.line, id, quote(part)))
-				}
-			}
-		}
-		status, breach := findingStatus(cell(r.cells, iStatus))
-		if breach != "" {
-			problems = append(problems, fmt.Sprintf("line %d: finding %s %s", r.line, id, breach))
-		}
-		if settledStatus.MatchString(status) && (iPin < 0 || placeholder.MatchString(cell(r.cells, iPin))) {
-			problems = append(problems, fmt.Sprintf("line %d: finding %s is settled but names no pinning test", r.line, id))
-		}
+		problems = append(problems, findingRowProblems(r, id, cols, ledgerIDs)...)
 	}
-	if lightProblems, declared := lightReport(lines); declared {
-		problems = append(problems, lightProblems...)
+	return problems
+}
+
+// findingRowProblems reads one finding row against the four rules a row owes: the path:line that makes it
+// locatable, the evidence that has to be a ledger row, the closed status vocabulary, and the pinning test a
+// settled verdict names.
+func findingRowProblems(r row, id string, cols findingColumns, ledgerIDs map[string]bool) []string {
+	var problems []string
+	if cols.find >= 0 && !pathCiteRe.MatchString(cell(r.cells, cols.find)) {
+		problems = append(problems, fmt.Sprintf("line %d: finding %s cites no path:line, so nothing can be located", r.line, id))
+	}
+	problems = append(problems, evidenceProblems(r, id, cols.evidence, ledgerIDs)...)
+	status, breach := findingStatus(cell(r.cells, cols.status))
+	if breach != "" {
+		problems = append(problems, fmt.Sprintf("line %d: finding %s %s", r.line, id, breach))
+	}
+	if settledStatus.MatchString(status) && (cols.pin < 0 || placeholder.MatchString(cell(r.cells, cols.pin))) {
+		problems = append(problems, fmt.Sprintf("line %d: finding %s is settled but names no pinning test", r.line, id))
+	}
+	return problems
+}
+
+// evidenceProblems reads one finding's evidence cell against the ledger: a row that cites none is refused, and
+// every id it names has to be a row of the ledger. The cell holds a list (`E1, E2`, `E1/E3`), so the rule is
+// applied to each part rather than to the cell.
+func evidenceProblems(r row, id string, col int, ledgerIDs map[string]bool) []string {
+	ev := cell(r.cells, col)
+	if col < 0 || placeholder.MatchString(ev) {
+		return []string{fmt.Sprintf("line %d: finding %s cites no evidence row", r.line, id)}
+	}
+	var problems []string
+	for _, part := range strings.FieldsFunc(ev, func(r rune) bool { return r == ',' || r == ';' || r == '/' || r == ' ' }) {
+		if part = strings.Trim(part, "`"); part != "" && !ledgerIDs[part] {
+			problems = append(problems, fmt.Sprintf("line %d: finding %s cites evidence %s, which is not a row in the Evidence ledger", r.line, id, quote(part)))
+		}
 	}
 	return problems
 }
@@ -223,8 +285,8 @@ type LedgerRow struct {
 // does, so a row with extra or truncated cells is reported rather than silently dropped. Rows the table
 // already skips, a separator or a placeholder row, stay skipped.
 func Ledger(doc string) []LedgerRow {
-	rows, header := table(section(doc, "Evidence ledger"))
-	if header == nil {
+	scan := scanSection(strings.Split(doc, "\n"), "Evidence ledger")
+	if scan.header == nil {
 		return nil
 	}
 	// Column names are matched by substring, so each name below is the whole word the header cell
@@ -232,11 +294,12 @@ func Ledger(doc string) []LedgerRow {
 	// resolves to `Observed` or to the mutation column, and `normalize` resolves to nothing else.
 	index := map[string]int{}
 	for _, name := range []string{"claim", "executed", "admit", "inputs", "observed", "digest", "normalize", "mode", "mutate", "mutation", "reproduction"} {
-		index[name] = columnIndex(header, name)
+		index[name] = columnIndex(scan.header, name)
 	}
-	ledger := make([]LedgerRow, 0, len(rows))
-	for _, row := range rows {
-		r := LedgerRow{ID: cell(row, 0), Label: cell(row, len(row)-1), Cells: len(row), HeaderCells: len(header)}
+	ledger := make([]LedgerRow, 0, len(scan.rows))
+	for _, scanned := range scan.rows {
+		row := scanned.cells
+		r := LedgerRow{ID: cell(row, 0), Label: cell(row, len(row)-1), Cells: len(row), HeaderCells: len(scan.header)}
 		for _, f := range []struct {
 			name  string
 			field *string
@@ -435,58 +498,39 @@ func RecordMode(doc, id, mode string) (string, error) {
 // re-rendering the row, which would rewrite escapes and spacing nobody asked to touch. Writing the value a
 // cell already holds is a no-op, so a rerun rewrites nothing.
 func recordCell(doc, id, column, label, value string) (string, error) {
-	start, end, ok := sectionBounds(doc, "Evidence ledger")
-	if !ok {
+	lines := strings.Split(doc, "\n")
+	heading, end := sectionRegion(lines, "Evidence ledger")
+	if heading < 0 {
 		return "", fmt.Errorf("the document has no Evidence ledger section, so there is no row %s to record", id)
 	}
-	body := doc[start:end]
-	_, header := table(body)
-	if header == nil {
+	scan := scanTable(lines, heading+1, end)
+	if scan.header == nil {
 		return "", fmt.Errorf("the Evidence ledger section holds no table, so there is no row %s to record", id)
 	}
-	iColumn := columnIndex(header, column)
+	iColumn := columnIndex(scan.header, column)
 	if iColumn < 0 {
 		return "", fmt.Errorf("the Evidence ledger header names no %s column, so row %s has nowhere to record %s: %w", label, id, value, ErrNoColumn)
 	}
 
-	// The section's own lines are walked the way table walks them, so the row a reader sees is the row
-	// this writes, and the offset in doc is carried alongside so the splice never re-joins cells.
-	seenHeader := false
-	lineStart := start
-	for _, line := range strings.Split(body, "\n") {
-		t := strings.TrimSpace(line)
-		if !strings.HasPrefix(t, "|") {
-			// A blank line inside the section is not the end of its table, and table skips it too: stopping
-			// here refused a row the reader can see.
-			if t == "" {
-				lineStart += len(line) + 1
-				continue
-			}
-			if seenHeader {
-				break
-			}
-			lineStart += len(line) + 1
+	// scanTable carries the exact source line beside the cells it read, so the row a reader sees is the row
+	// this writes. Line starts preserve the original bytes; the splice still uses cellSpan rather than joining
+	// cells back together, so escaped pipes and the author's spacing survive.
+	lineStarts := make([]int, len(lines))
+	for i := 1; i < len(lines); i++ {
+		lineStarts[i] = lineStarts[i-1] + len(lines[i-1]) + 1
+	}
+	for _, scanned := range scan.rows {
+		if cell(scanned.cells, 0) != id {
 			continue
 		}
-		cells := split(t)
-		if !seenHeader {
-			seenHeader = true
-			lineStart += len(line) + 1
-			continue
-		}
-		if isSeparator(cells) || len(cells) == 0 || placeholder.MatchString(cell(cells, 0)) {
-			lineStart += len(line) + 1
-			continue
-		}
-		if cell(cells, 0) != id {
-			lineStart += len(line) + 1
-			continue
-		}
+		lineIndex := scanned.line - 1
+		line := lines[lineIndex]
+		lineStart := lineStarts[lineIndex]
 		cs, ce, ok := cellSpan(line, iColumn)
 		if !ok {
 			// cellSpan cuts the cells split cuts, so the column has no cell exactly when the row is shorter
 			// than it: one refusal, not two spellings of the same fact.
-			return "", fmt.Errorf("evidence %s has %d cells, so the %s column (%d) has no cell in that row; restore it before recording", id, len(cells), label, iColumn)
+			return "", fmt.Errorf("evidence %s has %d cells, so the %s column (%d) has no cell in that row; restore it before recording", id, len(scanned.cells), label, iColumn)
 		}
 		// Replace the cell's own bytes and nothing else: a cell that holds a value keeps the spacing its
 		// author wrote around it, so a rerun with the same value is byte-identical. A cell that holds no
@@ -677,69 +721,152 @@ func scanSection(lines []string, name string) tableScan {
 	return scanTable(lines, heading+1, end)
 }
 
+// Section returns the body under the `## <name>` heading, up to the next level-2 heading, through the same
+// locator the row readers use. A caller outside this package reads the region the checker validates instead of
+// finding the heading with a walk of its own, so a heading this package stops at cannot be one the caller's walk
+// runs past. The empty string means the section is not there.
+func Section(doc, name string) string {
+	lines := strings.Split(doc, "\n")
+	heading, end := sectionRegion(lines, name)
+	if heading < 0 {
+		return ""
+	}
+	return strings.Join(lines[heading+1:end], "\n")
+}
+
+// Table reads the first markdown table of the `## <section>` section the way every reader in this package reads
+// it: a fence is documentation, a blank line does not end the table, and separators and placeholder rows stay
+// skipped. Header is nil when the section carries no table.
+func Table(doc, section string) (header []string, rows [][]string) {
+	scan := scanSection(strings.Split(doc, "\n"), section)
+	if scan.header == nil {
+		return nil, nil
+	}
+	for i := range scan.header {
+		header = append(header, cell(scan.header, i))
+	}
+	for _, scanned := range scan.rows {
+		row := make([]string, len(scanned.cells))
+		for i := range scanned.cells {
+			row[i] = cell(scanned.cells, i)
+		}
+		rows = append(rows, row)
+	}
+	return header, rows
+}
+
 // scanTable reads the table of lines[start:end] (0-based, end exclusive), carrying the line each row sits
 // on. A blank line is skipped exactly like the separator row, so a blank inserted inside a table no longer
 // drops every row under it. Once the block has closed, a `|` line is recorded as the proof that a table was
 // cut. A fenced code block is documentation: an example table is never read as a row, or as the proof of a cut.
+// The three places a region walk can be in: before the table's own header, inside it, and after a line closed
+// the block.
+const (
+	beforeHeader = iota
+	insideTable
+	afterEnd
+)
+
+// walk is the state one region walk carries: where the table is in its lifecycle, the code fence it is inside when
+// a block opened, and what the scan has found so far. It exists so each step of the walk is a function over that
+// state rather than a switch inside a loop.
+type walk struct {
+	state     int
+	fence     string
+	fenceLine int
+	s         tableScan
+}
+
 func scanTable(lines []string, start, end int) tableScan {
-	const (
-		beforeHeader = iota
-		insideTable
-		afterEnd
-	)
-	var s tableScan
-	state := beforeHeader
-	fence, fenceLine := "", 0
+	w := walk{state: beforeHeader}
 	for i := start; i < end && i < len(lines); i++ {
 		t := strings.TrimSpace(lines[i])
-		if fence != "" {
-			if strings.HasPrefix(t, fence) {
-				fence, fenceLine = "", 0
-			}
+		if w.skipWhileFenced(t) || w.openFence(t, i) {
 			continue
 		}
-		if marker := fenceMarker(t); marker != "" {
-			fence, fenceLine = marker, i+1
-			continue
-		}
-		if state == insideTable && strings.HasPrefix(t, "###") {
-			// A subheading ends this block only when a table of its own starts there.
-			if resumed, opens := tableUnderSubheading(lines, i+1, end); resumed != 0 && !opens {
-				s.ended, s.endedText, s.resumed = i+1, lines[i], resumed
-			}
+		if w.cutBySubheading(lines, i, end) {
 			break
 		}
+		w.step(lines[i], t, i)
+	}
+	if w.fence != "" {
+		// Every line under the fence was skipped, so the table this region owes may be inside it.
+		w.s.fenceLine = w.fenceLine
+	}
+	return w.s
+}
+
+// skipWhileFenced reports whether the line was read inside a code fence, which is documentation: nothing in it is
+// a row, a separator or the proof that the block was cut. A closing marker ends the fence; every other line under
+// it is skipped.
+func (w *walk) skipWhileFenced(t string) bool {
+	if w.fence == "" {
+		return false
+	}
+	if strings.HasPrefix(t, w.fence) {
+		w.fence, w.fenceLine = "", 0
+	}
+	return true
+}
+
+// openFence records a fence this line opens and reports whether it did.
+func (w *walk) openFence(t string, i int) bool {
+	marker := fenceMarker(t)
+	if marker == "" {
+		return false
+	}
+	w.fence, w.fenceLine = marker, i+1
+	return true
+}
+
+// cutBySubheading reports whether a subheading ended the block, and stops the walk when it did. A subheading ends
+// this block only when a table of its own starts there; when it does not, the line closed the block and the first
+// row after it is the proof the table was cut in two.
+func (w *walk) cutBySubheading(lines []string, i, end int) bool {
+	if w.state != insideTable || !strings.HasPrefix(strings.TrimSpace(lines[i]), "###") {
+		return false
+	}
+	if resumed, opens := tableUnderSubheading(lines, i+1, end); resumed != 0 && !opens {
+		w.s.ended, w.s.endedText, w.s.resumed = i+1, lines[i], resumed
+	}
+	return true
+}
+
+// step reads one line that is not under a fence: a blank line is skipped, a row is read against the state the walk
+// is in, and any other line closes an open block.
+func (w *walk) step(raw, t string, i int) {
+	if t == "" {
+		return
+	}
+	if strings.HasPrefix(t, "|") {
+		w.readRow(t, i)
+		return
+	}
+	if w.state == insideTable {
+		w.s.ended, w.s.endedText, w.state = i+1, raw, afterEnd
+	}
+}
+
+// readRow takes one markdown row: before the header it is the header, inside the table it is a separator or a data
+// row — placeholders stay skipped, so a plan that says "no rows yet" is not read as one — and after a close it is
+// the proof that the table was cut.
+func (w *walk) readRow(t string, i int) {
+	switch w.state {
+	case beforeHeader:
+		w.s.header, w.state, w.s.head = split(t), insideTable, i+1
+	case insideTable:
+		cells := split(t)
 		switch {
-		case t == "":
-			continue
-		case strings.HasPrefix(t, "|"):
-			switch state {
-			case beforeHeader:
-				s.header, state, s.head = split(t), insideTable, i+1
-			case insideTable:
-				cells := split(t)
-				switch {
-				case isSeparator(cells):
-					s.head = i + 1
-				case !placeholder.MatchString(cell(cells, 0)):
-					s.rows = append(s.rows, row{line: i + 1, cells: cells})
-				}
-			default:
-				if s.resumed == 0 {
-					s.resumed = i + 1
-				}
-			}
-		default:
-			if state == insideTable {
-				s.ended, s.endedText, state = i+1, lines[i], afterEnd
-			}
+		case isSeparator(cells):
+			w.s.head = i + 1
+		case !placeholder.MatchString(cell(cells, 0)):
+			w.s.rows = append(w.s.rows, row{line: i + 1, cells: cells})
+		}
+	default:
+		if w.s.resumed == 0 {
+			w.s.resumed = i + 1
 		}
 	}
-	if fence != "" {
-		// Every line under the fence was skipped, so the table this region owes may be inside it.
-		s.fenceLine = fenceLine
-	}
-	return s
 }
 
 // tableUnderSubheading reads what follows a `###` line inside a region: the first line that opens a markdown
@@ -820,84 +947,77 @@ func sectionRegion(lines []string, name string) (heading, end int) {
 	return -1, -1
 }
 
-// section and table are the readers gaps.go still uses. The Light rules read their tables through
-// sectionRegion and scanTable instead, so a Light breach can name the row it blames; when the gaps sweep
-// moves onto the same scanner these two go with it.
-
-// section returns the body under "## <name>" up to the next level-2 heading.
-func section(doc, name string) string {
-	start, end, ok := sectionBounds(doc, name)
-	if !ok {
-		return ""
-	}
-	return doc[start:end]
-}
-
-// sectionBounds returns the byte range the body under "## <name>" occupies in doc, up to the next
-// level-2 heading. The heading is matched exactly as section matched it, so the one locator serves both
-// the readers and the writer: RecordDigest needs the offset, and Check and Ledger need only the text.
-func sectionBounds(doc, name string) (start, end int, ok bool) {
-	lines := strings.Split(doc, "\n")
-	heading := -1
-	for i, l := range lines {
-		t := strings.TrimSpace(l)
-		if strings.HasPrefix(t, "## ") && strings.EqualFold(strings.TrimSpace(strings.TrimPrefix(t, "## ")), name) {
-			heading = i
-			break
-		}
-	}
-	if heading < 0 {
-		return 0, 0, false
-	}
-	start = len(strings.Join(lines[:heading+1], "\n")) + 1
-	if start > len(doc) {
-		start = len(doc)
-	}
-	end = len(doc)
-	for i := heading + 1; i < len(lines); i++ {
-		if strings.HasPrefix(strings.TrimSpace(lines[i]), "## ") {
-			end = len(strings.Join(lines[:i], "\n"))
-			break
-		}
-	}
-	if end < start {
-		end = start
-	}
-	return start, end, true
-}
-
 // tableProblems reports every data row in the document whose cell count disagrees with its own table's
 // header. A cell holding an unescaped `|` splits into several, so the row declares one thing and carries
 // another, and every column to the right of the cut is read from the wrong cell. Each malformed row earns
-// one breach, not one per extra cell. The rows table already skips, a separator or a placeholder, are
-// skipped here too, so nothing is said about a line that is not a conclusion.
+// one breach, not one per extra cell. It reads the document through the same scanner the row readers use,
+// so a breach is reported exactly where a row would be read: an example inside a code fence is documentation,
+// and a blank line inside a table does not restart it. A loop with rules of its own is how the checker came
+// to invent a breach about a line nobody reads and to miss the count that explains the rows it did read.
 func tableProblems(doc string) []string {
+	lines := strings.Split(doc, "\n")
 	var problems []string
-	name := ""
-	var header []string
-	for _, line := range strings.Split(doc, "\n") {
-		t := strings.TrimSpace(line)
-		if h, ok := headingName(t); ok {
-			name, header = h, nil
-			continue
+	for _, region := range headingRegions(lines) {
+		problems = append(problems, regionTableProblems(lines, region)...)
+	}
+	return problems
+}
+
+// regionTableProblems walks every table one heading region holds. A region can hold more than one: a table ends
+// at the first line that is not a row of it, and the next table of the same section may follow that line.
+func regionTableProblems(lines []string, region headingRegion) []string {
+	var problems []string
+	for start := region.start; start < region.end; {
+		scan := scanTable(lines, start, region.end)
+		problems = append(problems, tableRowBreaches(region.name, scan)...)
+		// The block closed at a line inside this region: the next table of the same section may follow it.
+		if scan.ended == 0 || scan.ended <= start || scan.ended >= region.end {
+			break
 		}
-		if !strings.HasPrefix(t, "|") {
-			header = nil
-			continue
-		}
-		cells := split(t)
-		if header == nil {
-			header = cells
-			continue
-		}
-		if isSeparator(cells) || len(cells) == 0 || placeholder.MatchString(cell(cells, 0)) {
-			continue
-		}
-		if len(cells) != len(header) {
-			problems = append(problems, cellCountBreach(name, cell(cells, 0), len(cells), len(header)))
+		start = scan.ended
+	}
+	return problems
+}
+
+// tableRowBreaches reports the rows of one table that do not carry the cells their header declares. A table with
+// no header has no count to hold a row to, so it earns nothing here — whether a section owes a table is a
+// different question, asked elsewhere.
+func tableRowBreaches(table string, scan tableScan) []string {
+	if scan.header == nil {
+		return nil
+	}
+	var problems []string
+	for _, r := range scan.rows {
+		if len(r.cells) != len(scan.header) {
+			problems = append(problems, cellCountBreach(table, cell(r.cells, 0), len(r.cells), len(scan.header)))
 		}
 	}
 	return problems
+}
+
+// headingRegion is one heading and the lines it owns: the line under it up to the next heading of any level,
+// which is where another table of the same section may start.
+type headingRegion struct {
+	name  string
+	start int // 0-based, first line under the heading
+	end   int // 0-based, exclusive
+}
+
+// headingRegions returns the region each heading opens, in order. Text before the first heading belongs to no
+// region: no reader reads a table there, so the checker does not measure one either.
+func headingRegions(lines []string) []headingRegion {
+	var regions []headingRegion
+	for i, l := range lines {
+		name, ok := headingName(strings.TrimSpace(l))
+		if !ok {
+			continue
+		}
+		if n := len(regions); n > 0 {
+			regions[n-1].end = i
+		}
+		regions = append(regions, headingRegion{name: name, start: i + 1, end: len(lines)})
+	}
+	return regions
 }
 
 // headingName returns the text of a markdown heading line and whether the line is a heading at all. A `#`
@@ -925,31 +1045,6 @@ func cellCountBreach(table, first string, cells, header int) string {
 		return fmt.Sprintf("%s row %q has %d cells against the header's %d: an unescaped `|` splits a cell, so the row carries more than it declares", where, first, cells, header)
 	}
 	return fmt.Sprintf("%s row %q has %d cells against the header's %d: a cell is missing, so the row carries less than it declares", where, first, cells, header)
-}
-
-// table returns the data rows and the header of the first markdown table in a section.
-func table(sec string) (rows [][]string, header []string) {
-	for _, l := range strings.Split(sec, "\n") {
-		t := strings.TrimSpace(l)
-		if !strings.HasPrefix(t, "|") {
-			// A blank line inside the section is not the end of its table. scanTable tolerates one, so stopping
-			// here dropped rows the checker had just validated, and dropped them without saying so.
-			if t != "" && header != nil {
-				break
-			}
-			continue
-		}
-		cells := split(t)
-		if header == nil {
-			header = cells
-			continue
-		}
-		if isSeparator(cells) || len(cells) == 0 || placeholder.MatchString(cell(cells, 0)) {
-			continue
-		}
-		rows = append(rows, cells)
-	}
-	return rows, header
 }
 
 // split cuts a markdown row into cells. A backslash-escaped pipe belongs to the cell it sits in;

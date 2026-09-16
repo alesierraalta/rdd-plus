@@ -486,42 +486,66 @@ func activeMarkers(command string) map[string]bool { return markersFrom(command,
 func markersFrom(command string, quote byte) map[string]bool {
 	active := map[string]bool{}
 	for i := 0; i < len(command); i++ {
-		c := command[i]
 		switch quote {
 		case single:
-			if c == '\'' {
-				quote = unquoted
-			}
-			continue
+			quote = stepSingle(command[i])
 		case double:
-			switch {
-			case c == '\\':
-				i++
-			case c == '"':
-				quote = unquoted
-			case c == '$' && i+1 < len(command) && command[i+1] == '(':
-				active["$("] = true
-			case c == '$' && i+1 < len(command) && command[i+1] == '{':
-				i = recordExpansion(command, i, active, quote)
-			}
-			continue
-		}
-		switch {
-		case c == '\\':
-			i++
-		case c == '\'':
-			quote = single
-		case c == '"':
-			quote = double
-		case c == '$' && i+1 < len(command) && command[i+1] == '(':
-			active["$("] = true
-		case c == '$' && i+1 < len(command) && command[i+1] == '{':
-			i = recordExpansion(command, i, active, quote)
-		case strings.IndexByte("\n;&|(){}<>", c) >= 0:
-			active[string(c)] = true
+			quote, i = stepDouble(command, i, active)
+		default:
+			quote, i = stepUnquoted(command, i, active)
 		}
 	}
 	return active
+}
+
+// stepSingle reads one byte inside single quotes, where every byte is literal: the only thing that matters is the
+// quote that closes them. It returns the state the walk continues in.
+func stepSingle(c byte) byte {
+	if c == '\'' {
+		return unquoted
+	}
+	return single
+}
+
+// stepDouble reads one byte inside double quotes: a backslash escapes the next byte, a quote closes them, and an
+// expansion opens a region this walk reads in the state its caller was in, because that is the state the shell is
+// in there. It returns the state and the index the walk continues from — one past the byte a backslash escaped,
+// or the end of an expansion it consumed.
+func stepDouble(command string, i int, active map[string]bool) (byte, int) {
+	c := command[i]
+	switch {
+	case c == '\\':
+		return double, i + 1
+	case c == '"':
+		return unquoted, i
+	case c == '$' && i+1 < len(command) && command[i+1] == '(':
+		active["$("] = true
+	case c == '$' && i+1 < len(command) && command[i+1] == '{':
+		return double, recordExpansion(command, i, active, double)
+	}
+	return double, i
+}
+
+// stepUnquoted reads one byte outside quotes, which is where every marker is recorded: a backslash escapes the
+// next byte, a quote opens a region the walk reads in that state, an expansion opens a region it reads in this
+// one, and the shell's separators are the markers themselves.
+func stepUnquoted(command string, i int, active map[string]bool) (byte, int) {
+	c := command[i]
+	switch {
+	case c == '\\':
+		return unquoted, i + 1
+	case c == '\'':
+		return single, i
+	case c == '"':
+		return double, i
+	case c == '$' && i+1 < len(command) && command[i+1] == '(':
+		active["$("] = true
+	case c == '$' && i+1 < len(command) && command[i+1] == '{':
+		return unquoted, recordExpansion(command, i, active, unquoted)
+	case strings.IndexByte("\n;&|(){}<>", c) >= 0:
+		active[string(c)] = true
+	}
+	return unquoted, i
 }
 
 // recordExpansion reads what a parameter expansion hides and returns the index the walk resumes at. The
