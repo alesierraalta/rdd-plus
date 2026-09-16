@@ -231,6 +231,83 @@ func TestCheckBlamesTheCellCountWhenABlankLineSplitsTheTable(t *testing.T) {
 	}
 }
 
+// A line that is not a row closes the block, not the region: the next `|` line of the same section opens
+// another table, and a malformed row there earns its breach. A walk that stopped at the first close would
+// read the second table and report nothing, which is the drift this test is here to catch.
+func TestCheckContinuesTheRegionWalkAfterABlockCloses(t *testing.T) {
+	const finding = "| F1 | `src/a.js:5` x | M | yes | E1 | t.js :: x | fixed | me | - | - |\n"
+	const ledgerRow = "| E1 | c | cmd | i | o | m | r | observado |\n"
+	plan := header + finding + ledger + ledgerRow +
+		"\n## How a row looks\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\nprose closes the block\n\n| c | d |\n|---|---|\n| only one |\n"
+	p := write(t, t.TempDir(), "plan.md", plan)
+	problems, err := Check(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(problems, "\n")
+	if len(problems) != 1 || !strings.Contains(joined, `the How a row looks table row "only one" has 1 cells against the header's 2`) {
+		t.Fatalf("the table after the close is still read: %v", problems)
+	}
+}
+
+// Text before the first heading belongs to no region: no reader reads a table there, so the walk does not
+// measure one either, and a malformed preamble row earns no breach. A walk that started measuring at the
+// top of the document would refuse a plan whose tables are all well formed.
+func TestCheckIgnoresTablesBeforeTheFirstHeading(t *testing.T) {
+	const finding = "| F1 | `src/a.js:5` x | M | yes | E1 | t.js :: x | fixed | me | - | - |\n"
+	const ledgerRow = "| E1 | c | cmd | i | o | m | r | observado |\n"
+	plan := "| x | y |\n|---|---|\n| only one |\n\n" + header + finding + ledger + ledgerRow
+	p := write(t, t.TempDir(), "plan.md", plan)
+	problems, err := Check(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(problems) != 0 {
+		t.Fatalf("the preamble is not a region: %v", problems)
+	}
+}
+
+// Regions are cut at every heading, fence or not: a `## ` line inside a fenced example still ends the
+// region above it and opens one of its own, so the example's table is read as a real table and its short
+// row is blamed. That is the reader's behavior today, pinned here so making the walk fence-aware is a
+// deliberate change and never a silent one.
+func TestCheckTreatsAHeadingInsideAFenceAsARegionBoundary(t *testing.T) {
+	const finding = "| F1 | `src/a.js:5` x | M | yes | E1 | t.js :: x | fixed | me | - | - |\n"
+	const ledgerRow = "| E1 | c | cmd | i | o | m | r | observado |\n"
+	plan := header + finding + ledger + ledgerRow +
+		"\n## How a row looks\n\n```markdown\n## Example\n| a | b |\n|---|---|\n| only one |\n```\n"
+	p := write(t, t.TempDir(), "plan.md", plan)
+	problems, err := Check(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(problems, "\n")
+	if len(problems) != 1 || !strings.Contains(joined, `the Example table row "only one" has 1 cells against the header's 2`) {
+		t.Fatalf("a heading inside a fence still opens a region: %v", problems)
+	}
+}
+
+// A placeholder row is not a data row: a row whose first cell the placeholder vocabulary reads (empty,
+// `-`, `n/a`) is skipped before its cells are counted, so the short placeholder row earns no breach. The
+// malformed data row beside it still earns one, which is what proves the table itself was read. `n/a` is
+// the first cell on purpose: a row of dashes and blanks is already skipped as a separator, so it would pin
+// the separator rule and leave the placeholder exemption unproven.
+func TestCheckExemptsPlaceholderRowsFromTheCellCount(t *testing.T) {
+	const finding = "| F1 | `src/a.js:5` x | M | yes | E1 | t.js :: x | fixed | me | - | - |\n"
+	const ledgerRow = "| E1 | c | cmd | i | o | m | r | observado |\n"
+	plan := header + finding + ledger + ledgerRow +
+		"\n## How a row looks\n\n| a | b | c |\n|---|---|---|\n| n/a |  |\n| x | y |\n"
+	p := write(t, t.TempDir(), "plan.md", plan)
+	problems, err := Check(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(problems, "\n")
+	if len(problems) != 1 || !strings.Contains(joined, `the How a row looks table row "x" has 2 cells against the header's 3`) {
+		t.Fatalf("the placeholder row is exempt and the data row is not: %v", problems)
+	}
+}
+
 // scopedPlan is the smallest compliant plan with a ranked target and a layer matrix, so a test varies
 // only what the scoped-run rule reads: the `Light:` declaration, whether the plan corroborates the
 // target it names, and the reason a skipped layer carries.
