@@ -511,6 +511,54 @@ func runCLI(t *testing.T, bin string, args ...string) (string, int) {
 	return "", -1
 }
 
+// runCLIWithoutStdout runs the binary with its stdout on a device that refuses every write, and returns what
+// it said on stderr plus its exit code. A CLI whose machine-readable output vanished must not exit 0: the
+// consumer parses a truncated document and the exit code says it went fine.
+func runCLIWithoutStdout(t *testing.T, bin string, args ...string) (string, int) {
+	t.Helper()
+	refuses, err := os.OpenFile("/dev/full", os.O_WRONLY, 0)
+	if err != nil {
+		t.Skipf("no device here that refuses writes: %v", err)
+	}
+	defer refuses.Close()
+	cmd := exec.Command(bin, args...)
+	cmd.Stdout = refuses
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	err = cmd.Run()
+	if err == nil {
+		return stderr.String(), 0
+	}
+	var ee exec.ExitError
+	if asExit(err, &ee) {
+		return stderr.String(), ee.ExitCode()
+	}
+	t.Fatalf("run %v: %v", args, err)
+	return "", -1
+}
+
+// The doctor's `--json` report is the machine-readable half of the command, and it goes to stdout. A write
+// that fails there used to be dropped: with a healthy configuration the tool delivered nothing, said nothing,
+// and returned 0, so a caller could not tell a report from a fragment of one — or from no report at all. It now
+// names the failure on stderr and returns the artifact code.
+//
+// The configuration is synced first on purpose: a healthy doctor is the case where the old exit code was 0 for
+// a report nobody received, and an unhealthy one returns 1 for a reason that has nothing to do with the write.
+func TestDoctorJSONReportsTheReportItCouldNotWrite(t *testing.T) {
+	bin := buildCLI(t)
+	configDir := t.TempDir()
+	if got, code := runCLI(t, bin, "sync", "--config-dir", configDir); code != 0 {
+		t.Fatalf("sync exited %d, so the test's premise (a healthy doctor) does not hold\n%s", code, got)
+	}
+	stderr, code := runCLIWithoutStdout(t, bin, "doctor", "--json", "--config-dir", configDir)
+	if code != exitArtifact {
+		t.Fatalf("code = %d, want %d: the JSON report was not written\nstderr: %s", code, exitArtifact, stderr)
+	}
+	if !strings.Contains(stderr, "doctor:") {
+		t.Fatalf("the failure must name the command whose output was lost:\n%s", stderr)
+	}
+}
+
 // A usage text that does not list a command it accepts sends users to the wrong place.
 func TestUsageListsEveryBenchSubcommand(t *testing.T) {
 	for _, sub := range []string{"bench run", "bench score", "bench history", "bench compare", "bench rescore", "plan init", "plan check", "plan gaps", "plan upgrade", "plan add-finding", "plan admit"} {
