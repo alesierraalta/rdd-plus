@@ -759,65 +759,114 @@ func Table(doc, section string) (header []string, rows [][]string) {
 // on. A blank line is skipped exactly like the separator row, so a blank inserted inside a table no longer
 // drops every row under it. Once the block has closed, a `|` line is recorded as the proof that a table was
 // cut. A fenced code block is documentation: an example table is never read as a row, or as the proof of a cut.
+// The three places a region walk can be in: before the table's own header, inside it, and after a line closed
+// the block.
+const (
+	beforeHeader = iota
+	insideTable
+	afterEnd
+)
+
+// walk is the state one region walk carries: where the table is in its lifecycle, the code fence it is inside when
+// a block opened, and what the scan has found so far. It exists so each step of the walk is a function over that
+// state rather than a switch inside a loop.
+type walk struct {
+	state     int
+	fence     string
+	fenceLine int
+	s         tableScan
+}
+
 func scanTable(lines []string, start, end int) tableScan {
-	const (
-		beforeHeader = iota
-		insideTable
-		afterEnd
-	)
-	var s tableScan
-	state := beforeHeader
-	fence, fenceLine := "", 0
+	w := walk{state: beforeHeader}
 	for i := start; i < end && i < len(lines); i++ {
 		t := strings.TrimSpace(lines[i])
-		if fence != "" {
-			if strings.HasPrefix(t, fence) {
-				fence, fenceLine = "", 0
-			}
+		if w.skipWhileFenced(t) || w.openFence(t, i) {
 			continue
 		}
-		if marker := fenceMarker(t); marker != "" {
-			fence, fenceLine = marker, i+1
-			continue
-		}
-		if state == insideTable && strings.HasPrefix(t, "###") {
-			// A subheading ends this block only when a table of its own starts there.
-			if resumed, opens := tableUnderSubheading(lines, i+1, end); resumed != 0 && !opens {
-				s.ended, s.endedText, s.resumed = i+1, lines[i], resumed
-			}
+		if w.cutBySubheading(lines, i, end) {
 			break
 		}
+		w.step(lines[i], t, i)
+	}
+	if w.fence != "" {
+		// Every line under the fence was skipped, so the table this region owes may be inside it.
+		w.s.fenceLine = w.fenceLine
+	}
+	return w.s
+}
+
+// skipWhileFenced reports whether the line was read inside a code fence, which is documentation: nothing in it is
+// a row, a separator or the proof that the block was cut. A closing marker ends the fence; every other line under
+// it is skipped.
+func (w *walk) skipWhileFenced(t string) bool {
+	if w.fence == "" {
+		return false
+	}
+	if strings.HasPrefix(t, w.fence) {
+		w.fence, w.fenceLine = "", 0
+	}
+	return true
+}
+
+// openFence records a fence this line opens and reports whether it did.
+func (w *walk) openFence(t string, i int) bool {
+	marker := fenceMarker(t)
+	if marker == "" {
+		return false
+	}
+	w.fence, w.fenceLine = marker, i+1
+	return true
+}
+
+// cutBySubheading reports whether a subheading ended the block, and stops the walk when it did. A subheading ends
+// this block only when a table of its own starts there; when it does not, the line closed the block and the first
+// row after it is the proof the table was cut in two.
+func (w *walk) cutBySubheading(lines []string, i, end int) bool {
+	if w.state != insideTable || !strings.HasPrefix(strings.TrimSpace(lines[i]), "###") {
+		return false
+	}
+	if resumed, opens := tableUnderSubheading(lines, i+1, end); resumed != 0 && !opens {
+		w.s.ended, w.s.endedText, w.s.resumed = i+1, lines[i], resumed
+	}
+	return true
+}
+
+// step reads one line that is not under a fence: a blank line is skipped, a row is read against the state the walk
+// is in, and any other line closes an open block.
+func (w *walk) step(raw, t string, i int) {
+	if t == "" {
+		return
+	}
+	if strings.HasPrefix(t, "|") {
+		w.readRow(t, i)
+		return
+	}
+	if w.state == insideTable {
+		w.s.ended, w.s.endedText, w.state = i+1, raw, afterEnd
+	}
+}
+
+// readRow takes one markdown row: before the header it is the header, inside the table it is a separator or a data
+// row — placeholders stay skipped, so a plan that says "no rows yet" is not read as one — and after a close it is
+// the proof that the table was cut.
+func (w *walk) readRow(t string, i int) {
+	switch w.state {
+	case beforeHeader:
+		w.s.header, w.state, w.s.head = split(t), insideTable, i+1
+	case insideTable:
+		cells := split(t)
 		switch {
-		case t == "":
-			continue
-		case strings.HasPrefix(t, "|"):
-			switch state {
-			case beforeHeader:
-				s.header, state, s.head = split(t), insideTable, i+1
-			case insideTable:
-				cells := split(t)
-				switch {
-				case isSeparator(cells):
-					s.head = i + 1
-				case !placeholder.MatchString(cell(cells, 0)):
-					s.rows = append(s.rows, row{line: i + 1, cells: cells})
-				}
-			default:
-				if s.resumed == 0 {
-					s.resumed = i + 1
-				}
-			}
-		default:
-			if state == insideTable {
-				s.ended, s.endedText, state = i+1, lines[i], afterEnd
-			}
+		case isSeparator(cells):
+			w.s.head = i + 1
+		case !placeholder.MatchString(cell(cells, 0)):
+			w.s.rows = append(w.s.rows, row{line: i + 1, cells: cells})
+		}
+	default:
+		if w.s.resumed == 0 {
+			w.s.resumed = i + 1
 		}
 	}
-	if fence != "" {
-		// Every line under the fence was skipped, so the table this region owes may be inside it.
-		s.fenceLine = fenceLine
-	}
-	return s
 }
 
 // tableUnderSubheading reads what follows a `###` line inside a region: the first line that opens a markdown
