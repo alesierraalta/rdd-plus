@@ -133,59 +133,107 @@ func CheckDocument(doc string) []string {
 	} {
 		problems = append(problems, runColumnProblems(t.name, t.scan)...)
 	}
-	ledgerIDs := map[string]bool{}
-	// The id is what a finding cites, so the line that first carried one is kept: a repeat is reported against
-	// that line, because a citation naming the id would resolve to one of two rows and nothing would say which.
-	ledgerIDLine := map[string]int{}
+	ledgerIDs, ledgerIssues := ledgerProblems(ledger)
+	problems = append(problems, ledgerIssues...)
+	problems = append(problems, findingProblems(findings, ledgerIDs)...)
+	if lightProblems, declared := lightReport(lines); declared {
+		problems = append(problems, lightProblems...)
+	}
+	return problems
+}
+
+// ledgerProblems reads the ledger back: the ids a finding may cite, the id that names two rows, and the
+// hypothesis that belongs under Hypotheses. The ids come back with the problems because the findings pass
+// resolves citations against them.
+//
+// The id is what a finding cites, so the line that first carried one is kept: a repeat is reported against that
+// line, because a citation naming the id would resolve to one of two rows and nothing would say which.
+func ledgerProblems(ledger tableScan) (map[string]bool, []string) {
+	ids := map[string]bool{}
+	idLine := map[string]int{}
+	var problems []string
 	for _, r := range ledger.rows {
 		id := cell(r.cells, 0)
-		if first, seen := ledgerIDLine[id]; seen {
+		if first, seen := idLine[id]; seen {
 			problems = append(problems, fmt.Sprintf("line %d: evidence %s repeats the id of the row on line %d, so a citation naming it points at two rows", r.line, quote(id), first))
 		} else {
-			ledgerIDLine[id] = r.line
+			idLine[id] = r.line
 		}
-		ledgerIDs[id] = true
+		ids[id] = true
 		if label := cell(r.cells, len(r.cells)-1); strings.EqualFold(label, "razonado") {
 			problems = append(problems, fmt.Sprintf("line %d: evidence %s is labelled razonado: a hypothesis belongs under Hypotheses, never in the ledger", r.line, quote(id)))
 		}
 	}
+	return ids, problems
+}
 
-	iFind := columnIndex(findings.header, "finding")
-	iEvidence := columnIndex(findings.header, "evidence")
-	iPin := columnIndex(findings.header, "pinning test")
-	iStatus := columnIndex(findings.header, "status")
-	findingIDLine := map[string]int{}
+// findingColumns are the four machine columns a finding row is read by, resolved by name so a column that
+// moves does not move the reading with it.
+type findingColumns struct {
+	find     int
+	evidence int
+	pin      int
+	status   int
+}
+
+func columnsOf(header []string) findingColumns {
+	return findingColumns{
+		find:     columnIndex(header, "finding"),
+		evidence: columnIndex(header, "evidence"),
+		pin:      columnIndex(header, "pinning test"),
+		status:   columnIndex(header, "status"),
+	}
+}
+
+// findingProblems reads every finding row, and reports a repeated id against the line that first carried it.
+func findingProblems(findings tableScan, ledgerIDs map[string]bool) []string {
+	cols := columnsOf(findings.header)
+	idLine := map[string]int{}
+	var problems []string
 	for _, r := range findings.rows {
 		id := quote(cell(r.cells, 0))
-		if first, seen := findingIDLine[cell(r.cells, 0)]; seen {
+		if first, seen := idLine[cell(r.cells, 0)]; seen {
 			problems = append(problems, fmt.Sprintf("line %d: finding %s repeats the id of the row on line %d, so the row a verdict or a pinning test belongs to is ambiguous", r.line, id, first))
 		} else {
-			findingIDLine[cell(r.cells, 0)] = r.line
+			idLine[cell(r.cells, 0)] = r.line
 		}
-		if iFind >= 0 && !pathCiteRe.MatchString(cell(r.cells, iFind)) {
-			problems = append(problems, fmt.Sprintf("line %d: finding %s cites no path:line, so nothing can be located", r.line, id))
-		}
-		ev := cell(r.cells, iEvidence)
-		switch {
-		case iEvidence < 0 || placeholder.MatchString(ev):
-			problems = append(problems, fmt.Sprintf("line %d: finding %s cites no evidence row", r.line, id))
-		default:
-			for _, part := range strings.FieldsFunc(ev, func(r rune) bool { return r == ',' || r == ';' || r == '/' || r == ' ' }) {
-				if part = strings.Trim(part, "`"); part != "" && !ledgerIDs[part] {
-					problems = append(problems, fmt.Sprintf("line %d: finding %s cites evidence %s, which is not a row in the Evidence ledger", r.line, id, quote(part)))
-				}
-			}
-		}
-		status, breach := findingStatus(cell(r.cells, iStatus))
-		if breach != "" {
-			problems = append(problems, fmt.Sprintf("line %d: finding %s %s", r.line, id, breach))
-		}
-		if settledStatus.MatchString(status) && (iPin < 0 || placeholder.MatchString(cell(r.cells, iPin))) {
-			problems = append(problems, fmt.Sprintf("line %d: finding %s is settled but names no pinning test", r.line, id))
-		}
+		problems = append(problems, findingRowProblems(r, id, cols, ledgerIDs)...)
 	}
-	if lightProblems, declared := lightReport(lines); declared {
-		problems = append(problems, lightProblems...)
+	return problems
+}
+
+// findingRowProblems reads one finding row against the four rules a row owes: the path:line that makes it
+// locatable, the evidence that has to be a ledger row, the closed status vocabulary, and the pinning test a
+// settled verdict names.
+func findingRowProblems(r row, id string, cols findingColumns, ledgerIDs map[string]bool) []string {
+	var problems []string
+	if cols.find >= 0 && !pathCiteRe.MatchString(cell(r.cells, cols.find)) {
+		problems = append(problems, fmt.Sprintf("line %d: finding %s cites no path:line, so nothing can be located", r.line, id))
+	}
+	problems = append(problems, evidenceProblems(r, id, cols.evidence, ledgerIDs)...)
+	status, breach := findingStatus(cell(r.cells, cols.status))
+	if breach != "" {
+		problems = append(problems, fmt.Sprintf("line %d: finding %s %s", r.line, id, breach))
+	}
+	if settledStatus.MatchString(status) && (cols.pin < 0 || placeholder.MatchString(cell(r.cells, cols.pin))) {
+		problems = append(problems, fmt.Sprintf("line %d: finding %s is settled but names no pinning test", r.line, id))
+	}
+	return problems
+}
+
+// evidenceProblems reads one finding's evidence cell against the ledger: a row that cites none is refused, and
+// every id it names has to be a row of the ledger. The cell holds a list (`E1, E2`, `E1/E3`), so the rule is
+// applied to each part rather than to the cell.
+func evidenceProblems(r row, id string, col int, ledgerIDs map[string]bool) []string {
+	ev := cell(r.cells, col)
+	if col < 0 || placeholder.MatchString(ev) {
+		return []string{fmt.Sprintf("line %d: finding %s cites no evidence row", r.line, id)}
+	}
+	var problems []string
+	for _, part := range strings.FieldsFunc(ev, func(r rune) bool { return r == ',' || r == ';' || r == '/' || r == ' ' }) {
+		if part = strings.Trim(part, "`"); part != "" && !ledgerIDs[part] {
+			problems = append(problems, fmt.Sprintf("line %d: finding %s cites evidence %s, which is not a row in the Evidence ledger", r.line, id, quote(part)))
+		}
 	}
 	return problems
 }
