@@ -397,3 +397,18 @@ func TestDoctorStaysQuietWhenItCannotCompareBinaries(t *testing.T) {
 		t.Fatalf("rdd-plus off PATH must stay quiet: %+v", r)
 	}
 }
+
+// A tree the doctor cannot walk is not a match. The comparison used to swallow that error and report an
+// unreadable skill as identical — a health check answering "verified" about files nothing read — and the
+// fail-closed half is this function's, because the shared reading already answers false.
+func TestDoctorDoesNotCallASkillVerifiedWhenItCannotReadTheTree(t *testing.T) {
+	// An empty embedded tree: the skill is not in it, so the walk cannot be completed.
+	skills := os.DirFS(t.TempDir())
+	target := t.TempDir()
+	if err := os.WriteFile(filepath.Join(target, "SKILL.md"), []byte("skill\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if matches(skills, "demo", target) {
+		t.Fatal("a skill whose tree could not be walked was reported as identical")
+	}
+}

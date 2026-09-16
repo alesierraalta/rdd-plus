@@ -3,7 +3,6 @@
 package doctor
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/alesierraalta/rdd-plus/internal/assets"
+	"github.com/alesierraalta/rdd-plus/internal/skilltree"
 )
 
 // SkillStatus is one embedded skill's presence and freshness in the config dir.
@@ -164,23 +164,14 @@ func (r Report) String() string {
 	return b.String()
 }
 
+// matches reports whether the installed skill still holds the bytes this build shipped.
+//
+// A tree it cannot walk is not a match. The copy this replaced swallowed that error and answered "identical"
+// for a skill nothing had read — the one answer a check must never give about a file it did not read. The error
+// itself needs no plumbing here: a health report answers yes or no, and the shared reading already returns false
+// beside it, so the doctor's half is only the decision.
 func matches(skills fs.FS, name, target string) bool {
-	same := true
-	_ = fs.WalkDir(skills, name, func(p string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || !same {
-			return err
-		}
-		want, err := fs.ReadFile(skills, p)
-		if err != nil {
-			return err
-		}
-		rel, _ := filepath.Rel(name, filepath.FromSlash(p))
-		got, err := os.ReadFile(filepath.Join(target, rel))
-		if err != nil || !bytes.Equal(want, got) {
-			same = false
-		}
-		return nil
-	})
+	same, _ := skilltree.Identical(skills, name, target)
 	return same
 }
 

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/alesierraalta/rdd-plus/internal/assets"
+	"github.com/alesierraalta/rdd-plus/internal/skilltree"
 )
 
 // Options controls a sync run.
@@ -164,27 +165,12 @@ func marshalSettings(settings map[string]any) ([]byte, error) {
 
 // identical reports whether every embedded file of the skill exists at target with the same
 // bytes; files the user added next to them (run artifacts, notes) do not count as a difference.
+//
+// The comparison itself lives in `internal/skilltree`: the doctor asks the same question about the same tree,
+// and an answer written twice is an answer that drifts. A tree this could not walk is an error here, so sync
+// refuses to replace a copy it could not compare rather than overwriting one it never read.
 func identical(skills fs.FS, name, target string) (bool, error) {
-	if _, err := os.Stat(target); err != nil {
-		return false, nil
-	}
-	same := true
-	err := fs.WalkDir(skills, name, func(p string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || !same {
-			return err
-		}
-		want, err := fs.ReadFile(skills, p)
-		if err != nil {
-			return err
-		}
-		rel, _ := filepath.Rel(name, filepath.FromSlash(p))
-		got, err := os.ReadFile(filepath.Join(target, rel))
-		if err != nil || !bytes.Equal(want, got) {
-			same = false
-		}
-		return nil
-	})
-	return same, err
+	return skilltree.Identical(skills, name, target)
 }
 
 func writeSkill(skills fs.FS, name, target string) error {
