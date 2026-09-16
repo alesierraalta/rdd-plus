@@ -110,10 +110,22 @@ func RunWith(cfgDir string, lookPath func(string) (string, error), probe func(co
 	return r
 }
 
-// String renders the report for a terminal.
+// String renders the report for a terminal: what this build shipped against what the host has, in the four
+// blocks a reader scans — skills, hook, capabilities and the verdict. The header is composed here and each block
+// writes its own bytes, so the order and the blank lines between them are one list a reader can follow.
 func (r Report) String() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "rdd-plus doctor · config dir %s\n\nskills\n", r.ConfigDir)
+	r.writeSkills(&b)
+	r.writeHook(&b)
+	r.writeCapabilities(&b)
+	r.writeVerdict(&b)
+	return b.String()
+}
+
+// writeSkills lists every skill this build ships with the state the host has it in: missing, installed and
+// identical to the embedded version, or installed and different from it.
+func (r Report) writeSkills(b *strings.Builder) {
 	for _, s := range r.Skills {
 		state := "missing"
 		if s.Installed && s.Matches {
@@ -121,24 +133,35 @@ func (r Report) String() string {
 		} else if s.Installed {
 			state = "installed, differs from the embedded version"
 		}
-		fmt.Fprintf(&b, "  %-32s %s\n", s.Name, state)
+		fmt.Fprintf(b, "  %-32s %s\n", s.Name, state)
 	}
-	fmt.Fprintf(&b, "\nhook\n")
+}
+
+// writeHook says how the Stop gate is wired and the two things that make a wired hook a broken one: a command
+// that does not answer a payload, and a gate binary that is not the rdd-plus on PATH — the two would give
+// different verdicts.
+func (r Report) writeHook(b *strings.Builder) {
+	fmt.Fprintf(b, "\nhook\n")
 	switch r.HookKind {
 	case HookRddPlus:
-		fmt.Fprintf(&b, "  Stop gate wired: %s\n", r.HookCommand)
+		fmt.Fprintf(b, "  Stop gate wired: %s\n", r.HookCommand)
 	case HookStandalone:
-		fmt.Fprintf(&b, "  Stop gate wired to a standalone gate binary: %s\n", r.HookCommand)
+		fmt.Fprintf(b, "  Stop gate wired to a standalone gate binary: %s\n", r.HookCommand)
 	default:
-		fmt.Fprintf(&b, "  Stop gate NOT wired\n")
+		fmt.Fprintf(b, "  Stop gate NOT wired\n")
 	}
 	if r.HookProbed {
-		fmt.Fprintf(&b, "  the wired command answers a payload\n")
+		fmt.Fprintf(b, "  the wired command answers a payload\n")
 	}
 	if r.BinariesDiffer {
-		fmt.Fprintf(&b, "  warning: the wired gate binary %s and the rdd-plus on PATH %s are different files: the two would give different verdicts\n", r.WiredBinary, r.PathBinary)
+		fmt.Fprintf(b, "  warning: the wired gate binary %s and the rdd-plus on PATH %s are different files: the two would give different verdicts\n", r.WiredBinary, r.PathBinary)
 	}
-	fmt.Fprintf(&b, "\ncapabilities\n")
+}
+
+// writeCapabilities lists what the host can do, marking the ones the discipline needs and saying what degrades
+// without the ones that are absent.
+func (r Report) writeCapabilities(b *strings.Builder) {
+	fmt.Fprintf(b, "\ncapabilities\n")
 	for _, c := range r.Capabilities {
 		mark := "present"
 		if !c.Present {
@@ -147,21 +170,25 @@ func (r Report) String() string {
 				mark = "ABSENT (required)"
 			}
 		}
-		fmt.Fprintf(&b, "  %-10s %-18s", c.Name, mark)
+		fmt.Fprintf(b, "  %-10s %-18s", c.Name, mark)
 		if !c.Present && c.Degrades != "" {
-			fmt.Fprintf(&b, " without it: %s", c.Degrades)
+			fmt.Fprintf(b, " without it: %s", c.Degrades)
 		}
 		b.WriteString("\n")
 	}
+}
+
+// writeVerdict is the line the operator reads first, and the problems it is made of: a healthy report has none,
+// and an unhealthy one names each of them under the verdict that says action is required.
+func (r Report) writeVerdict(b *strings.Builder) {
 	if r.Healthy {
-		fmt.Fprintf(&b, "\nverdict: healthy\n")
-	} else {
-		fmt.Fprintf(&b, "\nverdict: action required\n")
-		for _, p := range r.Problems {
-			fmt.Fprintf(&b, "  - %s\n", p)
-		}
+		fmt.Fprintf(b, "\nverdict: healthy\n")
+		return
 	}
-	return b.String()
+	fmt.Fprintf(b, "\nverdict: action required\n")
+	for _, p := range r.Problems {
+		fmt.Fprintf(b, "  - %s\n", p)
+	}
 }
 
 // matches reports whether the installed skill still holds the bytes this build shipped.
