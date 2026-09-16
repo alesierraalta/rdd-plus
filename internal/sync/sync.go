@@ -1,5 +1,5 @@
-// Package sync installs the embedded skills into a Claude config directory and wires the gate
-// as a Stop hook, merging into settings.json without touching anything it does not own.
+// Package sync installs the embedded skills into every discovered host and wires the gate
+// as a Claude Stop hook, merging into settings.json without touching anything it does not own.
 package sync
 
 import (
@@ -22,7 +22,20 @@ type Options struct {
 	DryRun bool
 }
 
-// Report says what a sync did, or would do under DryRun.
+// HostReport says what sync did, or would do, for one host.
+type HostReport struct {
+	Host            Host
+	Written         []string
+	Unchanged       []string
+	BackedUp        map[string]string
+	RemovedHooks    []string
+	SettingsPath    string
+	SettingsRead    bool
+	SettingsChanged bool
+}
+
+// Report says what a sync did, or would do under DryRun. The fields copied from the Claude
+// host remain for callers of Sync; Hosts is the multi-host report used by the CLI.
 type Report struct {
 	ConfigDir    string
 	DryRun       bool
@@ -36,7 +49,14 @@ type Report struct {
 	// is `already wired` would be a sentence about a file nobody looked at.
 	SettingsRead    bool
 	SettingsChanged bool
+
+	Hosts           []HostReport
+	LookedFor       []string
+	DiscoveryErrors []string
+	ClaudeConfigDir string
 }
+
+var documentedOnlyHosts = []string{"opencode", "gemini", "codex"}
 
 // String renders the report for a terminal.
 func (r Report) String() string {
@@ -45,26 +65,64 @@ func (r Report) String() string {
 	if r.DryRun {
 		prefix = "[dry-run] "
 	}
-	fmt.Fprintf(&b, "%sconfig dir: %s\n", prefix, r.ConfigDir)
-	for _, s := range r.Written {
-		if dir, ok := r.BackedUp[s]; ok {
-			fmt.Fprintf(&b, "%sskill %-32s replaced (previous copy at %s)\n", prefix, s, dir)
-		} else {
-			fmt.Fprintf(&b, "%sskill %-32s written\n", prefix, s)
+	if len(r.Hosts) == 0 {
+		fmt.Fprintf(&b, "%sno installed hosts found\n", prefix)
+		if len(r.LookedFor) > 0 {
+			fmt.Fprintf(&b, "%slooked for host config dirs:\n", prefix)
+			for _, path := range r.LookedFor {
+				fmt.Fprintf(&b, "%s  %s\n", prefix, path)
+			}
+		}
+	} else {
+		for _, host := range r.Hosts {
+			fmt.Fprintf(&b, "%shost: %s\n", prefix, host.Host.Name)
+			fmt.Fprintf(&b, "%sconfig dir: %s\n", prefix, host.Host.ConfigDir)
+			for _, s := range host.Written {
+				if dir, ok := host.BackedUp[s]; ok {
+					fmt.Fprintf(&b, "%sskill %-32s replaced (previous copy at %s)\n", prefix, s, dir)
+				} else {
+					fmt.Fprintf(&b, "%sskill %-32s written\n", prefix, s)
+				}
+			}
+			for _, s := range host.Unchanged {
+				fmt.Fprintf(&b, "%sskill %-32s unchanged\n", prefix, s)
+			}
+			for _, h := range host.RemovedHooks {
+				fmt.Fprintf(&b, "%sremoved previous gate hook: %s\n", prefix, h)
+			}
+			if host.SettingsRead {
+				if host.SettingsChanged {
+					fmt.Fprintf(&b, "%ssettings: gate hook wired in %s\n", prefix, host.SettingsPath)
+				} else {
+					fmt.Fprintf(&b, "%ssettings: gate hook already wired in %s\n", prefix, host.SettingsPath)
+				}
+			}
 		}
 	}
-	for _, s := range r.Unchanged {
-		fmt.Fprintf(&b, "%sskill %-32s unchanged\n", prefix, s)
+	for _, problem := range r.DiscoveryErrors {
+		fmt.Fprintf(&b, "%sdiscovery: %s\n", prefix, problem)
 	}
-	for _, h := range r.RemovedHooks {
-		fmt.Fprintf(&b, "%sremoved previous gate hook: %s\n", prefix, h)
-	}
-	if r.SettingsRead {
-		if r.SettingsChanged {
-			fmt.Fprintf(&b, "%ssettings: gate hook wired in %s\n", prefix, r.SettingsPath)
-		} else {
-			fmt.Fprintf(&b, "%ssettings: gate hook already wired in %s\n", prefix, r.SettingsPath)
+
+	claudeRead := false
+	claudePresent := false
+	for _, host := range r.Hosts {
+		if host.Host.Name == "claude" {
+			claudePresent = true
+			claudeRead = host.SettingsRead
+			break
 		}
+	}
+	if claudeRead || !claudePresent {
+		claudeDir := r.ClaudeConfigDir
+		if claudeDir == "" {
+			claudeDir = r.ConfigDir
+		}
+		if claudeRead {
+			fmt.Fprintf(&b, "%shook: Stop hook wired only in Claude config dir %s\n", prefix, claudeDir)
+		} else {
+			fmt.Fprintf(&b, "%shook: Stop hook not wired; Claude config dir %s was not discovered\n", prefix, claudeDir)
+		}
+		fmt.Fprintf(&b, "%shook transport: documented rather than wired for %s\n", prefix, strings.Join(documentedOnlyHosts, ", "))
 	}
 	return b.String()
 }
@@ -74,42 +132,78 @@ func HookCommand(binPath string) string {
 	return fmt.Sprintf("%q gate", binPath)
 }
 
-// Sync installs every embedded skill under <cfgDir>/skills and wires the Stop hook.
-// An unparseable settings.json aborts before anything is written.
+// Sync installs every embedded skill under the Claude config directory and wires its Stop hook.
+// It preserves the original single-directory API; the CLI uses SyncHosts after discovery.
 func Sync(cfgDir, binPath string, opts Options) (Report, error) {
-	report := Report{ConfigDir: cfgDir, DryRun: opts.DryRun, BackedUp: map[string]string{}}
-	report.SettingsPath = filepath.Join(cfgDir, "settings.json")
+	return SyncHosts([]Host{{Name: "claude", ConfigDir: cfgDir, SkillsDir: filepath.Join(cfgDir, "skills")}}, binPath, opts)
+}
 
-	settings, raw, err := loadSettings(report.SettingsPath)
-	if err != nil {
+// SyncHosts installs every embedded skill into each supplied host. Only the host named
+// claude receives settings.json hook wiring; all other hosts receive skills only.
+func SyncHosts(hosts []Host, binPath string, opts Options) (Report, error) {
+	report := Report{DryRun: opts.DryRun, BackedUp: map[string]string{}}
+	for _, host := range hosts {
+		if host.Name == "claude" {
+			report.ConfigDir = host.ConfigDir
+			report.ClaudeConfigDir = host.ConfigDir
+		}
+		hostReport, err := syncHost(host, binPath, opts)
+		report.Hosts = append(report.Hosts, hostReport)
+		if host.Name == "claude" {
+			report.ConfigDir = host.ConfigDir
+			report.Written = hostReport.Written
+			report.Unchanged = hostReport.Unchanged
+			report.BackedUp = hostReport.BackedUp
+			report.RemovedHooks = hostReport.RemovedHooks
+			report.SettingsPath = hostReport.SettingsPath
+			report.SettingsRead = hostReport.SettingsRead
+			report.SettingsChanged = hostReport.SettingsChanged
+		}
+		if err != nil {
+			return report, err
+		}
+	}
+	return report, nil
+}
+
+func syncHost(host Host, binPath string, opts Options) (HostReport, error) {
+	report := HostReport{Host: host, BackedUp: map[string]string{}}
+	var settings map[string]any
+	var raw []byte
+	var err error
+	if host.Name == "claude" {
+		report.SettingsPath = filepath.Join(host.ConfigDir, "settings.json")
+		settings, raw, err = loadSettings(report.SettingsPath)
+		if err != nil {
+			return report, err
+		}
+		report.SettingsRead = true
+	}
+	if err := installSkills(host, opts, &report); err != nil {
 		return report, err
 	}
-	report.SettingsRead = true
-	if err := installSkills(cfgDir, opts, &report); err != nil {
-		return report, err
-	}
-	if err := applyHook(cfgDir, binPath, opts, settings, raw, &report); err != nil {
+	if err := applyHook(host, binPath, opts, settings, raw, &report); err != nil {
 		return report, err
 	}
 	return report, nil
 }
 
-// installSkills writes every embedded skill under <cfgDir>/skills, one skill at a time.
-func installSkills(cfgDir string, opts Options, report *Report) error {
+// installSkills writes every embedded skill under the host's skills directory, one skill at a time.
+func installSkills(host Host, opts Options, report *HostReport) error {
 	skills := assets.Skills()
 	for _, name := range assets.SkillNames() {
-		if err := installSkill(skills, cfgDir, name, opts, report); err != nil {
+		if err := installSkill(skills, host, name, opts, report); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// installSkill writes one skill, moving the installed copy aside first when there is one to move: a differing
-// skill is replaced rather than merged, and the copy it replaced is kept where the operator can find it. A dry
-// run records what it would do and writes nothing.
-func installSkill(skills fs.FS, cfgDir, name string, opts Options, report *Report) error {
-	target := filepath.Join(cfgDir, "skills", name)
+// installSkill writes one skill into the host, moving the installed copy aside first when there is one to move: a
+// differing skill is replaced rather than merged, and the copy it replaced is kept where the operator can find it.
+// A dry run records what it would do and writes nothing.
+func installSkill(skills fs.FS, host Host, name string, opts Options, report *HostReport) error {
+	target := filepath.Join(host.SkillsDir, name)
 	same, err := identical(skills, name, target)
 	if err != nil {
 		return err
@@ -119,7 +213,7 @@ func installSkill(skills fs.FS, cfgDir, name string, opts Options, report *Repor
 		return nil
 	}
 	if _, err := os.Stat(target); err == nil {
-		backup := filepath.Join(cfgDir, "skills", ".rdd-plus-backup", name+"-"+time.Now().UTC().Format("20060102T150405Z"))
+		backup := nextBackupPath(host.SkillsDir, name)
 		report.BackedUp[name] = backup
 		if !opts.DryRun {
 			if err := os.MkdirAll(filepath.Dir(backup), 0o755); err != nil {
@@ -129,6 +223,8 @@ func installSkill(skills fs.FS, cfgDir, name string, opts Options, report *Repor
 				return err
 			}
 		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
 	}
 	if !opts.DryRun {
 		if err := writeSkill(skills, name, target); err != nil {
@@ -140,16 +236,20 @@ func installSkill(skills fs.FS, cfgDir, name string, opts Options, report *Repor
 }
 
 // applyHook wires the Stop hook into the settings this run read, and writes the file back when that changed
-// anything: a settings file that was absent counts as a change, because the hook has to be written into one. A
-// dry run reports the change and writes nothing.
-func applyHook(cfgDir, binPath string, opts Options, settings map[string]any, raw []byte, report *Report) error {
+// anything: a settings file that was absent counts as a change, because the hook has to be written into one. Only
+// the claude host has settings to wire; every other host receives skills only. A dry run reports the change and
+// writes nothing.
+func applyHook(host Host, binPath string, opts Options, settings map[string]any, raw []byte, report *HostReport) error {
+	if host.Name != "claude" {
+		return nil
+	}
 	changed, removed := wireHook(settings, HookCommand(binPath))
 	report.RemovedHooks = removed
 	report.SettingsChanged = changed || raw == nil
 	if !report.SettingsChanged || opts.DryRun {
 		return nil
 	}
-	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+	if err := os.MkdirAll(host.ConfigDir, 0o755); err != nil {
 		return err
 	}
 	out, err := marshalSettings(settings)
@@ -157,6 +257,18 @@ func applyHook(cfgDir, binPath string, opts Options, settings map[string]any, ra
 		return err
 	}
 	return os.WriteFile(report.SettingsPath, out, 0o644)
+}
+
+func nextBackupPath(skillsDir, name string) string {
+	stamp := time.Now().UTC().Format("20060102T150405Z")
+	base := filepath.Join(skillsDir, ".rdd-plus-backup", name+"-"+stamp)
+	candidate := base
+	for i := 1; ; i++ {
+		if _, err := os.Stat(candidate); errors.Is(err, os.ErrNotExist) || err != nil {
+			return candidate
+		}
+		candidate = fmt.Sprintf("%s-%d", base, i)
+	}
 }
 
 // loadSettings returns the parsed settings, the raw bytes (nil when the file is absent),

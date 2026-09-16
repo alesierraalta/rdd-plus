@@ -1008,3 +1008,147 @@ func TestBenchScoreReportsTheScoreItCouldNotWrite(t *testing.T) {
 		t.Fatalf("the failure must name the command and where the write went:\n%s", stderr)
 	}
 }
+func syncTestHome(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	for _, dir := range []string{".claude", filepath.Join(".config", "opencode"), ".gemini", ".codex"} {
+		if err := os.MkdirAll(filepath.Join(home, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return home
+}
+
+func runCLIWithHome(t *testing.T, home, bin string, args ...string) (string, int) {
+	t.Helper()
+	cmd := exec.Command(bin, args...)
+	cmd.Env = append(os.Environ(), "HOME="+home)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		return string(out), 0
+	}
+	var ee exec.ExitError
+	if asExit(err, &ee) {
+		return string(out), ee.ExitCode()
+	}
+	t.Fatalf("run %v: %v", args, err)
+	return "", -1
+}
+
+func TestSyncReportsWhenNoHostIsInstalled(t *testing.T) {
+	bin := buildCLI(t)
+	home := t.TempDir()
+	out, code := runCLIWithHome(t, home, bin, "sync")
+	if code != 0 {
+		t.Fatalf("sync with no installed host exit = %d\n%s", code, out)
+	}
+	for _, path := range []string{filepath.Join(home, ".claude"), filepath.Join(home, ".config", "opencode"), filepath.Join(home, ".gemini"), filepath.Join(home, ".codex")} {
+		if !strings.Contains(out, path) {
+			t.Fatalf("no-host report missing looked-for path %q:\n%s", path, out)
+		}
+	}
+	if !strings.Contains(out, "no installed hosts found") {
+		t.Fatalf("no-host report is silent about the result:\n%s", out)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".claude")); !os.IsNotExist(err) {
+		t.Fatalf("sync created a missing Claude config dir: %v", err)
+	}
+}
+
+func TestSyncConfigDirCreatesMissingClaudeTarget(t *testing.T) {
+	bin := buildCLI(t)
+	home := syncTestHome(t)
+	custom := filepath.Join(home, "custom-claude")
+	out, code := runCLIWithHome(t, home, bin, "sync", "--config-dir", custom)
+	if code != 0 {
+		t.Fatalf("sync --config-dir with a missing target exit = %d\n%s", code, out)
+	}
+	if _, err := os.Stat(filepath.Join(custom, "skills", "test-strategy", "SKILL.md")); err != nil {
+		t.Fatalf("missing Claude target did not receive skills: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(custom, "settings.json")); err != nil {
+		t.Fatalf("missing Claude target did not receive settings: %v", err)
+	}
+}
+
+func TestSyncConfigDirOnlyTargetsClaude(t *testing.T) {
+	bin := buildCLI(t)
+	home := syncTestHome(t)
+	custom := filepath.Join(home, "custom-claude")
+	if err := os.Mkdir(custom, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, code := runCLIWithHome(t, home, bin, "sync", "--config-dir", custom)
+	if code != 0 {
+		t.Fatalf("sync --config-dir exit = %d\n%s", code, out)
+	}
+	if _, err := os.Stat(filepath.Join(custom, "skills", "ask-or-research", "SKILL.md")); err != nil {
+		t.Fatalf("custom Claude directory did not receive skills: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(custom, "settings.json")); err != nil {
+		t.Fatalf("custom Claude directory did not receive settings.json: %v", err)
+	}
+	for _, dir := range []string{filepath.Join(home, ".claude"), filepath.Join(home, ".config", "opencode"), filepath.Join(home, ".gemini"), filepath.Join(home, ".codex")} {
+		if _, err := os.Stat(filepath.Join(dir, "skills")); !os.IsNotExist(err) {
+			t.Fatalf("--config-dir installed outside Claude directory %s: %v", dir, err)
+		}
+	}
+}
+
+func TestSyncHostsFlagNarrowsTheInstall(t *testing.T) {
+	bin := buildCLI(t)
+	home := syncTestHome(t)
+	out, code := runCLIWithHome(t, home, bin, "sync", "--hosts", "gemini,codex")
+	if code != 0 {
+		t.Fatalf("sync --hosts exit = %d\n%s", code, out)
+	}
+	name := "ask-or-research"
+	for _, host := range []struct {
+		name string
+		dir  string
+		want bool
+	}{
+		{"claude", filepath.Join(home, ".claude"), false},
+		{"opencode", filepath.Join(home, ".config", "opencode"), false},
+		{"gemini", filepath.Join(home, ".gemini"), true},
+		{"codex", filepath.Join(home, ".codex"), true},
+	} {
+		_, err := os.Stat(filepath.Join(host.dir, "skills", name, "SKILL.md"))
+		if (err == nil) != host.want {
+			t.Errorf("%s installed = %v, want %v: %v", host.name, err == nil, host.want, err)
+		}
+	}
+}
+
+func TestSyncRefusesAnUnknownHostName(t *testing.T) {
+	bin := buildCLI(t)
+	home := syncTestHome(t)
+	out, code := runCLIWithHome(t, home, bin, "sync", "--hosts", "claude,wat")
+	if code != 2 {
+		t.Fatalf("unknown host exit = %d, want 2\n%s", code, out)
+	}
+	for _, want := range []string{"unknown host", "claude", "opencode", "gemini", "codex"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("unknown host output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestSyncDryRunNamesEveryHost(t *testing.T) {
+	bin := buildCLI(t)
+	home := syncTestHome(t)
+	out, code := runCLIWithHome(t, home, bin, "sync", "--dry-run")
+	if code != 0 {
+		t.Fatalf("sync --dry-run exit = %d\n%s", code, out)
+	}
+	for _, host := range []string{"claude", "opencode", "gemini", "codex"} {
+		if !strings.Contains(out, "host: "+host) {
+			t.Fatalf("dry-run output missing host %q:\n%s", host, out)
+		}
+	}
+	for _, dir := range []string{".claude", filepath.Join(".config", "opencode"), ".gemini", ".codex"} {
+		if _, err := os.Stat(filepath.Join(home, dir, "settings.json")); !os.IsNotExist(err) {
+			t.Fatalf("dry-run wrote settings.json under %s: %v", dir, err)
+		}
+	}
+}

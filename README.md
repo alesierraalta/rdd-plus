@@ -14,22 +14,26 @@ environment can do so a skill degrades explicitly instead of failing on a tool i
 
 ```sh
 go install github.com/alesierraalta/rdd-plus/cmd/rdd-plus@latest
-rdd-plus sync      # installs the skills into ~/.claude/skills and wires the Stop hook
+rdd-plus sync      # installs skills into every discovered host; wires the Stop hook only for Claude
 rdd-plus doctor    # verifies the install and lists optional capabilities
 ```
 
-`sync` merges into `~/.claude/settings.json`: every existing hook and setting is preserved, the
-gate is added once, and running it again changes nothing. A skill you edited locally is moved to
+`sync` installs the embedded skills into every host it finds: `~/.claude/skills`,
+`~/.config/opencode/skills`, `~/.gemini/skills`, and `~/.codex/skills`. The Stop hook is wired only
+where its transport is known—Claude Code's `~/.claude/settings.json`; OpenCode, Gemini, and Codex
+receive skills but their transports are documented rather than wired. Claude's sync merges into
+`~/.claude/settings.json`: every existing hook and setting is preserved, the gate is added once,
+and running it again changes nothing. A skill you edited locally is moved to
 `~/.claude/skills/.rdd-plus-backup/<name>-<timestamp>/` before it is replaced. An unparseable
 `settings.json` aborts the run before anything is written. Use `--config-dir` to target another
-directory and `--dry-run` to see the plan.
+Claude directory, `--hosts` to narrow installation, and `--dry-run` to see the plan.
 
 ## Commands
 
 | Command | What it does |
 |---|---|
 | `rdd-plus gate` | The Stop hook. Reads the hook payload on stdin, decides, logs one line, and emits Stop feedback when a session changed production source without loading the adversarial testing discipline. Always exits 0. |
-| `rdd-plus sync` | Installs the embedded skills and wires the gate. Idempotent. |
+| `rdd-plus sync` | Installs the embedded skills into discovered hosts and wires Claude's Stop hook. Idempotent. |
 | `rdd-plus doctor` | Reports installed skills (and whether they drift from the embedded version), whether the hook is wired, and which optional tools are on PATH with what degrades without each. `--json` for machines. Exit 1 when git, a skill, or the hook is missing. |
 | `rdd-plus plan` | Writes the plan skeleton, checks the contract, names the breadth still owed, and records one Findings row from flags. `add-finding` writes that row only: it refuses a row the checker would reject and never writes an evidence row. |
 | `rdd-plus plan admit` | Reads the plan's Evidence ledger and decides every row. A dry run by default: `--execute` runs each admitted row's one command through `sh -c` twice, so a pin is only recorded over an output that held still, `--sandbox` observes it in a container with the tree mounted read-only and no network (it needs docker, and the default image is pulled on first use) and replays a declared `Mutate` edit against a writable copy of the tree, where the command must go red under the edit and green once the file is put back, `--only <ids>` narrows the run, `--timeout` bounds one command, and `--record <ids>` writes the observed digest into the plan together with the mode it was observed in. Exit 1 when a row is refused. |
