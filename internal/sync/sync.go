@@ -85,54 +85,78 @@ func Sync(cfgDir, binPath string, opts Options) (Report, error) {
 		return report, err
 	}
 	report.SettingsRead = true
+	if err := installSkills(cfgDir, opts, &report); err != nil {
+		return report, err
+	}
+	if err := applyHook(cfgDir, binPath, opts, settings, raw, &report); err != nil {
+		return report, err
+	}
+	return report, nil
+}
 
+// installSkills writes every embedded skill under <cfgDir>/skills, one skill at a time.
+func installSkills(cfgDir string, opts Options, report *Report) error {
 	skills := assets.Skills()
 	for _, name := range assets.SkillNames() {
-		target := filepath.Join(cfgDir, "skills", name)
-		same, err := identical(skills, name, target)
-		if err != nil {
-			return report, err
+		if err := installSkill(skills, cfgDir, name, opts, report); err != nil {
+			return err
 		}
-		if same {
-			report.Unchanged = append(report.Unchanged, name)
-			continue
-		}
-		if _, err := os.Stat(target); err == nil {
-			backup := filepath.Join(cfgDir, "skills", ".rdd-plus-backup", name+"-"+time.Now().UTC().Format("20060102T150405Z"))
-			report.BackedUp[name] = backup
-			if !opts.DryRun {
-				if err := os.MkdirAll(filepath.Dir(backup), 0o755); err != nil {
-					return report, err
-				}
-				if err := os.Rename(target, backup); err != nil {
-					return report, err
-				}
-			}
-		}
-		if !opts.DryRun {
-			if err := writeSkill(skills, name, target); err != nil {
-				return report, err
-			}
-		}
-		report.Written = append(report.Written, name)
 	}
+	return nil
+}
 
+// installSkill writes one skill, moving the installed copy aside first when there is one to move: a differing
+// skill is replaced rather than merged, and the copy it replaced is kept where the operator can find it. A dry
+// run records what it would do and writes nothing.
+func installSkill(skills fs.FS, cfgDir, name string, opts Options, report *Report) error {
+	target := filepath.Join(cfgDir, "skills", name)
+	same, err := identical(skills, name, target)
+	if err != nil {
+		return err
+	}
+	if same {
+		report.Unchanged = append(report.Unchanged, name)
+		return nil
+	}
+	if _, err := os.Stat(target); err == nil {
+		backup := filepath.Join(cfgDir, "skills", ".rdd-plus-backup", name+"-"+time.Now().UTC().Format("20060102T150405Z"))
+		report.BackedUp[name] = backup
+		if !opts.DryRun {
+			if err := os.MkdirAll(filepath.Dir(backup), 0o755); err != nil {
+				return err
+			}
+			if err := os.Rename(target, backup); err != nil {
+				return err
+			}
+		}
+	}
+	if !opts.DryRun {
+		if err := writeSkill(skills, name, target); err != nil {
+			return err
+		}
+	}
+	report.Written = append(report.Written, name)
+	return nil
+}
+
+// applyHook wires the Stop hook into the settings this run read, and writes the file back when that changed
+// anything: a settings file that was absent counts as a change, because the hook has to be written into one. A
+// dry run reports the change and writes nothing.
+func applyHook(cfgDir, binPath string, opts Options, settings map[string]any, raw []byte, report *Report) error {
 	changed, removed := wireHook(settings, HookCommand(binPath))
 	report.RemovedHooks = removed
 	report.SettingsChanged = changed || raw == nil
-	if report.SettingsChanged && !opts.DryRun {
-		if err := os.MkdirAll(cfgDir, 0o755); err != nil {
-			return report, err
-		}
-		out, err := marshalSettings(settings)
-		if err != nil {
-			return report, err
-		}
-		if err := os.WriteFile(report.SettingsPath, out, 0o644); err != nil {
-			return report, err
-		}
+	if !report.SettingsChanged || opts.DryRun {
+		return nil
 	}
-	return report, nil
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		return err
+	}
+	out, err := marshalSettings(settings)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(report.SettingsPath, out, 0o644)
 }
 
 // loadSettings returns the parsed settings, the raw bytes (nil when the file is absent),
