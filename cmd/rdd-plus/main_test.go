@@ -15,6 +15,7 @@ import (
 	"github.com/alesierraalta/rdd-plus/internal/admit"
 	"github.com/alesierraalta/rdd-plus/internal/buildinfo"
 	"github.com/alesierraalta/rdd-plus/internal/evidence"
+	plancheck "github.com/alesierraalta/rdd-plus/internal/plan"
 )
 
 // buildCLI compiles the command once per test binary; the contract under test is the process's,
@@ -989,7 +990,12 @@ func TestBenchScoreReportsTheScoreItCouldNotWrite(t *testing.T) {
 	plan := "## Findings\n\n| Id | Finding | Severity | Data safe? | Evidence id | Pinning test | Status | Verdict by / date | Reason | Fingerprint |\n|---|---|---|---|---|---|---|---|---|---|\n" +
 		"| F1 | `src/a.js:5` alpha | M | yes | E1 | t.js :: x | fixed | me | - | - |\n\n" +
 		"## Evidence ledger\n\n| Id | Claim | Executed | Admit | Inputs and parameters | Observed | Digest | Normalize | Mode | Mutate | Mutation or negative control → result | Reproduction | Label |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|\n" +
-		"| E1 | c | cmd | i | o | m | r | observado |\n"
+		"| E1 | the claim | go test ./... | go test ./... | none | the observation | sha256:aaaa | none | host | none | reverted → red | rerun it | observado |\n"
+	// The fixture is a plan this repository's own checker accepts: a row that declares thirteen columns and writes
+	// eight is the cell-count breach the checker refuses, and a fixture is where that mistake would be copied from.
+	if problems := plancheck.CheckDocument(plan); len(problems) != 0 {
+		t.Fatalf("the fixture is not a plan the checker accepts: %v", problems)
+	}
 	if err := os.WriteFile(planFile, []byte(plan), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -997,7 +1003,8 @@ func TestBenchScoreReportsTheScoreItCouldNotWrite(t *testing.T) {
 	if code != exitArtifact {
 		t.Fatalf("code = %d, want %d: the JSON score was not written\nstderr: %s", code, exitArtifact, stderr)
 	}
-	if !strings.Contains(stderr, "score:") {
-		t.Fatalf("the failure must name the command whose output was lost:\n%s", stderr)
+	// The line has to name the command and the write that failed: a prefix check passes for any message.
+	if !strings.Contains(stderr, "score:") || !strings.Contains(stderr, "/dev/stdout") {
+		t.Fatalf("the failure must name the command and where the write went:\n%s", stderr)
 	}
 }
