@@ -42,146 +42,47 @@ type Deps struct {
 // Run admits the requested Evidence rows and returns the process exit code: 0 when no row was refused, 1 when
 // a row was refused or the plan could not be read or written, and 2 when a flag precondition or a named id is
 // wrong. It writes the row lines and the summary to deps.Out and every refusal to deps.Err.
+// Run admits the requested Evidence rows and returns the process exit code: 0 when no row was refused, 1 when
+// a row was refused or the plan could not be read or written, and 2 when a flag precondition or a named id is
+// wrong. It writes the row lines and the summary to deps.Out and every refusal to deps.Err.
+//
+// It is the pipeline the subcommand is: check the request, read the document it names, admit the rows, report
+// them, and write what was recorded back. Each of those is a function, because each has an outcome a reader can
+// hold — this one only decides what the run's exit code is.
 func Run(req Request, deps Deps) int {
 	onlyIDs := admitIDs(req.Only)
 	recordIDs := admitIDs(req.Record)
-	if len(recordIDs) > 0 && !req.Execute {
-		fmt.Fprintln(deps.Err, "plan admit: --record requires --execute: recording pins the observation this run makes, and a dry run makes none")
-		return 2
-	}
-	if req.Sandbox && !req.Execute {
-		fmt.Fprintln(deps.Err, "plan admit: --sandbox requires --execute: a dry run executes nothing, so there is nothing to confine")
-		return 2
-	}
-	mode := evidence.ModeHost
-	if req.Sandbox {
-		mode = evidence.ModeSandbox
+	mode, code, ok := checkRequest(req, recordIDs, deps)
+	if !ok {
+		return code
 	}
 	raw, err := os.ReadFile(req.Path)
 	if err != nil {
 		fmt.Fprintln(deps.Err, "plan admit:", err)
 		return 1
 	}
-	ledgerRows := plan.Ledger(string(raw))
-	// A named row that does not exist is a mistake the user must see: without this, `--record ZZZ` is a
-	// silent no-op whose exit code depends only on the other rows, and `--only ZZZ` silently narrows to
-	// nothing. Both flags are checked against the ids the ledger actually carries.
+	rows := plan.Ledger(string(raw))
 	for _, flag := range []struct {
 		name string
 		ids  []string
 	}{{"--only", onlyIDs}, {"--record", recordIDs}} {
-		if id := unknownID(flag.ids, ledgerRows); id != "" {
-			return ledgerIDError(deps.Err, flag.name, id, ledgerRows)
+		if id := unknownID(flag.ids, rows); id != "" {
+			return ledgerIDError(deps.Err, flag.name, id, rows)
 		}
 	}
-	runner := deps.Run
-	if req.Sandbox {
-		runner = deps.SandboxRunner(req.Image, SandboxReadOnly)
-	}
-	evidenceDeps := evidence.Deps{Run: runner}
-	// The replay is wired exactly where a tree the tool owns exists: a sandbox stages a copy of the tree git knows,
-	// edits the copy, runs against it and puts the file back, so a row that claims its own command is falsifiable
-	// has that claim checked instead of admitted unchecked. The host mode has no such copy and leaves Replay nil,
-	// which refuses such a row.
-	if req.Sandbox {
-		evidenceDeps.Replay = deps.Replay(deps.SandboxRunner(req.Image, SandboxWritable), req.Timeout)
-	}
-	results := evidence.Admit(ledgerRows, evidence.Options{
+	results := evidence.Admit(rows, evidence.Options{
 		Execute: req.Execute,
 		Dir:     req.Dir,
 		Timeout: req.Timeout,
 		Mode:    mode,
 		Only:    onlyIDs,
 		Record:  recordIDs,
-	}, evidenceDeps)
+	}, boundaries(req, deps))
 
-	admitted, wouldRun, refused := 0, 0, 0
-	for _, r := range results {
-		switch r.Verdict {
-		case evidence.VerdictAdmitted:
-			admitted++
-			fmt.Fprintf(deps.Out, "%s  %s  %s  %s  %d lines\n", r.ID, r.Verdict, r.Command, r.Digest, r.Lines)
-		case evidence.VerdictWouldRun:
-			wouldRun++
-			fmt.Fprintf(deps.Out, "%s  %s  %s\n", r.ID, r.Verdict, r.Command)
-		default:
-			// A refusal prints the human sentence beside its machine reason, so a run that stops here
-			// still says what to change and what a caller can branch on.
-			refused++
-			fmt.Fprintf(deps.Out, "%s  %s  %s  [%s]\n", r.ID, r.Verdict, r.Detail, r.Reason)
-		}
-	}
-
-	// Recording applies every edit to the document in memory and writes the file once, so a run that
-	// records three rows leaves one write. A splice that refuses aborts the whole write rather than
-	// skipping the row: a half-recorded ledger is the state this feature exists to prevent.
-	recording := map[string]bool{}
-	for _, id := range recordIDs {
-		recording[id] = true
-	}
-	doc, recorded := string(raw), 0
-	var recordedLines []string
-	for _, r := range results {
-		if r.Verdict != evidence.VerdictAdmitted || !recording[r.ID] {
-			continue
-		}
-		updated, err := plan.RecordDigest(doc, r.ID, r.Digest)
-		if err != nil {
-			fmt.Fprintln(deps.Err, "plan admit:", err)
-			return 1
-		}
-		// The mode is recorded beside the digest, because a digest without the mode it was taken in is not
-		// checkable. A plan written before the Mode column existed cannot carry one; an empty cell there
-		// already means the host, so a host recording is still true and a sandbox recording is refused rather
-		// than written as a claim the plan cannot hold.
-		withMode, err := plan.RecordMode(updated, r.ID, mode)
-		if err != nil {
-			if mode != evidence.ModeHost || !errors.Is(err, plan.ErrNoColumn) {
-				fmt.Fprintln(deps.Err, "plan admit:", err)
-				return 1
-			}
-		} else {
-			updated = withMode
-		}
-		doc = updated
-		recorded++
-		recordedLines = append(recordedLines, fmt.Sprintf("%s  RECORDED  %s  (%s mode)\n", r.ID, r.Digest, mode))
-	}
-	if recorded > 0 {
-		// The document was read before the rows ran, and a row can take minutes. The digests this run observed
-		// belong to the plan it read, so writing them over a file another writer has changed since would erase
-		// that edit and pin a claim against a plan that no longer exists. The run refuses instead of
-		// overwriting a document it did not read.
-		//
-		// The re-read and the write that follows it are one transaction: every writer of the plan takes this
-		// lock, so no cooperating writer can land an edit between the comparison and the write it guards. The
-		// lock covers those two steps and not the rows, which is why the comparison above is still needed — a
-		// writer that edited while the rows ran is refused rather than overwritten. A lock that cannot be taken
-		// is a refusal, never an unserialized write.
-		lock, err := plan.LockPlan(req.Path)
-		if err != nil {
-			fmt.Fprintln(deps.Err, "plan admit:", err)
-			return 1
-		}
-		defer plan.UnlockPlan(lock)
-		now, err := os.ReadFile(req.Path)
-		if err != nil {
-			fmt.Fprintln(deps.Err, "plan admit:", err)
-			return 1
-		}
-		if string(now) != string(raw) {
-			fmt.Fprintf(deps.Err, "plan admit: %s changed while the rows ran; nothing was written (the digests this run observed belong to the plan it read, not to the one on disk now)\n", req.Path)
-			return 1
-		}
-		info, err := os.Stat(req.Path)
-		if err != nil {
-			fmt.Fprintln(deps.Err, "plan admit:", err)
-			return 1
-		}
-		if err := os.WriteFile(req.Path, []byte(doc), info.Mode().Perm()); err != nil {
-			fmt.Fprintln(deps.Err, "plan admit:", err)
-			return 1
-		}
+	admitted, wouldRun, refused := reportVerdicts(results, deps)
+	recordedLines, recorded, ok := recordResults(results, recordIDs, raw, req, deps, mode)
+	if !ok {
+		return 1
 	}
 	for _, line := range recordedLines {
 		fmt.Fprint(deps.Out, line)
@@ -191,6 +92,138 @@ func Run(req Request, deps Deps) int {
 		return 1
 	}
 	return 0
+}
+
+// checkRequest refuses the two flag combinations that contradict each other and reports the mode the run will
+// claim. Each refusal names what to change, because a caller that reads only the exit code cannot.
+func checkRequest(req Request, recordIDs []string, deps Deps) (mode string, code int, ok bool) {
+	if len(recordIDs) > 0 && !req.Execute {
+		fmt.Fprintln(deps.Err, "plan admit: --record requires --execute: recording pins the observation this run makes, and a dry run makes none")
+		return "", 2, false
+	}
+	if req.Sandbox && !req.Execute {
+		fmt.Fprintln(deps.Err, "plan admit: --sandbox requires --execute: a dry run executes nothing, so there is nothing to confine")
+		return "", 2, false
+	}
+	mode = evidence.ModeHost
+	if req.Sandbox {
+		mode = evidence.ModeSandbox
+	}
+	return mode, 0, true
+}
+
+// boundaries wires the process boundaries the rows will reach: the host runner, or the sandboxed one.
+//
+// The replay is wired exactly where a tree the tool owns exists: a sandbox stages a copy of the tree git knows,
+// edits the copy, runs against it and puts the file back, so a row that claims its own command is falsifiable has
+// that claim checked instead of admitted unchecked. The host mode has no such copy and leaves Replay nil, which
+// refuses such a row.
+func boundaries(req Request, deps Deps) evidence.Deps {
+	runner := deps.Run
+	if req.Sandbox {
+		runner = deps.SandboxRunner(req.Image, SandboxReadOnly)
+	}
+	out := evidence.Deps{Run: runner}
+	if req.Sandbox {
+		out.Replay = deps.Replay(deps.SandboxRunner(req.Image, SandboxWritable), req.Timeout)
+	}
+	return out
+}
+
+// reportVerdicts prints one line per row and counts what it printed. A refusal prints the human sentence beside
+// its machine reason, so a run that stops here still says what to change and what a caller can branch on.
+func reportVerdicts(results []evidence.RowResult, deps Deps) (admitted, wouldRun, refused int) {
+	for _, r := range results {
+		switch r.Verdict {
+		case evidence.VerdictAdmitted:
+			admitted++
+			fmt.Fprintf(deps.Out, "%s  %s  %s  %s  %d lines\n", r.ID, r.Verdict, r.Command, r.Digest, r.Lines)
+		case evidence.VerdictWouldRun:
+			wouldRun++
+			fmt.Fprintf(deps.Out, "%s  %s  %s\n", r.ID, r.Verdict, r.Command)
+		default:
+			refused++
+			fmt.Fprintf(deps.Out, "%s  %s  %s  [%s]\n", r.ID, r.Verdict, r.Detail, r.Reason)
+		}
+	}
+	return admitted, wouldRun, refused
+}
+
+// recordResults applies every edit to the document in memory and writes the file once, so a run that records
+// three rows leaves one write. A splice that refuses aborts the whole write rather than skipping the row: a
+// half-recorded ledger is the state this feature exists to prevent.
+//
+// The write is one transaction under the lock every writer of the plan takes. The document was read before the
+// rows ran and a row can take minutes, so the digests this run observed belong to the plan it read: a file
+// another writer changed since is refused rather than overwritten, and the comparison and the write it guards
+// cannot be split by a cooperating writer. A lock that cannot be taken is a refusal, never an unserialized write.
+func recordResults(results []evidence.RowResult, recordIDs []string, raw []byte, req Request, deps Deps, mode string) ([]string, int, bool) {
+	recording := map[string]bool{}
+	for _, id := range recordIDs {
+		recording[id] = true
+	}
+	doc, recorded := string(raw), 0
+	var lines []string
+	for _, r := range results {
+		if r.Verdict != evidence.VerdictAdmitted || !recording[r.ID] {
+			continue
+		}
+		updated, err := plan.RecordDigest(doc, r.ID, r.Digest)
+		if err != nil {
+			fmt.Fprintln(deps.Err, "plan admit:", err)
+			return nil, 0, false
+		}
+		// The mode is recorded beside the digest, because a digest without the mode it was taken in is not
+		// checkable. A plan written before the Mode column existed cannot carry one; an empty cell there already
+		// means the host, so a host recording is still true and a sandbox recording is refused rather than
+		// written as a claim the plan cannot hold.
+		withMode, err := plan.RecordMode(updated, r.ID, mode)
+		if err != nil {
+			if mode != evidence.ModeHost || !errors.Is(err, plan.ErrNoColumn) {
+				fmt.Fprintln(deps.Err, "plan admit:", err)
+				return nil, 0, false
+			}
+		} else {
+			updated = withMode
+		}
+		doc = updated
+		recorded++
+		lines = append(lines, fmt.Sprintf("%s  RECORDED  %s  (%s mode)\n", r.ID, r.Digest, mode))
+	}
+	if recorded == 0 {
+		return lines, recorded, true
+	}
+	if err := writeRecorded(req.Path, raw, doc); err != nil {
+		fmt.Fprintln(deps.Err, "plan admit:", err)
+		return nil, 0, false
+	}
+	return lines, recorded, true
+}
+
+// writeRecorded replaces the plan with the document the rows recorded, in one transaction.
+//
+// The document was read before the rows ran and a row can take minutes, so the digests this run observed belong
+// to the plan it read: a file another writer changed since is refused rather than overwritten, and the comparison
+// and the write it guards cannot be split by a cooperating writer, because every writer takes this lock. A lock
+// that cannot be taken is a refusal, never an unserialized write.
+func writeRecorded(path string, raw []byte, doc string) error {
+	lock, err := plan.LockPlan(path)
+	if err != nil {
+		return err
+	}
+	defer plan.UnlockPlan(lock)
+	now, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	if string(now) != string(raw) {
+		return fmt.Errorf("%s changed while the rows ran; nothing was written (the digests this run observed belong to the plan it read, not to the one on disk now)", path)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(doc), info.Mode().Perm())
 }
 
 // unknownID returns the first id in ids that names no ledger row, or "" when every id names one. An
