@@ -124,70 +124,15 @@ func Score(plan string, key Key) Result {
 		}
 	}
 
-	// Attribution is per row, not per defect: one finding row is one claim. A row that names a
-	// defect by keyword is credited to that defect (to several only if it names several); a row
-	// that matches by line alone goes to the nearest defect, so two defects a few lines apart
-	// cannot both be credited to a run that noticed one of them.
-	linkedText := make([]string, len(rows))
-	credited := make([]map[string]bool, len(rows))
-	matchedRow := make([]bool, len(rows))
+	// Attribution is per row, not per defect: one finding row is one claim.
+	claims := attribution(rows, key, ledgerByID)
+	r.RowsWithoutPath = claims.withoutPath
 	byID := map[string]*DefectResult{}
 	for i := range key.Defects {
 		d := key.Defects[i]
 		byID[d.ID] = &DefectResult{ID: d.ID, File: d.File, Line: d.Line}
 	}
-	for i, row := range rows {
-		text := strings.Join(row, " | ")
-		// The evidence rows a finding cites are part of its claim: the file is often named
-		// there while the finding itself names the symbol.
-		linked := linkedLedgerText(row, ledgerByID)
-		linkedText[i] = strings.Join(linked, " | ")
-		credited[i] = map[string]bool{}
-		if len(citations(text)) == 0 && len(citations(linkedText[i])) == 0 {
-			r.RowsWithoutPath++
-		}
-		var specific []Defect
-		var nearest *Defect
-		nearestDist := 0
-		for j := range key.Defects {
-			d := key.Defects[j]
-			m := matchDefect(text, linkedText[i], d)
-			if m.kind == "" {
-				continue
-			}
-			matchedRow[i] = true
-			if m.keyword {
-				specific = append(specific, d)
-			} else if nearest == nil || m.dist < nearestDist {
-				nearest, nearestDist = &key.Defects[j], m.dist
-			}
-		}
-		if len(specific) == 0 && nearest != nil {
-			specific = append(specific, *nearest)
-		}
-		for _, d := range specific {
-			credited[i][d.ID] = true
-		}
-	}
-	for i, row := range rows {
-		text := strings.Join(row, " | ")
-		for id := range credited[i] {
-			dr := byID[id]
-			m := matchDefect(text, linkedText[i], defectByID(key, id))
-			// A row that names the defect but cites no ledger row is prose, not a catch; it is
-			// recorded as "unlinked" and does not count.
-			if linkedText[i] == "" {
-				if !dr.Found && dr.MatchedBy == "" {
-					dr.MatchedBy, dr.Row = "unlinked:"+m.kind, text
-				}
-				continue
-			}
-			if !dr.Found {
-				dr.Found, dr.MatchedBy, dr.Row = true, m.kind, text
-				dr.ClaimedPinned = cellFilled(row, pinCol)
-			}
-		}
-	}
+	credit(rows, claims, key, byID, pinCol)
 	for i := range key.Defects {
 		dr := *byID[key.Defects[i].ID]
 		if dr.Found {
@@ -198,7 +143,7 @@ func Score(plan string, key Key) Result {
 		}
 		r.Defects = append(r.Defects, dr)
 	}
-	for _, m := range matchedRow {
+	for _, m := range claims.matched {
 		if !m {
 			r.FalsePositives++
 		}
@@ -213,6 +158,94 @@ func Score(plan string, key Key) Result {
 		r.Recall = 0
 	}
 	return r
+}
+
+// Attribution is per row, not per defect: one finding row is one claim. A row that names a
+// defect by keyword is credited to that defect (to several only if it names several); a row
+// that matches by line alone goes to the nearest defect, so two defects a few lines apart
+// cannot both be credited to a run that noticed one of them.
+//
+// rowClaims is what the Findings table claims: for each row, the ledger text it links and the defect ids it is
+// credited to, plus the rows that name no file at all. It exists so the two passes below read a value instead of
+// passing three parallel slices through Score's own loop.
+type rowClaims struct {
+	linked      []string
+	credited    []map[string]bool
+	matched     []bool
+	withoutPath int
+}
+
+// claimed reads one finding row against every defect and reports the ids it is credited to, plus whether it
+// matched a defect at all — which is what separates a finding from a false positive. A defect named by keyword is
+// credited directly; a row that matches only by line goes to the nearest defect.
+func claimed(text, linked string, defects []Defect) (map[string]bool, bool) {
+	ids := map[string]bool{}
+	var specific []Defect
+	var nearest *Defect
+	nearestDist := 0
+	matched := false
+	for j := range defects {
+		m := matchDefect(text, linked, defects[j])
+		if m.kind == "" {
+			continue
+		}
+		matched = true
+		if m.keyword {
+			specific = append(specific, defects[j])
+		} else if nearest == nil || m.dist < nearestDist {
+			nearest, nearestDist = &defects[j], m.dist
+		}
+	}
+	if len(specific) == 0 && nearest != nil {
+		specific = append(specific, *nearest)
+	}
+	for _, d := range specific {
+		ids[d.ID] = true
+	}
+	return ids, matched
+}
+
+// attribution reads every finding row of the table through `claimed`.
+func attribution(rows [][]string, key Key, ledgerByID map[string]string) rowClaims {
+	claims := rowClaims{
+		linked:   make([]string, len(rows)),
+		credited: make([]map[string]bool, len(rows)),
+		matched:  make([]bool, len(rows)),
+	}
+	for i, row := range rows {
+		text := strings.Join(row, " | ")
+		// The evidence rows a finding cites are part of its claim: the file is often named there while the
+		// finding itself names the symbol.
+		claims.linked[i] = strings.Join(linkedLedgerText(row, ledgerByID), " | ")
+		if len(citations(text)) == 0 && len(citations(claims.linked[i])) == 0 {
+			claims.withoutPath++
+		}
+		claims.credited[i], claims.matched[i] = claimed(text, claims.linked[i], key.Defects)
+	}
+	return claims
+}
+
+// credit records each defect once, from the rows that claim it: the first row of the table that credits a defect
+// is the one kept. A row that names a defect but links no evidence is prose rather than a catch, so it is marked
+// unlinked and does not count as found.
+func credit(rows [][]string, claims rowClaims, key Key, byID map[string]*DefectResult, pinCol int) {
+	for i, row := range rows {
+		text := strings.Join(row, " | ")
+		for id := range claims.credited[i] {
+			dr := byID[id]
+			m := matchDefect(text, claims.linked[i], defectByID(key, id))
+			if claims.linked[i] == "" {
+				if !dr.Found && dr.MatchedBy == "" {
+					dr.MatchedBy, dr.Row = "unlinked:"+m.kind, text
+				}
+				continue
+			}
+			if !dr.Found {
+				dr.Found, dr.MatchedBy, dr.Row = true, m.kind, text
+				dr.ClaimedPinned = cellFilled(row, pinCol)
+			}
+		}
+	}
 }
 
 // defectMatch is how one finding row matches one defect.
