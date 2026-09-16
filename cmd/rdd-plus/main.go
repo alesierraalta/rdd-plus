@@ -684,20 +684,28 @@ func runBenchScore(args []string) int {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	if *planFile != "" {
-		if err := enc.Encode(bench.ScorePlanFile(*planFile, key)); err != nil {
-			fmt.Fprintln(os.Stderr, "score:", err)
-			return exitArtifact
-		}
-		return 0
+		return writeScore(enc, bench.ScorePlanFile(*planFile, key))
 	}
-	res := bench.ScoreWorkspace(*ws, key)
-	res.Catch = bench.Discriminate(*caseDir, *ws, key, 10*time.Minute)
-	res.Caught = res.Catch.Count()
+	return writeScore(enc, scoreWorkspaceWithCatch(*caseDir, *ws, key))
+}
+
+// writeScore encodes one result as the command's stdout score, and names the refusal the encode can end with:
+// the score is machine-readable output, so an encode that fails is the artifact exit, not a usage error.
+func writeScore(enc *json.Encoder, res bench.Result) int {
 	if err := enc.Encode(res); err != nil {
 		fmt.Fprintln(os.Stderr, "score:", err)
 		return exitArtifact
 	}
 	return 0
+}
+
+// scoreWorkspaceWithCatch is the --workspace path of bench score: the static score plus what the case suite
+// catches against the workspace, where the discriminator executes the suite the --plan path never runs.
+func scoreWorkspaceWithCatch(caseDir, ws string, key bench.Key) bench.Result {
+	res := bench.ScoreWorkspace(ws, key)
+	res.Catch = bench.Discriminate(caseDir, ws, key, 10*time.Minute)
+	res.Caught = res.Catch.Count()
+	return res
 }
 
 func runBenchRescore(args []string) int {
