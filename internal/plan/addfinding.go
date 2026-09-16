@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // ErrUsage marks a refusal of the invocation's own values (exit 2) rather than a refusal by the plan.
@@ -340,6 +341,37 @@ func LockPlan(path string) (*os.File, error) {
 		return nil, err
 	}
 	return file, nil
+}
+
+// planLockWait is how long a writer waits for a plan lock another writer holds before refusing. It is a variable
+// rather than a constant so the wait a test allows is short enough to test.
+var planLockWait = 10 * time.Second
+
+// planLockRetry is the pause between two attempts inside the wait.
+const planLockRetry = 50 * time.Millisecond
+
+// errPlanLockedTooLong is what the wait ends with when the bound is spent: a refusal, which is what the write path
+// promises a lock it cannot take buys.
+var errPlanLockedTooLong = errors.New("the plan stayed locked by another writer for longer than a plan write is allowed to wait")
+
+// lockFile waits for the exclusive lock with a bound. It asks without blocking, sleeps, and asks again until the
+// wait is spent — at which point the write is refused. Errors that are not contention come back immediately: a
+// platform without a lock and a directory the lock cannot live in are refusals, not things to retry.
+func lockFile(file *os.File) error {
+	deadline := time.Now().Add(planLockWait)
+	for {
+		err := tryLockFile(file)
+		if err == nil {
+			return nil
+		}
+		if !isLockHeld(err) {
+			return err
+		}
+		if !time.Now().Before(deadline) {
+			return fmt.Errorf("%w: it waited %s", errPlanLockedTooLong, planLockWait)
+		}
+		time.Sleep(planLockRetry)
+	}
 }
 
 // planLockPath is the file every writer of the plan at key locks: one name per canonical path, inside the

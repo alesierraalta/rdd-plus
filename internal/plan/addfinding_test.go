@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // addPlan is the smallest plan carrying one evidence row: a finding has something real to cite, and the
@@ -745,3 +746,34 @@ const (
 	addFindingChildPlan = "RDD_PLUS_TEST_ADD_FINDING_PLAN"
 	addFindingChildID   = "RDD_PLUS_TEST_ADD_FINDING_ID"
 )
+
+// A lock another writer holds costs a writer at most the bounded wait, and after it the write is refused with the
+// reason named. An unbounded wait is the one way a held lock hangs a run forever; the wait being short here is
+// what makes the refusal testable, and the holder's own section is the read-compare-write the lock exists for.
+func TestLockPlanRefusesAfterTheWaitItAllows(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "plan.md")
+	if err := os.WriteFile(path, []byte("## Evidence ledger\n\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := LockPlan(path)
+	if err != nil {
+		t.Skip("this platform has no cross-process plan lock:", err)
+	}
+	defer UnlockPlan(lock)
+
+	previous := planLockWait
+	planLockWait = 100 * time.Millisecond
+	defer func() { planLockWait = previous }()
+
+	start := time.Now()
+	_, err = LockPlan(path)
+	if err == nil {
+		t.Fatal("a second lock while the first is held must be refused")
+	}
+	if !errors.Is(err, errPlanLockedTooLong) {
+		t.Fatalf("the refusal must say the wait was spent: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed < 90*time.Millisecond {
+		t.Fatalf("the wait was skipped rather than bounded: %v", elapsed)
+	}
+}
