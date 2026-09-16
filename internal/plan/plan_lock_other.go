@@ -13,8 +13,12 @@ import (
 // lock exists to prevent. Refusing to write is recoverable; a plan that quietly dropped a finding is not.
 var errNoPlanLock = errors.New("rdd-plus has no cross-process file lock on " + runtime.GOOS + ", so it refuses to write a plan without serialization")
 
-// lockFile refuses: there is no lock to take here.
-func lockFile(*os.File) error { return errNoPlanLock }
+// tryLockFile refuses: there is no lock to take here.
+func tryLockFile(*os.File) error { return errNoPlanLock }
+
+// isLockHeld says whether an error from tryLockFile means the lock is in someone else's hands: here it never does,
+// so the bounded wait returns the refusal immediately instead of retrying it.
+func isLockHeld(err error) bool { return false }
 
 // unlockFile refuses for symmetry. It is only reached when lockFile would have refused first.
 func unlockFile(*os.File) error { return errNoPlanLock }
