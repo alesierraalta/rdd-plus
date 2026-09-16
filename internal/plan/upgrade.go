@@ -57,7 +57,7 @@ func upgrade(path, run string) (int, error) {
 	for line, replacement := range updates {
 		lines[line] = replacement
 	}
-	if err := writePlan(path, strings.Join(lines, "\n")); err != nil {
+	if err := WritePlan(path, strings.Join(lines, "\n")); err != nil {
 		return 0, err
 	}
 	return changed, nil

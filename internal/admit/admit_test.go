@@ -174,3 +174,38 @@ func TestRecordWaitsForThePlanLock(t *testing.T) {
 		t.Fatalf("the digest the run observed must be recorded once the lock is free:\n%s", after)
 	}
 }
+
+// The plan a recording run writes back is the one write the ledger depends on, so it goes through the plan
+// package's atomic write: a temp file in the directory and a rename. What an operator can see afterwards is what
+// this test pins — the content is the whole document, the mode is the one the file already had, and no temp file
+// survives the call — because a plan cut in half by a crash is a plan the next run refuses to read, and a temp
+// file left behind is litter a later run trips over.
+func TestWriteRecordedReplacesThePlanAtomically(t *testing.T) {
+	doc := "## Evidence ledger\n\n" + testLedgerHeader + testRow("E1", "`printf 'one\\n'`")
+	path := filepath.Join(t.TempDir(), "plan.md")
+	if err := os.WriteFile(path, []byte(doc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeRecorded(path, []byte(doc), doc+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != doc+"\n" {
+		t.Fatalf("the write did not replace the document: %q", got)
+	}
+	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("mode = %v, want the one the file already had", info.Mode().Perm())
+	}
+	entries, err := os.ReadDir(filepath.Dir(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".tmp") {
+			t.Fatalf("a temp file survived the atomic write: %v", entries)
+		}
+	}
+}
