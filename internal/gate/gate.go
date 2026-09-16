@@ -327,6 +327,8 @@ func Decide(in Input, d Deps) Result {
 	if judged && ran {
 		return audit(d, root, rel, cfgErr, res, entry)
 	}
+	// The stop that is left has nothing to judge: judged is false, which judgedBy answers for a stop with no
+	// changed source or an opt-out. It neither fires nor audits, and its entry still records the stop.
 	return res
 }
 
