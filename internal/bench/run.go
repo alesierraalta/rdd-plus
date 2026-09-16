@@ -175,8 +175,44 @@ const ExitArtifact = 4
 // evidence and must not be read as a measurement of the whole corpus.
 const ExitPartial = 3
 
+// unit is one case at one run: the smallest thing the pool schedules.
+type unit struct {
+	caseDir string
+	key     Key
+	run     int
+	invalid bool
+	reason  string
+}
+
 // Run scaffolds, runs, and scores every case; it returns the aggregate and a process exit code.
+//
+// Each case and each run of it is one unit. The pool runs them side by side and the tally stays in unit order, so
+// the report does not depend on which unit happened to finish first.
 func Run(opts Options) (Aggregate, int) {
+	opts = normalizeOptions(opts)
+	agg := Aggregate{TS: time.Now().UTC().Format(time.RFC3339), Out: opts.Out, Model: opts.Model, DryRun: opts.DryRun, Runs: opts.Runs}
+	caseDirs, found := resolveCaseDirs(opts)
+	if !found {
+		return agg, 1
+	}
+	warnProvisionalScorer(opts)
+	if !prepareOutput(opts) {
+		return agg, 1
+	}
+	units := buildUnits(caseDirs, opts.Runs)
+	results, skipped := runUnits(units, opts)
+	agg, corpus, code := tallyUnits(agg, units, results, skipped, opts)
+	agg, code = finalizeRun(agg, corpus, code, opts)
+	written, writtenCode, ok := writeArtifacts(agg, caseDirs, opts)
+	if !ok {
+		return written, writtenCode
+	}
+	return agg, code
+}
+
+// normalizeOptions fills the defaults a run cannot start without: somewhere to log, at least one run of each case,
+// and the agent its runner implies.
+func normalizeOptions(opts Options) Options {
 	if opts.Log == nil {
 		opts.Log = io.Discard
 	}
@@ -186,8 +222,12 @@ func Run(opts Options) (Aggregate, int) {
 	if opts.Agent == nil {
 		opts.Agent = runnerAgent(opts.Runner)
 	}
-	now := time.Now()
-	agg := Aggregate{TS: now.UTC().Format(time.RFC3339), Out: opts.Out, Model: opts.Model, DryRun: opts.DryRun, Runs: opts.Runs}
+	return opts
+}
+
+// resolveCaseDirs turns the case globs into directories. A pattern list that matches nothing is not an empty run:
+// it is said out loud, and the run stops before it writes anything.
+func resolveCaseDirs(opts Options) ([]string, bool) {
 	var patterns []string
 	for _, g := range strings.Split(opts.CasesGlob, ",") {
 		patterns = append(patterns, resolveCasesGlob(opts.BenchDir, strings.TrimSpace(g)))
@@ -195,24 +235,32 @@ func Run(opts Options) (Aggregate, int) {
 	caseDirs, err := listCases(strings.Join(patterns, ","))
 	if err != nil || len(caseDirs) == 0 {
 		fmt.Fprintf(opts.Log, "no cases match %q\n", opts.CasesGlob)
-		return agg, 1
+		return nil, false
 	}
+	return caseDirs, true
+}
+
+// warnProvisionalScorer says so when the scorer's numbers are not final: a reader comparing runs across versions
+// needs to know which of them were scored by a provision.
+func warnProvisionalScorer(opts Options) {
 	if rev := buildinfo.Revision(); ScorerIsProvisional(rev) {
 		fmt.Fprintln(opts.Log, ProvisionalScorerWarning(rev))
 	}
+}
+
+// prepareOutput is where the run's numbers will be written. A directory it cannot create stops the run before any
+// case is scaffolded, so nothing is spent on a run that could not be recorded.
+func prepareOutput(opts Options) bool {
 	if err := os.MkdirAll(opts.Out, 0o755); err != nil {
 		fmt.Fprintln(opts.Log, "out:", err)
-		return agg, 1
+		return false
 	}
-	// Each case and each run of it is one unit. The pool runs them side by side and the pass below
-	// stays in unit order, so the report does not depend on which unit happened to finish first.
-	type unit struct {
-		caseDir string
-		key     Key
-		run     int
-		invalid bool
-		reason  string
-	}
+	return true
+}
+
+// buildUnits expands the cases into one unit per case and run. A case whose key will not load is one invalid unit
+// carrying the reason, so the run reports it rather than dropping it silently.
+func buildUnits(caseDirs []string, runs int) []unit {
 	var units []unit
 	for _, caseDir := range caseDirs {
 		key, err := LoadKey(caseDir)
@@ -220,14 +268,24 @@ func Run(opts Options) (Aggregate, int) {
 			units = append(units, unit{caseDir: caseDir, invalid: true, reason: err.Error()})
 			continue
 		}
-		for run := 1; run <= opts.Runs; run++ {
+		for run := 1; run <= runs; run++ {
 			units = append(units, unit{caseDir: caseDir, key: key, run: run})
 		}
 	}
+	return units
+}
 
-	// The ceiling is checked before a unit starts, so it stops launching work once it has been
-	// crossed while the units already in flight finish: a run can land just past it. A unit that
-	// never started leaves no hole, it is simply not part of the run.
+// runUnits schedules every unit and returns the results in unit order, plus which units the cost ceiling kept from
+// starting.
+//
+// The ceiling is checked before a unit starts, so it stops launching work once it has been crossed while the units
+// already in flight finish: a run can land just past it. A unit that never started leaves no hole, it is simply not
+// part of the run.
+//
+// The log is progress: a unit says what it found the moment it finishes, in completion order. The pass after this
+// one is the opposite and stays in unit order, so the report cannot depend on who was first. The mutex keeps two
+// workers from interleaving halves of a line.
+func runUnits(units []unit, opts Options) ([]Result, []bool) {
 	var spentMu sync.Mutex
 	spent := 0.0
 	underCeiling := func() bool {
@@ -239,9 +297,6 @@ func Run(opts Options) (Aggregate, int) {
 		return spent < opts.MaxCostUSD
 	}
 	skipped := make([]bool, len(units))
-	// The log is progress: a unit says what it found the moment it finishes, in completion order. The
-	// pass below is the opposite and stays in unit order, so the report cannot depend on who was
-	// first. The mutex keeps two workers from interleaving halves of a line.
 	var logMu sync.Mutex
 	logf := func(format string, args ...any) {
 		logMu.Lock()
@@ -266,7 +321,12 @@ func Run(opts Options) (Aggregate, int) {
 		spentMu.Unlock()
 		return res
 	})
+	return results, skipped
+}
 
+// tallyUnits folds the results into the aggregate and returns the corpus the run covered and the exit code the
+// ceiling earned. A case whose run later fails or is invalid is still part of the corpus.
+func tallyUnits(agg Aggregate, units []unit, results []Result, skipped []bool, opts Options) (Aggregate, []CorpusCase, int) {
 	code := 0
 	var corpus []CorpusCase
 	inCorpus := map[string]bool{}
@@ -275,37 +335,47 @@ func Run(opts Options) (Aggregate, int) {
 			continue
 		}
 		name := filepath.Base(u.caseDir)
-		// A case whose run later fails or is invalid is still part of the corpus.
 		if !inCorpus[name] {
 			inCorpus[name] = true
 			corpus = append(corpus, CorpusCase{Name: name, Request: u.key.RequestText(), Defects: defectIDs(u.key)})
 		}
-		res := results[i]
-		agg.Cases = append(agg.Cases, res)
-		agg.CostUSD += res.CostUSD
-		switch {
-		case u.invalid, res.Invalid:
-			agg.Invalid++
-		case res.Failed:
-			agg.Failed++
-		default:
-			agg.Defects += res.Total
-			agg.Found += res.Found
-			agg.Caught += res.Caught
-			agg.ClaimedPinned += res.ClaimedPinned
-			agg.FalsePositives += res.FalsePositives
-			if !res.PlanFound {
-				agg.NoPlan++
-			}
-			if res.LightActivated {
-				agg.LightActivated++
-			}
-		}
+		foldResult(&agg, u, results[i])
 		if opts.MaxCostUSD > 0 && agg.CostUSD >= opts.MaxCostUSD {
 			agg.CostCeilingHit = true
 			code = ExitCostCeiling
 		}
 	}
+	return agg, corpus, code
+}
+
+// foldResult adds one result to the aggregate: an invalid or failed case is counted as one, and a valid one
+// contributes what it found.
+func foldResult(agg *Aggregate, u unit, res Result) {
+	agg.Cases = append(agg.Cases, res)
+	agg.CostUSD += res.CostUSD
+	switch {
+	case u.invalid, res.Invalid:
+		agg.Invalid++
+	case res.Failed:
+		agg.Failed++
+	default:
+		agg.Defects += res.Total
+		agg.Found += res.Found
+		agg.Caught += res.Caught
+		agg.ClaimedPinned += res.ClaimedPinned
+		agg.FalsePositives += res.FalsePositives
+		if !res.PlanFound {
+			agg.NoPlan++
+		}
+		if res.LightActivated {
+			agg.LightActivated++
+		}
+	}
+}
+
+// finalizeRun closes the numbers: the ceiling it hit, the recall it earned, the exit code a partial run deserves,
+// and the digest of the corpus those numbers cover.
+func finalizeRun(agg Aggregate, corpus []CorpusCase, code int, opts Options) (Aggregate, int) {
 	if agg.CostCeilingHit {
 		fmt.Fprintf(opts.Log, "cost ceiling $%.2f reached; stopping\n", opts.MaxCostUSD)
 	}
@@ -318,25 +388,41 @@ func Run(opts Options) (Aggregate, int) {
 		fmt.Fprintf(opts.Log, "partial: %d failed, %d invalid; recall covers valid cases only\n", agg.Failed, agg.Invalid)
 	}
 	agg.Corpus = CorpusDigest(corpus, opts.Runs)
+	return agg, code
+}
+
+// writeArtifacts writes the three records a run leaves — the aggregate, its summary and the history row — and says
+// whether the numbers were persisted. A record that could not be written is ExitArtifact with the numbers still
+// returned: the run happened, and nothing persisted it.
+func writeArtifacts(agg Aggregate, caseDirs []string, opts Options) (Aggregate, int, bool) {
 	if err := writeJSON(filepath.Join(opts.Out, "aggregate.json"), agg); err != nil {
-		return unwritten(agg, opts, "aggregate.json", err)
+		a, c := unwritten(agg, opts, "aggregate.json", err)
+		return a, c, false
 	}
 	if err := os.WriteFile(filepath.Join(opts.Out, "summary.md"), []byte(Summary(agg)), 0o644); err != nil {
-		return unwritten(agg, opts, "summary.md", err)
+		a, c := unwritten(agg, opts, "summary.md", err)
+		return a, c, false
 	}
 	if !opts.DryRun && opts.BenchDir != "" {
-		if err := AppendHistory(opts.BenchDir, HistoryEntry{
-			TS: agg.TS, Out: opts.Out, Model: opts.Model, Cases: len(caseDirs), Defects: agg.Defects,
-			Found: agg.Found, Recall: agg.Recall, Caught: agg.Caught, RecallCaught: agg.RecallCaught,
-			FalsePositives: agg.FalsePositives, CostUSD: agg.CostUSD,
-			Failed: agg.Failed, Invalid: agg.Invalid, NoPlan: agg.NoPlan, Kind: KindRun,
-			SkillVersion: SkillVersion(opts.SkillFile), Corpus: agg.Corpus,
-			LightActivated: agg.LightActivated, Runs: opts.Runs,
-		}); err != nil {
-			return unwritten(agg, opts, "the history row", err)
+		if err := AppendHistory(opts.BenchDir, historyEntry(agg, caseDirs, opts)); err != nil {
+			a, c := unwritten(agg, opts, "the history row", err)
+			return a, c, false
 		}
 	}
-	return agg, code
+	return agg, 0, true
+}
+
+// historyEntry is the row a run appends to the history: what it measured, on which corpus, by which skill version,
+// so a later run can be read against it.
+func historyEntry(agg Aggregate, caseDirs []string, opts Options) HistoryEntry {
+	return HistoryEntry{
+		TS: agg.TS, Out: opts.Out, Model: opts.Model, Cases: len(caseDirs), Defects: agg.Defects,
+		Found: agg.Found, Recall: agg.Recall, Caught: agg.Caught, RecallCaught: agg.RecallCaught,
+		FalsePositives: agg.FalsePositives, CostUSD: agg.CostUSD,
+		Failed: agg.Failed, Invalid: agg.Invalid, NoPlan: agg.NoPlan, Kind: KindRun,
+		SkillVersion: SkillVersion(opts.SkillFile), Corpus: agg.Corpus,
+		LightActivated: agg.LightActivated, Runs: opts.Runs,
+	}
 }
 
 // unwritten reports a record the run could not persist: the numbers are returned so a caller can still read
