@@ -971,3 +971,33 @@ func TestBenchDoesNotPrintAResultsPathItCouldNotWrite(t *testing.T) {
 		t.Fatal("the test's premise is wrong: something wrote a summary")
 	}
 }
+
+// The score command's JSON is its whole output, and the `--plan` path is the one a caller scores a finished run
+// with. A write that fails there was dropped like the doctor's: the tool printed nothing, said nothing and
+// returned 0, so a caller could not tell a score from no score at all.
+//
+// The `--workspace` path takes the same branch, and it is not pinned here on purpose: reaching its encode means
+// running the case's suites, which belongs to the benchmark and to its own budget, not to this test.
+func TestBenchScoreReportsTheScoreItCouldNotWrite(t *testing.T) {
+	bin := buildCLI(t)
+	caseDir := t.TempDir()
+	key := `{"id":"t","language":"go","suite":"a_test.go","defects":[{"id":"D1","file":"src/a.js","line":5,"keywords":["alpha"]}]}`
+	if err := os.WriteFile(filepath.Join(caseDir, "KEY.json"), []byte(key), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	planFile := filepath.Join(t.TempDir(), "plan.md")
+	plan := "## Findings\n\n| Id | Finding | Severity | Data safe? | Evidence id | Pinning test | Status | Verdict by / date | Reason | Fingerprint |\n|---|---|---|---|---|---|---|---|---|---|\n" +
+		"| F1 | `src/a.js:5` alpha | M | yes | E1 | t.js :: x | fixed | me | - | - |\n\n" +
+		"## Evidence ledger\n\n| Id | Claim | Executed | Admit | Inputs and parameters | Observed | Digest | Normalize | Mode | Mutate | Mutation or negative control → result | Reproduction | Label |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|\n" +
+		"| E1 | c | cmd | i | o | m | r | observado |\n"
+	if err := os.WriteFile(planFile, []byte(plan), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stderr, code := runCLIWithoutStdout(t, bin, "bench", "score", "--case", caseDir, "--plan", planFile)
+	if code != exitArtifact {
+		t.Fatalf("code = %d, want %d: the JSON score was not written\nstderr: %s", code, exitArtifact, stderr)
+	}
+	if !strings.Contains(stderr, "score:") {
+		t.Fatalf("the failure must name the command whose output was lost:\n%s", stderr)
+	}
+}
