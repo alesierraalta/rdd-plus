@@ -889,6 +889,32 @@ func TestGapsForRunCountsOnlyItsOwnRows(t *testing.T) {
 	}
 }
 
+// The count and the ownership are one fact, not two books: a row the run owns is a row the count carries, and a
+// run that owns any row — even one that counts nothing, like an n/a layer — is a run the plan is not missing. The
+// two facts used to be two variables kept in step by hand, which is the drift the review warned about; deriving
+// one from the other is what makes them agree, and this test is what notices if that ever stops holding.
+func TestGapsForRunAnOwnedRowThatCountsNothingIsStillNotMissing(t *testing.T) {
+	doc := "## Layer matrix\n\n| Layer | Skill | Scope | Status | Run |\n|---|---|---|---|---|\n| Security | appsec | input | n/a | redis-stream-pool |\n| Runtime | runtime | faults | pending | other-run |\n" +
+		"## Ranked targets\n\n| Target | Status | Run |\n|---|---|---|\n| target | pending |  |\n"
+	g, err := GapsForRun(doc, "redis-stream-pool")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g.LayersTotal != 0 {
+		t.Fatalf("the n/a row the run owns must not count towards the sweep: layers total = %d", g.LayersTotal)
+	}
+	if g.RunMissing {
+		t.Fatalf("the run owns a row, so it is not missing even though nothing counted: %+v", g)
+	}
+	other, err := GapsForRun(doc, "typo-run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !other.RunMissing {
+		t.Fatalf("a run no row carries must be missing even though rows carry other runs: %+v", other)
+	}
+}
+
 func TestGapsForRunDisclosesUnscopedRowsWithoutCountingThem(t *testing.T) {
 	doc := "## Layer matrix\n\n| Layer | Skill | Scope | Status | Run |\n|---|---|---|---|---|\n| Security | appsec | input | pending |  |\n| Runtime | runtime | faults | done | redis-stream-pool |\n" +
 		"## Ranked targets\n\n| Target | Status | Run |\n|---|---|---|\n| target | pending |  |\n| own | done | redis-stream-pool |\n"
