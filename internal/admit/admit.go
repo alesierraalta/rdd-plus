@@ -152,6 +152,18 @@ func Run(req Request, deps Deps) int {
 		// belong to the plan it read, so writing them over a file another writer has changed since would erase
 		// that edit and pin a claim against a plan that no longer exists. The run refuses instead of
 		// overwriting a document it did not read.
+		//
+		// The re-read and the write that follows it are one transaction: every writer of the plan takes this
+		// lock, so no cooperating writer can land an edit between the comparison and the write it guards. The
+		// lock covers those two steps and not the rows, which is why the comparison above is still needed — a
+		// writer that edited while the rows ran is refused rather than overwritten. A lock that cannot be taken
+		// is a refusal, never an unserialized write.
+		lock, err := plan.LockPlan(req.Path)
+		if err != nil {
+			fmt.Fprintln(deps.Err, "plan admit:", err)
+			return 1
+		}
+		defer plan.UnlockPlan(lock)
 		now, err := os.ReadFile(req.Path)
 		if err != nil {
 			fmt.Fprintln(deps.Err, "plan admit:", err)

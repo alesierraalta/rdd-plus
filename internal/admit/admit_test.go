@@ -6,7 +6,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
+
+	"github.com/alesierraalta/rdd-plus/internal/plan"
 )
 
 // testLedgerHeader is the smallest ledger the reader accepts: the column names the row reader resolves by
@@ -110,5 +114,63 @@ func TestRunRefusesToWriteAPlanThatChangedUnderIt(t *testing.T) {
 	}
 	if strings.Contains(string(after), "sha256:") {
 		t.Fatalf("no digest may be written over a plan that changed under the run:\n%s", after)
+	}
+}
+
+// A recording run writes the plan only after every row has run, so the comparison that refuses a changed plan and
+// the write it guards are two separate steps: a writer landing between them was erased just the same. Every writer
+// of the plan takes one lock, so the recording run has to take it too, and the observable difference is that a run
+// holding no lock writes while another writer still holds it. This test pins that ordering: the lock is held until
+// the run has reached its rows, and the release is recorded before it happens, so a run that returns before the
+// release is a run that wrote unserialized. The grace period below only gives a correct run the moment it needs to
+// attempt the lock; a run that never takes it is caught by the assertion, not by a stopwatch.
+func TestRecordWaitsForThePlanLock(t *testing.T) {
+	path := writeTestPlan(t, "## Evidence ledger\n\n"+testLedgerHeader+testRow("E1", "`printf 'one\\n'`"))
+	out, errOut := &bytes.Buffer{}, &bytes.Buffer{}
+
+	lock, err := plan.LockPlan(path)
+	if err != nil {
+		t.Fatalf("taking the plan lock: %v", err)
+	}
+	rowRan := make(chan struct{})
+	var rowSignal sync.Once
+	released := make(chan struct{})
+	go func() {
+		<-rowRan
+		time.Sleep(100 * time.Millisecond)
+		close(released)
+		plan.UnlockPlan(lock)
+	}()
+
+	code := Run(Request{
+		Path:    path,
+		Execute: true,
+		Record:  []string{"E1"},
+		Dir:     t.TempDir(),
+	}, Deps{
+		Run: func(_ context.Context, _, _ string) (string, error) {
+			// The row machine may reach the runner more than once for one row; the signal is about the run
+			// having reached the rows, not about the number of calls.
+			rowSignal.Do(func() { close(rowRan) })
+			return "one\n", nil
+		},
+		Out: out,
+		Err: errOut,
+	})
+
+	select {
+	case <-released:
+	default:
+		t.Fatalf("the run finished (exit %d) before the writer holding the plan lock let go, so an edit landing between the check and the write is still lost\nstdout: %s\nstderr: %s", code, out, errOut)
+	}
+	if code != 0 {
+		t.Fatalf("once the lock is free the run must record the row: exit %d\nstdout: %s\nstderr: %s", code, out, errOut)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(after), "sha256:") {
+		t.Fatalf("the digest the run observed must be recorded once the lock is free:\n%s", after)
 	}
 }

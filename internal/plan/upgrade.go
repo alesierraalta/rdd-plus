@@ -15,11 +15,11 @@ func Upgrade(path, run string) (int, error) {
 		}
 	}
 	target := canonicalPath(path)
-	lock, err := lockPlan(target)
+	lock, err := LockPlan(target)
 	if err != nil {
 		return 0, err
 	}
-	defer unlockPlan(lock)
+	defer UnlockPlan(lock)
 	return upgrade(target, run)
 }
 

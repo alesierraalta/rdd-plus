@@ -50,11 +50,11 @@ type Finding struct {
 // regular file and left the real plan untouched.
 func AddFinding(path string, f Finding) (int, error) {
 	target := canonicalPath(path)
-	lock, err := lockPlan(target)
+	lock, err := LockPlan(target)
 	if err != nil {
 		return 0, err
 	}
-	defer unlockPlan(lock)
+	defer UnlockPlan(lock)
 	return addFinding(target, f)
 }
 
@@ -273,7 +273,11 @@ func insertLine(lines []string, at int, row string) []string {
 	return append(out, lines[at:]...)
 }
 
-// lockPlan takes the exclusive lock that serializes every write to the plan at path and returns it.
+// LockPlan takes the exclusive lock that serializes every write to the plan at path and returns it.
+//
+// Every writer of the plan takes this lock — `plan add-finding`, `plan upgrade` and a recording
+// `plan admit` — so a check a writer makes about the file it is about to replace cannot be invalidated by
+// another writer between the check and the write.
 //
 // It is an advisory lock on a file in the user's own cache directory, keyed on the plan's canonical absolute
 // path, so every spelling of one plan is one lock. A lock is released by the kernel when the process holding it
@@ -284,7 +288,7 @@ func insertLine(lines []string, at int, row string) []string {
 //
 // A lock that cannot be taken is an error, never a silent write without it: an unserialized write is the lost
 // row this lock exists to prevent.
-func lockPlan(path string) (*os.File, error) {
+func LockPlan(path string) (*os.File, error) {
 	name, err := planLockPath(canonicalPath(path))
 	if err != nil {
 		return nil, err
@@ -336,10 +340,10 @@ func lockRoot() (string, error) {
 	return root, nil
 }
 
-// unlockPlan releases the lock AddFinding held, and closes it every time the lock was taken — the write path's
+// UnlockPlan releases the lock LockPlan took, and closes it every time the lock was taken — the write path's
 // defer, so a refusal on the read or on the candidate gives the lock back. The unlock is best effort: closing
 // the descriptor releases the lock anyway, and the kernel releases whatever a process still holds when it exits.
-func unlockPlan(file *os.File) {
+func UnlockPlan(file *os.File) {
 	_ = unlockFile(file)
 	_ = file.Close()
 }
