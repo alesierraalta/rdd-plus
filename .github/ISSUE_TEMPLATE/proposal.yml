@@ -1,0 +1,31 @@
+name: Proposal or research
+description: Suggest a proposal or research direction with a clear outcome.
+body:
+  - type: textarea
+    id: problem-outcome
+    attributes:
+      label: Problem and desired outcome
+      description: What problem should be addressed, and what outcome would help?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal-or-research
+    attributes:
+      label: Proposal or research
+      description: Describe the proposed change or research question.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance criteria
+      description: How will we know the desired outcome has been achieved?
+    validations:
+      required: true
+  - type: textarea
+    id: evidence-dependencies
+    attributes:
+      label: Evidence and dependencies
+      description: Add supporting links, prior evidence, constraints, or dependencies.
+    validations:
+      required: false
