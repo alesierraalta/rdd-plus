@@ -1032,6 +1032,43 @@ func TestCheckNamesAStatusOutsideTheFindingsVocabulary(t *testing.T) {
 	}
 }
 
+// A ledger row's id is what a finding cites, so two rows sharing one id make every citation that names it
+// ambiguous: the checker collapsed both into one entry and said nothing, and the document still read as `well
+// formed`. Two findings sharing an id has the same shape, one table over.
+func TestCheckRefusesTwoRowsCarryingTheSameId(t *testing.T) {
+	cases := []struct {
+		name string
+		plan string
+		want string
+	}{
+		{
+			name: "two ledger rows with one id",
+			plan: header +
+				"| F1 | `src/a.js:5` x | M | yes | E1 | t.js :: x | fixed | me | - | - |\n" +
+				ledger +
+				"| E1 | c | cmd | i | o | m | r | observado |\n" +
+				"\n| E1 | other claim | cmd | i | o | m | r | observado |\n",
+			want: "evidence E1 repeats the id of the row on line",
+		},
+		{
+			name: "two findings with one id",
+			plan: header +
+				"| F1 | `src/a.js:5` x | M | yes | E1 | t.js :: x | fixed | me | - | - |\n" +
+				"\n| F1 | `src/b.js:9` y | M | yes | E1 | t.js :: x | fixed | me | - | - |\n" +
+				ledger + "| E1 | c | cmd | i | o | m | r | observado |\n",
+			want: "finding F1 repeats the id of the row on line",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			joined := strings.Join(CheckDocument(tc.plan), "\n")
+			if !strings.Contains(joined, tc.want) {
+				t.Fatalf("problems = %v, want one containing %q", joined, tc.want)
+			}
+		})
+	}
+}
+
 func TestCheckReportsACutWithNoRowReadBeforeIt(t *testing.T) {
 	plan := header + "### Notes\n" +
 		"| F1 | `src/a.js:5` x | M | yes | E9 | t.js :: x | fixed | me | - | - |\n" +
