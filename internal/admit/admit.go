@@ -219,11 +219,9 @@ func writeRecorded(path string, raw []byte, doc string) error {
 	if string(now) != string(raw) {
 		return fmt.Errorf("%s changed while the rows ran; nothing was written (the digests this run observed belong to the plan it read, not to the one on disk now)", path)
 	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, []byte(doc), info.Mode().Perm())
+	// The write is the one the plan package owns: temp file in the directory and a rename, so a reader — and a
+	// later run that reads the plan to compare digests — never sees a plan cut in half by a crash.
+	return plan.WritePlan(path, doc)
 }
 
 // unknownID returns the first id in ids that names no ledger row, or "" when every id names one. An

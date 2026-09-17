@@ -179,7 +179,7 @@ func insertRow(path string, lines []string, table tableScan, row string) (int, e
 	if problems := CheckDocument(candidate); len(problems) > 0 {
 		return 0, fmt.Errorf("the row would not pass plan check: %s; the plan is unchanged", strings.Join(problems, "; "))
 	}
-	if err := writePlan(path, candidate); err != nil {
+	if err := WritePlan(path, candidate); err != nil {
 		return 0, err
 	}
 	return after + 1, nil
@@ -386,12 +386,12 @@ func UnlockPlan(file *os.File) {
 	_ = file.Close()
 }
 
-// writePlan replaces path through a temp file in its own directory and a rename, so a reader never sees a
+// WritePlan replaces path through a temp file in its own directory and a rename, so a reader never sees a
 // half-written plan and a crash leaves either the old file or the new one. The mode is the plan's own: replacing
 // the destination inode must not widen a file the operator tightened, and a plan created through `plan init`
 // keeps the 0644 it was written with. File content durability across a power loss is a separate decision (an
 // fsync before the rename) and is deliberately not taken here.
-func writePlan(path, body string) error {
+func WritePlan(path, body string) error {
 	mode := os.FileMode(0o644)
 	if info, err := os.Stat(path); err == nil {
 		mode = info.Mode().Perm()
