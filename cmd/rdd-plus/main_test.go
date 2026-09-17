@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/alesierraalta/rdd-plus/internal/admit"
+	"github.com/alesierraalta/rdd-plus/internal/bench"
 	"github.com/alesierraalta/rdd-plus/internal/buildinfo"
 	"github.com/alesierraalta/rdd-plus/internal/evidence"
 	plancheck "github.com/alesierraalta/rdd-plus/internal/plan"
@@ -1149,6 +1150,177 @@ func TestSyncDryRunNamesEveryHost(t *testing.T) {
 	for _, dir := range []string{".claude", filepath.Join(".config", "opencode"), ".gemini", ".codex"} {
 		if _, err := os.Stat(filepath.Join(home, dir, "settings.json")); !os.IsNotExist(err) {
 			t.Fatalf("dry-run wrote settings.json under %s: %v", dir, err)
+		}
+	}
+}
+
+// adjudicateFixture writes the smallest finished run a decision can be recorded against: a case with
+// one keyed defect, and one kept plan whose single finding row matches nothing in it. The row is the
+// point: it is exactly the row the old scorer counted as a false positive without anyone deciding.
+func adjudicateFixture(t *testing.T) (caseDir, runDir, planFile string) {
+	t.Helper()
+	caseDir = t.TempDir()
+	key := `{"id":"t","language":"go","suite":"a_test.go","defects":[{"id":"D1","file":"src/a.js","line":5,"keywords":["alpha"]}]}`
+	if err := os.WriteFile(filepath.Join(caseDir, "KEY.json"), []byte(key), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	planText := "## Findings\n\n| Id | Finding | Severity | Data safe? | Evidence id | Pinning test | Status | Verdict by / date | Reason | Fingerprint |\n|---|---|---|---|---|---|---|---|---|---|\n" +
+		"| F1 | `src/other.js:3` something the key does not plant | M | yes | E1 | | open | me | - | - |\n\n" +
+		"## Evidence ledger\n\n| Id | Claim | Executed | Admit | Inputs and parameters | Observed | Digest | Normalize | Mode | Mutate | Mutation or negative control → result | Reproduction | Label |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|\n" +
+		"| E1 | the claim | go test ./... | go test ./... | none | the observation | sha256:aaaa | none | host | none | reverted → red | rerun it | observado |\n"
+	if problems := plancheck.CheckDocument(planText); len(problems) != 0 {
+		t.Fatalf("the fixture is not a plan the checker accepts: %v", problems)
+	}
+	runDir = filepath.Join(t.TempDir(), "t", "1")
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runDir, "result.json"), []byte(`{"case":"t","run":1}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	planFile = filepath.Join(runDir, "test-plan.md")
+	if err := os.WriteFile(planFile, []byte(planText), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return caseDir, runDir, planFile
+}
+
+// A finding row nobody decided is pending, and the decision that follows is written where the score
+// reads it. Without this the adjudication model would have no way in.
+func TestBenchAdjudicateRecordsReplacesAndListsPending(t *testing.T) {
+	bin := buildCLI(t)
+	caseDir, runDir, planFile := adjudicateFixture(t)
+
+	out, code := runCLI(t, bin, "bench", "adjudicate", "--run", runDir, "--pending")
+	if code != 0 || !strings.Contains(out, "row 1") {
+		t.Fatalf("--pending = %d\n%s", code, out)
+	}
+	if _, err := os.Stat(filepath.Join(runDir, "adjudication.json")); err == nil {
+		t.Fatal("listing the pending rows wrote a record")
+	}
+
+	out, code = runCLI(t, bin, "bench", "adjudicate", "--run", runDir, "--row", "1", "--verdict", "false_positive",
+		"--by", "reviewer", "--reason", "not a defect claim about this candidate")
+	if code != 0 {
+		t.Fatalf("recording a decision = %d\n%s", code, out)
+	}
+	data, err := os.ReadFile(filepath.Join(runDir, "adjudication.json"))
+	if err != nil || !strings.Contains(string(data), `"false_positive"`) {
+		t.Fatalf("record = %s, %v", data, err)
+	}
+
+	out, code = runCLI(t, bin, "bench", "adjudicate", "--run", runDir, "--row", "1", "--verdict", "out_of_scope",
+		"--by", "reviewer", "--reason", "second thoughts")
+	if code != 1 || !strings.Contains(out, "row 1") {
+		t.Fatalf("a second decision without --replace = %d\n%s", code, out)
+	}
+
+	out, code = runCLI(t, bin, "bench", "adjudicate", "--run", runDir, "--row", "1", "--verdict", "defect",
+		"--defect", "D1", "--by", "reviewer", "--reason", "closer look", "--replace")
+	if code != 0 {
+		t.Fatalf("--replace = %d\n%s", code, out)
+	}
+	out, code = runCLI(t, bin, "bench", "adjudicate", "--run", runDir, "--show")
+	if code != 0 || !strings.Contains(out, "defect") || !strings.Contains(out, "superseded") {
+		t.Fatalf("--show = %d\n%s", code, out)
+	}
+
+	// The score applies the record the caller names: one confirmed defect, nothing pending.
+	record := filepath.Join(runDir, "adjudication.json")
+	out, code = runCLI(t, bin, "bench", "score", "--case", caseDir, "--plan", planFile, "--adjudication", record)
+	if code != 0 || !strings.Contains(out, `"confirmed": true`) || !strings.Contains(out, `"pending_adjudication": 0`) {
+		t.Fatalf("score with a named record = %d\n%s", code, out)
+	}
+	// Naming a record that is not there is a refusal, not a silent skip: the caller asked for authority.
+	if _, code = runCLI(t, bin, "bench", "score", "--case", caseDir, "--plan", planFile, "--adjudication", filepath.Join(t.TempDir(), "absent.json")); code != 1 {
+		t.Fatalf("score with an absent record = %d, want 1", code)
+	}
+	// ... and the score can be taken without it, which leaves every row pending and no false positive.
+	out, code = runCLI(t, bin, "bench", "score", "--case", caseDir, "--plan", planFile, "--adjudication", "none")
+	if code != 0 || !strings.Contains(out, `"pending_adjudication": 1`) || !strings.Contains(out, `"false_positives": 0`) {
+		t.Fatalf("score --adjudication none = %d\n%s", code, out)
+	}
+}
+
+// A record is authority over a score, so it is never discovered beside the plan: the plan of a workspace
+// sits in the area the evaluated subject writes, and a record found there would let the subject mark its
+// own finding rows out of scope, leave the precision denominator and report a clean run. This is the
+// regression pin for R1-001 of the native review of this candidate.
+func TestBenchScoreNeverDiscoversARecordBesideThePlan(t *testing.T) {
+	bin := buildCLI(t)
+	caseDir, _, planFile := adjudicateFixture(t)
+	seeded := []byte(`{"case":"t","run":1,"decisions":[{"row":1,"row_fingerprint":"` + fingerprintOf(t, planFile) + `","verdict":"out_of_scope","by":"the subject","ts":"2026-09-17T00:00:00Z","reason":"nothing to see"}]}`)
+	if err := os.WriteFile(filepath.Join(filepath.Dir(planFile), "adjudication.json"), seeded, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, code := runCLI(t, bin, "bench", "score", "--case", caseDir, "--plan", planFile)
+	if code != 0 {
+		t.Fatalf("score with a seeded record beside the plan = %d\n%s", code, out)
+	}
+	if !strings.Contains(out, `"pending_adjudication": 1`) || !strings.Contains(out, `"out_of_scope": 0`) || strings.Contains(out, `"precision": 0`) {
+		t.Fatalf("a record beside the plan was applied:\n%s", out)
+	}
+}
+
+// fingerprintOf is the row digest an attacker would have to compute to seed a plausible record.
+func fingerprintOf(t *testing.T, planFile string) string {
+	t.Helper()
+	plan, err := os.ReadFile(planFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fingerprint, err := bench.FindingRowFingerprint(string(plan), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fingerprint
+}
+
+// Bad values are a usage failure, a record the data refuses is not: the distinction the plan commands
+// already make, and the one an operator scripting this needs.
+func TestBenchAdjudicateRefusalsAndTheirExitCodes(t *testing.T) {
+	bin := buildCLI(t)
+	_, runDir, _ := adjudicateFixture(t)
+
+	tests := []struct {
+		name string
+		args []string
+		want int
+	}{
+		{name: "no run", args: []string{"bench", "adjudicate", "--row", "1"}, want: 2},
+		{name: "no verdict", args: []string{"bench", "adjudicate", "--run", runDir, "--row", "1", "--by", "r", "--reason", "x"}, want: 2},
+		{name: "unknown verdict", args: []string{"bench", "adjudicate", "--run", runDir, "--row", "1", "--verdict", "maybe", "--by", "r", "--reason", "x"}, want: 2},
+		{name: "defect without id", args: []string{"bench", "adjudicate", "--run", runDir, "--row", "1", "--verdict", "defect", "--by", "r", "--reason", "x"}, want: 2},
+		{name: "defect on a non-defect verdict", args: []string{"bench", "adjudicate", "--run", runDir, "--row", "1", "--verdict", "out_of_scope", "--defect", "D1", "--by", "r", "--reason", "x"}, want: 2},
+		{name: "no reason", args: []string{"bench", "adjudicate", "--run", runDir, "--row", "1", "--verdict", "false_positive", "--by", "r"}, want: 2},
+		{name: "bad ts", args: []string{"bench", "adjudicate", "--run", runDir, "--row", "1", "--verdict", "false_positive", "--by", "r", "--reason", "x", "--ts", "yesterday"}, want: 2},
+		{name: "row outside the table", args: []string{"bench", "adjudicate", "--run", runDir, "--row", "9", "--verdict", "false_positive", "--by", "r", "--reason", "x"}, want: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, code := runCLI(t, bin, tt.args...)
+			if code != tt.want {
+				t.Fatalf("exit = %d, want %d", code, tt.want)
+			}
+		})
+	}
+}
+
+// The provenance records which configuration measured the run, because a throwaway config and the
+// operator's own are not the same instrument.
+func TestConfigModeForTheAgentConfigFlag(t *testing.T) {
+	tests := []struct {
+		runner, agentConfig, want string
+	}{
+		{"pi", "", bench.ConfigBench},
+		{"pi", "bench", bench.ConfigBench},
+		{"claude", "bench", bench.ConfigBench},
+		{"claude", "/tmp/op-config", bench.ConfigCustom},
+		{"claude", "", bench.ConfigInherited},
+	}
+	for _, tt := range tests {
+		if got := configModeFor(tt.runner, tt.agentConfig); got != tt.want {
+			t.Errorf("configModeFor(%q, %q) = %q, want %q", tt.runner, tt.agentConfig, got, tt.want)
 		}
 	}
 }

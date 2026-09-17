@@ -2,7 +2,6 @@ package bench
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -23,6 +22,7 @@ type DefectResult struct {
 	File      string `json:"file"`
 	Line      int    `json:"line"`
 	Found     bool   `json:"found"`
+	Confirmed bool   `json:"confirmed"`
 	MatchedBy string `json:"matched_by,omitempty"` // "line" or "keyword"
 	// ClaimedPinned reports that the finding names a test pinning it; whether that test
 	// distinguishes anything is measured separately, by the catch check.
@@ -34,11 +34,20 @@ type DefectResult struct {
 type Result struct {
 	Case                 string         `json:"case"`
 	Run                  int            `json:"run"`
+	Control              bool           `json:"control"`
 	Defects              []DefectResult `json:"defects"`
 	Total                int            `json:"total"`
 	Found                int            `json:"found"`
 	Recall               float64        `json:"recall"`
 	FalsePositives       int            `json:"false_positives"`
+	UnmatchedFindings    int            `json:"unmatched_findings"`
+	PendingAdjudication  int            `json:"pending_adjudication"`
+	AdjudicatedTrue      int            `json:"adjudicated_true"`
+	AdjudicatedFalse     int            `json:"adjudicated_false"`
+	OutOfScope           int            `json:"out_of_scope"`
+	Precision            *float64       `json:"precision"`
+	AdjudicationComplete bool           `json:"adjudication_complete"`
+	MetricsVersion       int            `json:"metrics_version"`
 	FindingRows          int            `json:"finding_rows"`
 	FindingsWithEvidence int            `json:"findings_with_evidence"`
 	LedgerRows           int            `json:"ledger_rows"`
@@ -84,22 +93,19 @@ func ScoreWorkspace(ws string, key Key) Result {
 
 // ScorePlanFile scores one plan file, such as the copy a run keeps next to its result.json.
 func ScorePlanFile(path string, key Key) Result {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		r := Score("", key)
-		r.Notes = append(r.Notes, "no plan")
-		return r
-	}
-	r := Score(string(raw), key)
-	r.PlanFound = true
+	r, _ := ScorePlanFileWithAdjudication(path, key, nil)
 	return r
 }
 
-// Score applies the scoring rule to plan text. A defect is found when a finding row cites its
-// file and either a line within LineTolerance or one of its keywords; a row matching no defect
-// is a false positive.
+// Score applies the mechanical proposal rules and leaves every finding row pending adjudication.
 func Score(plan string, key Key) Result {
-	r := Result{Case: key.ID, Total: len(key.Defects), LightActivated: plancheck.LightActivated(plan)}
+	r, _ := ScoreAdjudicated(plan, key, nil)
+	return r
+}
+
+// scoreMechanical applies the lexical and location rules without deciding whether a proposal is true.
+func scoreMechanical(plan string, key Key) Result {
+	r := Result{Case: key.ID, Control: key.IsCleanControl(), Total: len(key.Defects), LightActivated: plancheck.LightActivated(plan), MetricsVersion: MetricsVersion}
 	findings := plancheck.Section(plan, "Findings")
 	findingsHeader, rows := plancheck.Table(plan, "Findings")
 	r.FindingRows = len(rows)
@@ -125,6 +131,8 @@ func Score(plan string, key Key) Result {
 	}
 
 	// Attribution is per row, not per defect: one finding row is one claim.
+	// A clean control has no keyed defect to propose against, so every finding row is unmatched and stays pending
+	// until a decision makes it a false positive or out of scope.
 	claims := attribution(rows, key, ledgerByID)
 	r.RowsWithoutPath = claims.withoutPath
 	byID := map[string]*DefectResult{}
@@ -145,7 +153,7 @@ func Score(plan string, key Key) Result {
 	}
 	for _, m := range claims.matched {
 		if !m {
-			r.FalsePositives++
+			r.UnmatchedFindings++
 		}
 	}
 	if r.RowsWithoutPath > 0 {
@@ -176,8 +184,9 @@ type rowClaims struct {
 }
 
 // claimed reads one finding row against every defect and reports the ids it is credited to, plus whether it
-// matched a defect at all — which is what separates a finding from a false positive. A defect named by keyword is
-// credited directly; a row that matches only by line goes to the nearest defect.
+// has any lexical or location proposal. A proposal is deliberately not a verdict: adjudication decides whether
+// the row is a true finding, a false positive, or out of scope. A defect named by keyword is credited directly;
+// a row that matches only by line goes to the nearest defect.
 func claimed(text, linked string, defects []Defect) (map[string]bool, bool) {
 	ids := map[string]bool{}
 	var specific []Defect

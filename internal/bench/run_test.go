@@ -581,3 +581,36 @@ func TestTheNoteAboutAnUnkeptPlanReachesTheResultFile(t *testing.T) {
 		t.Fatalf("result.json carries no note about the plan it could not keep:\n%s", raw)
 	}
 }
+
+func TestSummaryRendersCleanControlCells(t *testing.T) {
+	got := Summary(Aggregate{Cases: []Result{{Case: "clean", Control: true}}})
+	if !strings.Contains(got, "| clean | clean | clean | clean |") || !strings.Contains(got, "| - |") {
+		t.Fatalf("summary = %s, want clean reported, pinned, caught cells and no precision", got)
+	}
+	if strings.Contains(got, "| clean | 0/0") {
+		t.Fatalf("summary renders a clean control as a fraction: %s", got)
+	}
+}
+
+func TestSummaryNamesDefectRunAndUniqueUnitsAndPending(t *testing.T) {
+	agg := Aggregate{Cases: []Result{
+		{Case: "case-a", Run: 1, Total: 1, Found: 1, Defects: []DefectResult{{ID: "D1", Found: true}}, FindingRows: 1, PendingAdjudication: 1},
+		{Case: "case-a", Run: 2, Total: 1, Found: 1, Defects: []DefectResult{{ID: "D1", Found: true}}, FindingRows: 1, PendingAdjudication: 1},
+	}}
+	finalizeAggregate(&agg)
+	got := Summary(agg)
+	for _, want := range []string{
+		"reported (defect-runs): 2/2",
+		"reported (unique defects): 1/1",
+		"precision: none (0 adjudicated, 2 pending)",
+		"inconclusive: 2",
+		"controls: 0",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("summary missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "precision: 0.00") {
+		t.Fatalf("pending precision must be none, not 0.00:\n%s", got)
+	}
+}

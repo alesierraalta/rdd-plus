@@ -39,7 +39,10 @@ func WriteBenchConfig(dir, credentialsFrom string) error {
 	// Copied, never linked: a refresh writes into this throwaway copy, so a failed refresh cannot
 	// empty the operator's login the way it did when the two paths were the same file. F25.
 	src := filepath.Join(credentialsFrom, CredentialsFile)
-	return copyFile(src, filepath.Join(dir, CredentialsFile))
+	if err := copyFile(src, filepath.Join(dir, CredentialsFile)); err != nil {
+		return err
+	}
+	return VerifyBenchSkills(dir)
 }
 
 // WriteBenchPiConfig builds the Pi equivalent of WriteBenchConfig in the same directory: the
@@ -87,7 +90,7 @@ func WriteBenchPiConfig(dir, configFrom string) error {
 			return err
 		}
 	}
-	return nil
+	return VerifyBenchSkills(dir)
 }
 
 // copyFile copies src to dst with owner-only permissions and does nothing when src is absent: a

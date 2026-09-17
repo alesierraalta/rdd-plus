@@ -29,6 +29,12 @@ func TestCorpusShipsFixedVersions(t *testing.T) {
 			t.Errorf("%s: %v", c, err)
 			continue
 		}
+		if key.IsCleanControl() {
+			if len(key.Defects) != 0 {
+				t.Errorf("%s: clean control declares %d defects", filepath.Base(c), len(key.Defects))
+			}
+			continue
+		}
 		if st, err := os.Stat(filepath.Join(c, FixDir, "all")); err != nil || !st.IsDir() {
 			t.Errorf("%s: no fix/all", filepath.Base(c))
 		}
@@ -40,6 +46,27 @@ func TestCorpusShipsFixedVersions(t *testing.T) {
 				t.Errorf("%s: no fix/keep-%s", filepath.Base(c), d.ID)
 			}
 		}
+	}
+}
+
+func TestCorpusShipsCleanControlsWithoutFixVersions(t *testing.T) {
+	cases, _ := filepath.Glob(filepath.Join(corpusDir(t), "*"))
+	controls := 0
+	for _, c := range cases {
+		key, err := LoadKey(c)
+		if err != nil || !key.IsCleanControl() {
+			continue
+		}
+		controls++
+		if len(key.Defects) != 0 {
+			t.Errorf("%s: clean control declares %d defects", filepath.Base(c), len(key.Defects))
+		}
+		if _, err := os.Stat(filepath.Join(c, FixDir)); !os.IsNotExist(err) {
+			t.Errorf("%s: clean control ships a fix directory", filepath.Base(c))
+		}
+	}
+	if controls == 0 {
+		t.Fatal("no clean controls in shipped corpus")
 	}
 }
 

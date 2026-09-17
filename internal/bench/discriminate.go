@@ -56,6 +56,10 @@ func isTestFile(rel string) bool {
 // Discriminate runs the check for one agent workspace against the case's fixed versions.
 func Discriminate(caseDir, ws string, key Key, timeout time.Duration) CatchResult {
 	res := CatchResult{Caught: map[string]bool{}}
+	if len(key.Defects) == 0 {
+		res.Notes = append(res.Notes, "case plants no defect; catch check has nothing to distinguish")
+		return res
+	}
 	fixture := filepath.Join(caseDir, FixtureDir)
 	all := filepath.Join(caseDir, FixDir, "all")
 	if st, err := os.Stat(all); err != nil || !st.IsDir() {
@@ -95,6 +99,18 @@ func Discriminate(caseDir, ws string, key Key, timeout time.Duration) CatchResul
 		res.Notes = append(res.Notes, "no agent test is green on the fully fixed code: "+tail(out, 400))
 		return res
 	}
+	recordDefectOutcomes(&res, caseDir, fixture, ws, key, tests, trusted, red, timeout)
+	res.InvertedTests = countDistinct(res.InvertedBy)
+	if res.InvertedTests > 0 {
+		res.Notes = append(res.Notes, fmt.Sprintf("%d test(s) pin the defective behaviour: green with the defect, red once it is fixed", res.InvertedTests))
+	}
+	if other := res.BrokenTests - res.InvertedTests; other > 0 {
+		res.Notes = append(res.Notes, fmt.Sprintf("%d test(s) red on the fully fixed code were ignored", other))
+	}
+	return res
+}
+
+func recordDefectOutcomes(res *CatchResult, caseDir, fixture, ws string, key Key, tests, trusted, red []string, timeout time.Duration) {
 	for _, d := range key.Defects {
 		got := discriminateDefect(caseDir, fixture, ws, key, d, tests, trusted, red, timeout)
 		if got.note != "" {
@@ -123,14 +139,6 @@ func Discriminate(caseDir, ws string, key Key, timeout time.Duration) CatchResul
 			res.InvertedBy[d.ID] = got.invertedBy
 		}
 	}
-	res.InvertedTests = countDistinct(res.InvertedBy)
-	if res.InvertedTests > 0 {
-		res.Notes = append(res.Notes, fmt.Sprintf("%d test(s) pin the defective behaviour: green with the defect, red once it is fixed", res.InvertedTests))
-	}
-	if other := res.BrokenTests - res.InvertedTests; other > 0 {
-		res.Notes = append(res.Notes, fmt.Sprintf("%d test(s) red on the fully fixed code were ignored", other))
-	}
-	return res
 }
 
 // defectOutcome is what the case's code said about one defect when only that defect was left in place.
