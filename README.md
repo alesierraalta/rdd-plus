@@ -69,6 +69,8 @@ shrinks, sweeps the specialized skills for their own checks, and executes throug
 collaborators, real seams, injected faults, and concurrency. Every finding carries an executed
 evidence record; anything not executed is a hypothesis.
 
+`breakcheck` is an explicitly invoked bounded adversarial campaign for one candidate between the Verifier and RDD; it reports evidence and a readiness disposition, not a score.
+
 ## Development
 
 ```sh
