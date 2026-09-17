@@ -4,7 +4,7 @@ description: "Trigger: haz el testing, testea esto, prueba esto, test this, test
 license: Apache-2.0
 metadata:
   author: "alesierraalta"
-  version: "0.3.9"
+  version: "0.3.10"
   requires_rdd_plus: "0.3.8"
   scope: [common]
   auto_invoke: "Any request to test something: infer scope and mode from repo state, build or resume the persisted plan, execute it through specialized testing skills"
@@ -125,8 +125,10 @@ automatic change to this skill.
 **A bounded run plans scoped.** When the trigger is bounded — the operator names one area, file or
 module to test, or the diff is confined to one or two files — and it touches none of the classes
 below, the run may plan the blast radius instead of the whole app and say so in the plan header:
-`Light: <blast radius> · touches <classes>`. Skipped layers keep their row with `n/a` and a reason
-in the `Scope` cell; the "Not testing, on purpose" table names what a full run would have added;
+`Light: <blast radius> · touches <classes>`. Skipped layers may collapse into a single `n/a` row
+whose `Scope` cell carries the reason — one aggregated row instead of six when the run owns a single
+target, so the plan stays proportional to its blast radius; a full run keeps one row per layer. The
+"Not testing, on purpose" table names what a full run would have added;
 and inside the scope nothing is reduced ([references/ordering.md](references/ordering.md)).
 
 Refused, and planned in full, when the trigger is unbounded or touches authentication or
