@@ -194,7 +194,10 @@ depend on the model remembering to make it. It is a reminder, not an approval ga
 
 The most valuable artifact a run can hand back is an honest report on the method itself: what
 paid off, what was ceremony, where a rule had to be reverse-engineered, and whether it earned its
-keep. The gate offers it at every Stop; `feedback` is where the answer lands.
+keep. The gate offers it at every Stop; `feedback` is where the answer lands. At the end of a beta run—
+including blocked or partial runs—the executing agent records its own retrospective. The reply carries
+only a brief acknowledgment after a successful write; the summary groups by project and names any
+verdict it could not classify.
 
 ```sh
 rdd-plus feedback --template          # a fillable skeleton with the run's identity already filled

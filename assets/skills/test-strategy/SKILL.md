@@ -4,7 +4,7 @@ description: "Trigger: haz el testing, testea esto, prueba esto, test this, test
 license: Apache-2.0
 metadata:
   author: "alesierraalta"
-  version: "0.3.8"
+  version: "0.3.9"
   requires_rdd_plus: "0.3.8"
   scope: [common]
   auto_invoke: "Any request to test something: infer scope and mode from repo state, build or resume the persisted plan, execute it through specialized testing skills"
@@ -33,8 +33,8 @@ evidence ids that do not exist, rows that settle without a pinning test — plus
 table shape, saying in the report that the gate was applied by hand; and `doctor` by deciding
 CodeGraph availability from `codegraph` and `git ls-files` instead of the capability probe.
 The run's process feedback — what paid off, what was ceremony, where a rule had to be
-reverse-engineered, and whether the method earned its keep — is recorded with
-`rdd-plus feedback --template`.
+reverse-engineered, and whether the method earned its keep — is recorded at the end of the run
+under Hard Rule 14 with `rdd-plus feedback --template`.
 
 ## Hard Rules
 
@@ -92,6 +92,20 @@ reverse-engineered, and whether the method earned its keep — is recorded with
     of demanding its repair. Promote through `no-excess-tests`, name it in the finding row, and
     label any characterization test as such in its own name. A finding whose probe was never
     promoted stays `open`, reason `not pinned`.
+
+14. **At the end of every run—including blocked, partial, or stopped-early runs—the executing agent
+records its own retrospective.** Use `mktemp` for a scratch file outside the repository, run
+`rdd-plus feedback --template` into it, fill only the existing fields (`ts`, `repo`, `plan`, `skill`,
+`build`, `paid`, `cost`, `reason`, `verdict` of `paid`, `partly`, or `ceremony`, optional `guess` and
+`freeform`), then submit with `rdd-plus feedback --file`; add no fields because the parser rejects
+unknown keys.
+
+## Beta retrospective
+
+Keep the full retrospective out of chat: reply with only a brief acknowledgment after the write
+succeeds. If storage fails or is uncertain, say so instead of claiming it was recorded. This record
+is the executing agent's own report about the method—not ground truth, a readiness vote, or an
+automatic change to this skill.
 
 ## Decision Gates
 

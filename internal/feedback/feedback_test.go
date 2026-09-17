@@ -207,6 +207,57 @@ func TestSummaryCountsVerdictsAndSkillVersions(t *testing.T) {
 	}
 }
 
+func TestSummaryClassifiesUnknownVerdicts(t *testing.T) {
+	dir := t.TempDir()
+	if err := Record(dir, Report{TS: "2026-09-11T00:00:00Z", Repo: "/r", Plan: "p", Skill: "0.3.6", Build: "b",
+		Paid: "a", Cost: "b", Reason: "unknown", Verdict: "mystery"}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	got, err := Summary(dir)
+	if err != nil {
+		t.Fatalf("Summary: %v", err)
+	}
+	for _, want := range []string{
+		"unknown: 1",
+		"0.3.6: 1 (paid 0, partly 0, ceremony 0, unknown 1)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("summary missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestSummaryGroupsReportsByProject(t *testing.T) {
+	dir := t.TempDir()
+	records := []Report{
+		{TS: "2026-09-12T00:00:00Z", Repo: "/repo-a", Plan: "p", Skill: "0.3.6", Build: "b",
+			Paid: "a", Cost: "b", Reason: "partly", Verdict: VerdictPartly},
+		{TS: "2026-09-13T00:00:00Z", Repo: "/repo-z", Plan: "p", Skill: "0.3.6", Build: "b",
+			Paid: "a", Cost: "b", Reason: "paid", Verdict: VerdictPaid},
+	}
+	for _, r := range records {
+		if err := Record(dir, r); err != nil {
+			t.Fatalf("Record: %v", err)
+		}
+	}
+	got, err := Summary(dir)
+	if err != nil {
+		t.Fatalf("Summary: %v", err)
+	}
+	for _, want := range []string{
+		"by project:",
+		"/repo-z: 1 (paid 1, partly 0, ceremony 0)",
+		"/repo-a: 1 (paid 0, partly 1, ceremony 0)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("summary missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Index(got, "/repo-z:") > strings.Index(got, "/repo-a:") {
+		t.Fatalf("projects must be sorted by name:\n%s", got)
+	}
+}
+
 func TestSummaryListsRecentGuessesNewestFirst(t *testing.T) {
 	dir := t.TempDir()
 	for i, guess := range []string{"g1", "g2", "g3", "g4", "g5", "g6"} {
