@@ -73,6 +73,7 @@ type Options struct {
 	Timeout      time.Duration
 	SuiteTimeout time.Duration
 	ConfigDir    string  // agent config directory (Claude config dir, or Pi agent dir); empty inherits the operator's
+	ConfigMode   string  // agent config mode: ConfigBench, ConfigInherited, or ConfigCustom
 	BinDir       string  // put first on the agent's PATH, so `rdd-plus plan init` is the build under test
 	Workers      int     // cases run side by side; below 1 means one at a time
 	MaxCostUSD   float64 // 0 means no ceiling
@@ -91,7 +92,9 @@ type Options struct {
 // travels with the call by value, so one case's request can never reach another's run.
 type Agent func(ctx context.Context, ws string, key Key, opts Options) (AgentResult, error)
 
-// Aggregate is the whole run's outcome.
+// Aggregate is the whole run's outcome. Recall and RecallCaught use defect-runs as their unit:
+// repeated runs contribute repeated denominator entries; the Unique* and RecallUnique fields are
+// the distinct-defect view.
 type Aggregate struct {
 	TS             string   `json:"ts"`
 	Out            string   `json:"out"`
@@ -121,7 +124,25 @@ type Aggregate struct {
 	// reconcile the counts without re-deriving them. A zero means the aggregate never recorded a run
 	// count — it was written before the field existed, or read from a file without one — so no reading can
 	// be compared on it. Rescore copies this field through rather than guessing a count.
-	Runs int `json:"runs"`
+	Runs                 int        `json:"runs"`
+	UniqueDefects        int        `json:"unique_defects"`
+	UniqueFound          int        `json:"unique_found"`
+	UniqueConfirmed      int        `json:"unique_confirmed"`
+	UniqueCaught         int        `json:"unique_caught"`
+	DefectRuns           int        `json:"defect_runs"`
+	Controls             int        `json:"controls"`
+	Inconclusive         int        `json:"inconclusive"`
+	UnstableCases        []string   `json:"unstable_cases,omitempty"`
+	AdjudicatedTrue      int        `json:"adjudicated_true"`
+	AdjudicatedFalse     int        `json:"adjudicated_false"`
+	OutOfScope           int        `json:"out_of_scope"`
+	PendingAdjudication  int        `json:"pending_adjudication"`
+	Precision            *float64   `json:"precision"`
+	AdjudicationComplete bool       `json:"adjudication_complete"`
+	MetricsVersion       int        `json:"metrics_version"`
+	RecallUnique         float64    `json:"recall_unique"`
+	RecallUniqueCaught   float64    `json:"recall_unique_caught"`
+	Provenance           Provenance `json:"provenance"`
 }
 
 // CorpusCase is one case of a corpus: its name, the bounded request it is asked for, and the ids of
@@ -373,21 +394,83 @@ func foldResult(agg *Aggregate, u unit, res Result) {
 	}
 }
 
+// finalizeAggregate derives all count and ratio fields from the cases, so a run and a rescore cannot
+// disagree about the measurement represented by the same case results.
+func finalizeAggregate(agg *Aggregate) {
+	counts := CountUnique(agg.Cases)
+	agg.Defects, agg.Found, agg.Caught = 0, 0, 0
+	agg.ClaimedPinned, agg.FalsePositives = 0, 0
+	agg.Invalid, agg.Failed, agg.NoPlan, agg.LightActivated = 0, 0, 0, 0
+	agg.AdjudicatedTrue, agg.AdjudicatedFalse, agg.OutOfScope = 0, 0, 0
+	agg.PendingAdjudication = 0
+	complete := true
+	for _, r := range agg.Cases {
+		if r.Invalid {
+			agg.Invalid++
+			continue
+		}
+		if r.Failed {
+			agg.Failed++
+			continue
+		}
+		agg.AdjudicatedTrue += r.AdjudicatedTrue
+		agg.AdjudicatedFalse += r.AdjudicatedFalse
+		agg.OutOfScope += r.OutOfScope
+		agg.PendingAdjudication += r.PendingAdjudication
+		if !r.AdjudicationComplete {
+			complete = false
+		}
+		agg.FalsePositives += r.FalsePositives
+		if !r.PlanFound {
+			agg.NoPlan++
+		}
+		if r.LightActivated {
+			agg.LightActivated++
+		}
+		if r.Control {
+			continue
+		}
+		agg.Defects += r.Total
+		agg.Found += r.Found
+		agg.Caught += r.Caught
+		agg.ClaimedPinned += r.ClaimedPinned
+	}
+	agg.UniqueDefects, agg.UniqueFound, agg.UniqueConfirmed, agg.UniqueCaught = counts.Defects, counts.Found, counts.Confirmed, counts.Caught
+	agg.DefectRuns, agg.Controls, agg.Inconclusive = counts.DefectRuns, counts.Controls, counts.Inconclusive
+	agg.UnstableCases = counts.Unstable
+	agg.AdjudicationComplete = complete
+	agg.MetricsVersion = MetricsVersion
+	agg.Recall, agg.RecallCaught = 0, 0
+	if agg.Defects > 0 {
+		agg.Recall = float64(agg.Found) / float64(agg.Defects)
+		agg.RecallCaught = float64(agg.Caught) / float64(agg.Defects)
+	}
+	agg.RecallUnique, agg.RecallUniqueCaught = 0, 0
+	if counts.Defects > 0 {
+		agg.RecallUnique = float64(counts.Found) / float64(counts.Defects)
+		agg.RecallUniqueCaught = float64(counts.Caught) / float64(counts.Defects)
+	}
+	denominator := agg.AdjudicatedTrue + agg.AdjudicatedFalse
+	agg.Precision = nil
+	if denominator > 0 {
+		precision := float64(agg.AdjudicatedTrue) / float64(denominator)
+		agg.Precision = &precision
+	}
+}
+
 // finalizeRun closes the numbers: the ceiling it hit, the recall it earned, the exit code a partial run deserves,
 // and the digest of the corpus those numbers cover.
 func finalizeRun(agg Aggregate, corpus []CorpusCase, code int, opts Options) (Aggregate, int) {
 	if agg.CostCeilingHit {
 		fmt.Fprintf(opts.Log, "cost ceiling $%.2f reached; stopping\n", opts.MaxCostUSD)
 	}
-	if agg.Defects > 0 {
-		agg.Recall = float64(agg.Found) / float64(agg.Defects)
-		agg.RecallCaught = float64(agg.Caught) / float64(agg.Defects)
-	}
+	finalizeAggregate(&agg)
 	if code == 0 && (agg.Failed > 0 || agg.Invalid > 0) {
 		code = ExitPartial
 		fmt.Fprintf(opts.Log, "partial: %d failed, %d invalid; recall covers valid cases only\n", agg.Failed, agg.Invalid)
 	}
 	agg.Corpus = CorpusDigest(corpus, opts.Runs)
+	agg.Provenance = provenanceForRun(opts, agg.Corpus, len(corpus))
 	return agg, code
 }
 
@@ -422,6 +505,11 @@ func historyEntry(agg Aggregate, caseDirs []string, opts Options) HistoryEntry {
 		Failed: agg.Failed, Invalid: agg.Invalid, NoPlan: agg.NoPlan, Kind: KindRun,
 		SkillVersion: SkillVersion(opts.SkillFile), Corpus: agg.Corpus,
 		LightActivated: agg.LightActivated, Runs: opts.Runs,
+		MetricsVersion: agg.MetricsVersion, UniqueDefects: agg.UniqueDefects, UniqueFound: agg.UniqueFound,
+		UniqueConfirmed: agg.UniqueConfirmed, UniqueCaught: agg.UniqueCaught, DefectRuns: agg.DefectRuns,
+		Controls: agg.Controls, Precision: agg.Precision, PendingAdjudication: agg.PendingAdjudication,
+		OutOfScope: agg.OutOfScope, Inconclusive: agg.Inconclusive, UnstableCases: agg.UnstableCases,
+		AgentConfig: agg.Provenance.AgentConfig, Environment: agg.Provenance.Environment,
 	}
 }
 
@@ -609,8 +697,7 @@ func writeJSON(path string, v any) error {
 // Summary renders the aggregate as the markdown table written to summary.md.
 func Summary(agg Aggregate) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "# Bench %s\n\nModel: %s · cases: %d · defects: %d · reported: %d (%.2f) · claimed a pinning test: %d · caught by a test: %d (%.2f) · false positives: %d · failed: %d · invalid: %d · no plan: %d · light runs: %d · cost: $%.3f",
-		agg.TS, agg.Model, len(agg.Cases), agg.Defects, agg.Found, agg.Recall, agg.ClaimedPinned, agg.Caught, agg.RecallCaught, agg.FalsePositives, agg.Failed, agg.Invalid, agg.NoPlan, agg.LightActivated, agg.CostUSD)
+	fmt.Fprintf(&b, "# Bench %s\n\nModel: %s · case-runs: %d · %s", agg.TS, agg.Model, len(agg.Cases), aggregateTotals(agg))
 	if agg.Corpus != "" {
 		fmt.Fprintf(&b, " · corpus: %s", agg.Corpus)
 	}
@@ -620,7 +707,7 @@ func Summary(agg Aggregate) string {
 	if agg.CostCeilingHit {
 		b.WriteString(" · cost ceiling hit")
 	}
-	b.WriteString("\n\n| case | reported | pinned | caught | light | false positives | cost USD | turns | minutes | note |\n|---|---|---|---|---|---|---|---|---|---|\n")
+	b.WriteString("\n\n| case | reported | pinned | caught | light | false positives | cost USD | turns | minutes | note | precision (pending) |\n|---|---|---|---|---|---|---|---|---|---|---|\n")
 	for _, c := range agg.Cases {
 		note := strings.TrimSpace(invalidTag(c) + noPlanTag(c))
 		if len(c.Notes) > 0 {
@@ -629,10 +716,46 @@ func Summary(agg Aggregate) string {
 		if c.Catch.Checked && len(c.Catch.Notes) > 0 {
 			note = strings.TrimSpace(note + " " + strings.Join(c.Catch.Notes, "; "))
 		}
-		fmt.Fprintf(&b, "| %s | %d/%d | %d/%d | %d/%d | %s | %d | %.3f | %d | %.1f | %s |\n",
-			c.Case, c.Found, c.Total, c.ClaimedPinned, c.Total, c.Caught, c.Total, lightTag(c), c.FalsePositives, c.CostUSD, c.Turns, c.Seconds/60, note)
+		reported := fmt.Sprintf("%d/%d", c.Found, c.Total)
+		pinned := fmt.Sprintf("%d/%d", c.ClaimedPinned, c.Total)
+		caught := fmt.Sprintf("%d/%d", c.Caught, c.Total)
+		precision := casePrecision(c)
+		if c.Control {
+			reported, pinned, caught = "clean", "clean", "clean"
+		}
+		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %d | %.3f | %d | %.1f | %s | %s |\n",
+			c.Case, reported, pinned, caught, lightTag(c), c.FalsePositives, c.CostUSD, c.Turns, c.Seconds/60, note, precision)
 	}
 	return b.String()
+}
+
+func aggregateTotals(agg Aggregate) string {
+	line := fmt.Sprintf("reported (defect-runs): %d/%d · reported (unique defects): %d/%d · claimed a pinning test: %d defect-runs · caught (defect-runs): %d/%d · caught (unique defects): %d/%d · precision: %s · out of scope: %d finding rows · inconclusive: %d runs · controls: %d runs · false positives: %d finding rows · failed: %d runs · invalid: %d runs · no plan: %d runs · light runs: %d · cost (USD): $%.3f",
+		agg.Found, agg.Defects, agg.UniqueFound, agg.UniqueDefects, agg.ClaimedPinned, agg.Caught, agg.Defects, agg.UniqueCaught, agg.UniqueDefects,
+		precisionSummary(agg.Precision, agg.AdjudicatedTrue, agg.AdjudicatedFalse, agg.PendingAdjudication), agg.OutOfScope, agg.Inconclusive, agg.Controls,
+		agg.FalsePositives, agg.Failed, agg.Invalid, agg.NoPlan, agg.LightActivated, agg.CostUSD)
+	if len(agg.UnstableCases) > 0 {
+		line += " · unstable cases: " + strings.Join(agg.UnstableCases, ", ")
+	}
+	return line
+}
+
+func precisionSummary(precision *float64, adjudicatedTrue, adjudicatedFalse, pending int) string {
+	return fmt.Sprintf("%s (%d adjudicated, %d pending)", precisionValue(precision), adjudicatedTrue+adjudicatedFalse, pending)
+}
+
+func precisionValue(precision *float64) string {
+	if precision == nil {
+		return "none"
+	}
+	return fmt.Sprintf("%.2f", *precision)
+}
+
+func casePrecision(r Result) string {
+	if r.Control {
+		return "-"
+	}
+	return fmt.Sprintf("%s (%d)", precisionValue(r.Precision), r.PendingAdjudication)
 }
 
 // lightTag is the per-case column: a reading has to show which runs were scoped, not only how many.

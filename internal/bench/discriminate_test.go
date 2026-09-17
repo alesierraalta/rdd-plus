@@ -3,6 +3,7 @@ package bench
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -125,6 +126,20 @@ func TestDiscriminateWithoutFixedVersion(t *testing.T) {
 	got := Discriminate(caseDir, t.TempDir(), Key{ID: "x", Defects: []Defect{{ID: "D1"}}}, time.Second)
 	if got.Checked {
 		t.Fatal("checked without fix/all")
+	}
+}
+
+func TestDiscriminateCleanControlSkipsCatchCheck(t *testing.T) {
+	got := Discriminate(t.TempDir(), t.TempDir(), Key{ID: "clean", Control: ControlClean}, time.Second)
+	if got.Checked {
+		t.Fatal("clean control was checked")
+	}
+	notes := strings.Join(got.Notes, "; ")
+	if !strings.Contains(notes, "case plants no defect") {
+		t.Fatalf("notes = %q, want no-defect explanation", notes)
+	}
+	if strings.Contains(notes, "fix/all") {
+		t.Fatalf("notes = %q, clean control must not report missing fix/all", notes)
 	}
 }
 

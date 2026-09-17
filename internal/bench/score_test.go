@@ -31,6 +31,7 @@ func TestScore(t *testing.T) {
 		wantFound      int
 		wantBy         string
 		wantFP         int
+		wantPending    int
 		wantRows       int
 		wantEvidence   int
 		wantLedgerRows int
@@ -40,53 +41,56 @@ func TestScore(t *testing.T) {
 			findings:  "| F1 | `src/render.js:9` a field with a quote is not protected | M | yes | E1 | open | me | - | - |\n",
 			ledger:    "| E1 | c | cmd | i | o | m | r | observado |\n",
 			key:       renderKey,
-			wantFound: 1, wantBy: "line", wantRows: 1, wantEvidence: 1, wantLedgerRows: 1,
+			wantFound: 1, wantBy: "line", wantPending: 1, wantRows: 1, wantEvidence: 1, wantLedgerRows: 1,
 		},
 		{
 			name:      "found by keyword when the file is cited without a line",
 			findings:  "| F1 | render.js never escapes an embedded quote | M | yes | E1 | open | me | - | - |\n",
 			key:       renderKey,
 			ledger:    "| E1 | c | cmd | i | o | m | r | observado |\n| E2 | c | cmd | i | o | m | r | observado |\n",
-			wantFound: 1, wantBy: "keyword", wantRows: 1, wantEvidence: 1, wantLedgerRows: 2,
+			wantFound: 1, wantBy: "keyword", wantPending: 1, wantRows: 1, wantEvidence: 1, wantLedgerRows: 2,
 		},
 		{
-			name:      "keyword alone without the file is not a match, and the row is a false positive",
+			// An unmatched row only proposes no association; without adjudication it remains pending, not a false positive.
+			name:      "keyword alone without the file is not a proposed match",
 			findings:  "| F1 | `src/parse.js:12` does not escape the double quote | M | yes | E1 | open | me | - | - |\n",
 			key:       renderKey,
-			wantFound: 0, wantFP: 1, wantRows: 1, wantEvidence: 1,
+			wantFound: 0, wantFP: 0, wantPending: 1, wantRows: 1, wantEvidence: 1,
 		},
 		{
-			name:      "line far away and no keyword is not a match",
+			// An unmatched row only proposes no association; without adjudication it remains pending, not a false positive.
+			name:      "line far away and no keyword is not a proposed match",
 			findings:  "| F1 | `src/render.js:40` unrelated issue | M | yes | | open | me | - | - |\n",
 			key:       renderKey,
-			wantFound: 0, wantFP: 1, wantRows: 1, wantEvidence: 0,
+			wantFound: 0, wantFP: 0, wantPending: 1, wantRows: 1, wantEvidence: 0,
 		},
 		{
 			name:      "placeholder rows are not findings",
 			findings:  "| (none) | | | | | | | | |\n| - | | | | | | | | |\n",
 			key:       renderKey,
-			wantFound: 0, wantFP: 0, wantRows: 0,
+			wantFound: 0, wantFP: 0, wantPending: 0, wantRows: 0,
 		},
 		{
 			name:      "a line range counts when the planted line is within tolerance of it",
 			findings:  "| F1 | src/render.js:10-14 quoting | M | yes | E2 | open | me | - | - |\n",
 			key:       Key{ID: "c1", Defects: []Defect{{ID: "d1", File: "src/render.js", Line: 18, Keywords: []string{"zzz"}}}},
 			ledger:    "| E1 | c | cmd | i | o | m | r | observado |\n| E2 | c | cmd | i | o | m | r | observado |\n",
-			wantFound: 1, wantBy: "line", wantRows: 1, wantEvidence: 1, wantLedgerRows: 2,
+			wantFound: 1, wantBy: "line", wantPending: 1, wantRows: 1, wantEvidence: 1, wantLedgerRows: 2,
 		},
 		{
 			name:      "suffix paths match: fixture/src/render.js names src/render.js",
 			findings:  "| F1 | fixture/src/render.js:12 broken | M | yes | E1 | open | me | - | - |\n",
 			key:       renderKey,
 			ledger:    "| E1 | c | cmd | i | o | m | r | observado |\n| E2 | c | cmd | i | o | m | r | observado |\n",
-			wantFound: 1, wantBy: "line", wantRows: 1, wantEvidence: 1, wantLedgerRows: 2,
+			wantFound: 1, wantBy: "line", wantPending: 1, wantRows: 1, wantEvidence: 1, wantLedgerRows: 2,
 		},
 		{
-			name:      "one matching row and one unrelated row: found 1, false positive 1",
+			// The unrelated row is pending until a human or verified rule adjudicates it.
+			name:      "one matching row and one unrelated row: found 1, pending 1",
 			findings:  "| F1 | src/render.js:12 escape | M | yes | E1 | open | me | - | - |\n| F2 | src/other.js:3 thing | N | yes | E2 | open | me | - | - |\n",
 			key:       renderKey,
 			ledger:    "| E1 | c | cmd | i | o | m | r | observado |\n| E2 | c | cmd | i | o | m | r | observado |\n",
-			wantFound: 1, wantBy: "line", wantFP: 1, wantRows: 2, wantEvidence: 2, wantLedgerRows: 2,
+			wantFound: 1, wantBy: "line", wantFP: 0, wantPending: 2, wantRows: 2, wantEvidence: 2, wantLedgerRows: 2,
 		},
 	}
 	for _, tc := range cases {
@@ -100,6 +104,9 @@ func TestScore(t *testing.T) {
 			}
 			if r.FalsePositives != tc.wantFP {
 				t.Fatalf("false positives = %d, want %d", r.FalsePositives, tc.wantFP)
+			}
+			if r.PendingAdjudication != tc.wantPending {
+				t.Fatalf("pending adjudication = %d, want %d", r.PendingAdjudication, tc.wantPending)
 			}
 			if r.FindingRows != tc.wantRows {
 				t.Fatalf("finding rows = %d, want %d", r.FindingRows, tc.wantRows)
@@ -127,6 +134,28 @@ func TestScoreRecallOverSeveralDefects(t *testing.T) {
 	r := Score(plan("| F1 | src/a.js:5 x | M | yes | E1 | open | me | - | - |\n| F2 | src/c.js beta gamma | M | yes | E1 | open | me | - | - |\n", "| E1 | c | cmd | i | o | m | r | observado |\n| E2 | c | cmd | i | o | m | r | observado |\n"), key)
 	if r.Found != 2 || r.Recall != 0.5 || r.FalsePositives != 0 {
 		t.Fatalf("got found %d recall %.2f fp %d", r.Found, r.Recall, r.FalsePositives)
+	}
+}
+
+func TestScoreCleanControlKeepsFindingsPending(t *testing.T) {
+	key := Key{ID: "clean", Control: ControlClean}
+	r := Score(plan("| F1 | src/allocate.js:1 invented issue | M | yes | E1 | open | me | - | - |\n", "| E1 | c | cmd | i | o | m | r | observed |\n"), key)
+	if r.Total != 0 || !r.Control || r.Recall != 0 || r.FalsePositives != 0 {
+		t.Fatalf("clean score = total %d control %v recall %.2f false positives %d", r.Total, r.Control, r.Recall, r.FalsePositives)
+	}
+	if r.UnmatchedFindings != 1 || r.PendingAdjudication != 1 {
+		t.Fatalf("clean finding = unmatched %d pending %d, want one of each", r.UnmatchedFindings, r.PendingAdjudication)
+	}
+	if r.AdjudicationComplete {
+		t.Fatal("clean finding was marked adjudicated")
+	}
+
+	empty := Score(plan("", ""), key)
+	if !empty.AdjudicationComplete {
+		t.Fatal("clean control with no findings is not adjudication-complete")
+	}
+	if empty.Precision != nil {
+		t.Fatalf("precision = %v, want null", *empty.Precision)
 	}
 }
 

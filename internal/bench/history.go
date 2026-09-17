@@ -42,7 +42,21 @@ type HistoryEntry struct {
 	// denominator without re-deriving it: three runs triple it, and a row that does not say so sits in
 	// the history as though it were comparable to a one-run row. A zero means the row never recorded a run
 	// count — it was written before the column existed — so no reading can be compared on it.
-	Runs int `json:"runs"`
+	Runs                int      `json:"runs"`
+	MetricsVersion      int      `json:"metrics_version"`
+	UniqueDefects       int      `json:"unique_defects"`
+	UniqueFound         int      `json:"unique_found"`
+	UniqueConfirmed     int      `json:"unique_confirmed"`
+	UniqueCaught        int      `json:"unique_caught"`
+	DefectRuns          int      `json:"defect_runs"`
+	Controls            int      `json:"controls"`
+	Precision           *float64 `json:"precision"`
+	PendingAdjudication int      `json:"pending_adjudication"`
+	OutOfScope          int      `json:"out_of_scope"`
+	Inconclusive        int      `json:"inconclusive"`
+	UnstableCases       []string `json:"unstable_cases,omitempty"`
+	AgentConfig         string   `json:"agent_config"`
+	Environment         string   `json:"environment"`
 }
 
 // A row is either a run that spawned agents or a rescore that re-read one with newer rules.
@@ -51,10 +65,10 @@ const (
 	KindRescore = "rescore"
 )
 
-const historyHeader = "| ts | kind | out | model | cases | defects | reported | recall | caught | recall caught | false positives | failed | invalid | no plan | cost USD | skill version | scorer | corpus | light | runs |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n"
+const historyHeader = "| ts | kind | out | model | cases | defects | reported | recall | caught | recall caught | false positives | failed | invalid | no plan | cost USD | skill version | scorer | corpus | light | runs | metrics version | unique defects | unique found | unique confirmed | unique caught | defect runs | controls | precision | pending | out of scope | inconclusive | unstable | agent config | environment |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n"
 
 // reported and caught count different things, so neither bounds the other.
-const historyIntro = "# Benchmark history\n\nOne row per `rdd-plus bench run`; never rewritten. A `rescore` row re-reads an earlier\nrun with newer scoring rules: it spends nothing, so summing the cost column over rescore\nrows would count the same money twice. `reported and caught are independent`: reported\ncounts defects written in the plan, caught counts defects some test distinguishes, and\neither can exceed the other.\n\nEvery row names the `scorer` build that produced its numbers. When the scoring rules change,\na later rescore of one source run supersedes an earlier one, and the scorer column is what\ntells the two apart; rows are never rewritten.\n\n"
+const historyIntro = "# Benchmark history\n\nOne row per `rdd-plus bench run`; never rewritten. A `rescore` row re-reads an earlier\nrun with newer scoring rules: it spends nothing, so summing the cost column over rescore\nrows would count the same money twice. `reported and caught are independent`: reported\ncounts defects written in the plan, caught counts defects some test distinguishes, and\neither can exceed the other.\n\nEvery row names the `scorer` build that produced its numbers. When the scoring rules change,\na later rescore of one source run supersedes an earlier one, and the scorer column is what\ntells the two apart; rows are never rewritten.\n\nA row written before the adjudicated metrics carries no `metrics version` column and is read as version 1, which is why `bench compare` refuses to compare it with a version 2 row.\n\nA row written before the agent-config column carries no agent-config mode and cannot be compared with one that does.\n\n"
 
 // AppendHistory adds one line to history.jsonl and one row to history.md under benchDir;
 // both files are append-only and never rewritten.
@@ -68,6 +82,10 @@ func AppendHistory(benchDir string, e HistoryEntry) error {
 	if e.Scorer == "" {
 		e.Scorer = buildinfo.Revision()
 	}
+	e.AgentConfig = configMode(e.AgentConfig)
+	if e.Environment == "" {
+		e.Environment = environment()
+	}
 	if e.Kind == KindRescore {
 		e.CostUSD = 0 // the run it re-reads already carries that cost
 	}
@@ -79,22 +97,8 @@ func AppendHistory(benchDir string, e HistoryEntry) error {
 		return err
 	}
 	md := filepath.Join(benchDir, "history.md")
-	existing, err := os.ReadFile(md)
-	if os.IsNotExist(err) {
-		if err := appendFile(md, []byte(historyIntro+historyHeader)); err != nil {
-			return err
-		}
-	} else if !strings.Contains(string(existing), historyHeader) {
-		// The columns changed: rows already written stay as they are under their own header. A row written
-		// before the activation column records no scoped run either way, so the fresh header says so
-		// rather than letting a missing field read as a zero.
-		note := "\n"
-		if !strings.Contains(string(existing), "| light |") {
-			note = "\nRows above this header predate the activation column and record no scoped run either way: they are non-activation measurements, not zero-activation ones.\n"
-		}
-		if err := appendFile(md, []byte(note+historyHeader)); err != nil {
-			return err
-		}
+	if err := ensureHistoryHeader(md, historyHeader); err != nil {
+		return err
 	}
 	ts, kind := e.TS, e.Kind
 	if e.Kind == KindRescore {
@@ -103,9 +107,52 @@ func AppendHistory(benchDir string, e HistoryEntry) error {
 		}
 		kind = "rescore of " + e.SourceRun
 	}
-	row := fmt.Sprintf("| %s | %s | %s | %s | %d | %d | %d | %.2f | %d | %.2f | %d | %d | %d | %d | %.3f | %s | %s | %s | %d | %d |\n",
-		ts, kind, e.Out, e.Model, e.Cases, e.Defects, e.Found, e.Recall, e.Caught, e.RecallCaught, e.FalsePositives, e.Failed, e.Invalid, e.NoPlan, e.CostUSD, e.SkillVersion, e.Scorer, e.Corpus, e.LightActivated, e.Runs)
-	return appendFile(md, []byte(row))
+	return appendFile(md, []byte(historyRow(e, ts, kind)))
+}
+
+// ensureHistoryHeader writes the current header when the file is new or still carries an older one.
+// Rows already written stay as they are under their own header; the note names which column a
+// reader will find missing above it, so an absent provenance field is never read as a measured one.
+func ensureHistoryHeader(md, header string) error {
+	existing, err := os.ReadFile(md)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return appendFile(md, []byte(historyIntro+header))
+		}
+		return err
+	}
+	if strings.Contains(string(existing), header) {
+		return nil
+	}
+	var notes []string
+	if !strings.Contains(string(existing), "| light |") {
+		notes = append(notes, "Rows above this header predate the activation column and record no scoped run either way: they are non-activation measurements, not zero-activation ones.")
+	}
+	if !strings.Contains(string(existing), "| agent config |") {
+		notes = append(notes, "Rows above this header predate the agent-config column and carry no agent-config mode, so they cannot be compared with rows that do.")
+	}
+	note := "\n"
+	if len(notes) > 0 {
+		note += strings.Join(notes, "\n") + "\n"
+	}
+	return appendFile(md, []byte(note+header))
+}
+
+func historyRow(e HistoryEntry, ts, kind string) string {
+	unstable := strings.Join(e.UnstableCases, ", ")
+	if unstable == "" {
+		unstable = "-"
+	}
+	return fmt.Sprintf("| %s | %s | %s | %s | %d | %d | %d | %.2f | %d | %.2f | %d | %d | %d | %d | %.3f | %s | %s | %s | %d | %d | %d | %d | %d | %d | %d | %d | %d | %s | %d | %d | %d | %s | %s | %s |\n",
+		ts, kind, e.Out, e.Model, e.Cases, e.Defects, e.Found, e.Recall, e.Caught, e.RecallCaught, e.FalsePositives, e.Failed, e.Invalid, e.NoPlan, e.CostUSD, e.SkillVersion, e.Scorer, e.Corpus, e.LightActivated, e.Runs,
+		e.MetricsVersion, e.UniqueDefects, e.UniqueFound, e.UniqueConfirmed, e.UniqueCaught, e.DefectRuns, e.Controls, historyPrecision(e.Precision), e.PendingAdjudication, e.OutOfScope, e.Inconclusive, unstable, e.AgentConfig, e.Environment)
+}
+
+func historyPrecision(precision *float64) string {
+	if precision == nil {
+		return "-"
+	}
+	return fmt.Sprintf("%.2f", *precision)
 }
 
 func appendFile(path string, data []byte) error {
