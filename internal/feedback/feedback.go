@@ -241,9 +241,11 @@ func Summary(configDir string) (string, error) {
 		fmt.Fprintf(&b, "  %s: %d\n", v, counts[v])
 	}
 
-	type split struct{ paid, partly, ceremony int }
+	type split struct{ paid, partly, ceremony, unknown int }
 	perSkill := map[string]*split{}
-	var skills []string
+	perProject := map[string]*split{}
+	var skills, projects []string
+	unknown := 0
 	for _, r := range reports {
 		s, ok := perSkill[r.Skill]
 		if !ok {
@@ -251,21 +253,51 @@ func Summary(configDir string) (string, error) {
 			perSkill[r.Skill] = s
 			skills = append(skills, r.Skill)
 		}
+		p, ok := perProject[r.Repo]
+		if !ok {
+			p = &split{}
+			perProject[r.Repo] = p
+			projects = append(projects, r.Repo)
+		}
 		switch r.Verdict {
 		case VerdictPaid:
 			s.paid++
+			p.paid++
 		case VerdictPartly:
 			s.partly++
+			p.partly++
 		case VerdictCeremony:
 			s.ceremony++
+			p.ceremony++
+		default:
+			s.unknown++
+			p.unknown++
+			unknown++
 		}
 	}
+	if unknown > 0 {
+		fmt.Fprintf(&b, "  unknown: %d\n", unknown)
+	}
+
+	writeSplit := func(name string, s *split) {
+		fmt.Fprintf(&b, "  %s: %d (paid %d, partly %d, ceremony %d",
+			name, s.paid+s.partly+s.ceremony+s.unknown, s.paid, s.partly, s.ceremony)
+		if s.unknown > 0 {
+			fmt.Fprintf(&b, ", unknown %d", s.unknown)
+		}
+		b.WriteString(")\n")
+	}
+
 	sort.Sort(sort.Reverse(sort.StringSlice(skills)))
 	b.WriteString("\nby skill version:\n")
 	for _, sk := range skills {
-		s := perSkill[sk]
-		fmt.Fprintf(&b, "  %s: %d (paid %d, partly %d, ceremony %d)\n",
-			sk, s.paid+s.partly+s.ceremony, s.paid, s.partly, s.ceremony)
+		writeSplit(sk, perSkill[sk])
+	}
+
+	sort.Sort(sort.Reverse(sort.StringSlice(projects)))
+	b.WriteString("\nby project:\n")
+	for _, project := range projects {
+		writeSplit(project, perProject[project])
 	}
 
 	b.WriteString("\nrecent guesses (newest first):\n")
