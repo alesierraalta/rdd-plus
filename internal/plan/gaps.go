@@ -218,16 +218,12 @@ func ownedRows(g *Gaps, table string, scan tableScan, iRun int, run string) ([]r
 		return nil, false
 	}
 	var owned []row
-	matched := false
 	for _, r := range scan.rows {
-		isMine, include := scopedRow(g, table, r, iRun, run)
-		if !include {
-			continue
+		if scopedRow(g, table, r, iRun, run) {
+			owned = append(owned, r)
 		}
-		matched = matched || isMine
-		owned = append(owned, r)
 	}
-	return owned, matched
+	return owned, len(owned) > 0
 }
 
 // layersGaps reads the Layer matrix: every row that is not n/a counts towards the sweep, a row marked done is
@@ -314,11 +310,12 @@ func missingRunColumn(table, run string) string {
 	return fmt.Sprintf("the %s table has no Run column, so its rows were not counted for run %q: run rdd-plus plan upgrade to add it", table, run)
 }
 
-// scopedRow decides whether one breadth row belongs to run. It returns include=false for blank or other-run
-// rows, and for a malformed cell after recording the diagnostic.
-func scopedRow(g *Gaps, table string, r row, iRun int, run string) (owned, include bool) {
+// scopedRow decides whether one breadth row belongs to run, counting the rows it excludes as it goes. A blank cell
+// belongs to no run (disclosed as unscoped), a malformed cell fails closed after recording the diagnostic, and a row
+// naming another run belongs to that run.
+func scopedRow(g *Gaps, table string, r row, iRun int, run string) bool {
 	if iRun < 0 {
-		return false, false
+		return false
 	}
 	raw := cell(r.cells, iRun)
 	if raw == "" {
@@ -327,16 +324,13 @@ func scopedRow(g *Gaps, table string, r row, iRun int, run string) (owned, inclu
 		} else {
 			g.UnscopedTargets++
 		}
-		return false, false
+		return false
 	}
 	if err := ValidateRun("Run", raw); err != nil {
 		g.RunProblems = append(g.RunProblems, fmt.Sprintf("line %d: the %s table Run cell %q is invalid: %v", r.line, table, raw, err))
-		return false, false
+		return false
 	}
-	if raw != run {
-		return false, false
-	}
-	return true, true
+	return raw == run
 }
 
 // unrecognizedStatus names a status cell the count could not place, with the line it was read from, its row,
