@@ -42,6 +42,27 @@ func TestScoreWorkspaceReportsWhetherAPlanExisted(t *testing.T) {
 	}
 }
 
+// A plan the guard refused is not read, so it cannot be copied beside the result either: the copy step
+// used to read the path the scorer had just declined to read, which put the refused file on disk.
+func TestFinishDoesNotCopyAPlanItRefused(t *testing.T) {
+	dir := t.TempDir()
+	ws := filepath.Join(dir, "ws")
+	outside := filepath.Join(t.TempDir(), "outside-plan.md")
+	if err := os.WriteFile(outside, []byte("# outside\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(ws, "docs/testing"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(ws, PlanPath)); err != nil {
+		t.Skip("symlinks not supported here")
+	}
+	finish(Result{Workspace: ws}, Options{}, true)
+	if _, err := os.Stat(filepath.Join(dir, "test-plan.md")); !os.IsNotExist(err) {
+		t.Fatalf("a refused plan was copied beside the result: %v", err)
+	}
+}
+
 // The plan is the run's deliverable; it survives the workspace so a later scorer can re-read it.
 func TestFinishKeepsThePlanWhenItRemovesTheWorkspace(t *testing.T) {
 	dir := t.TempDir()

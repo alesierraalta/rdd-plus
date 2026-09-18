@@ -617,11 +617,14 @@ func finish(res Result, opts Options, keepWS bool) Result {
 	// later — and the note is computed here, before the result is persisted, because one added afterwards is
 	// a note nobody reads.
 	// The copy keeps its name (test-plan.md) whatever the workspace declared, so rescore reads it
-	// unchanged. The refusal note, if any, was already added by ScoreWorkspace before this.
-	path, _ := resolvePlanPath(res.Workspace)
-	if data, err := os.ReadFile(filepath.Join(res.Workspace, path)); err == nil {
-		if err := os.WriteFile(filepath.Join(dir, "test-plan.md"), data, 0o644); err != nil {
-			res.Notes = append(res.Notes, "the plan could not be kept beside the result: "+err.Error())
+	// unchanged. The refusal note, if any, was already added by ScoreWorkspace before this, and a refused
+	// path is not read at all: copying it would put the file the guard refused beside the result.
+	path, resolution := resolvePlanPath(res.Workspace)
+	if !resolution.refused {
+		if data, err := os.ReadFile(filepath.Join(res.Workspace, path)); err == nil {
+			if err := os.WriteFile(filepath.Join(dir, "test-plan.md"), data, 0o644); err != nil {
+				res.Notes = append(res.Notes, "the plan could not be kept beside the result: "+err.Error())
+			}
 		}
 	}
 	if err := writeJSON(filepath.Join(dir, "result.json"), res); err != nil {
