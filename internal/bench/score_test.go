@@ -1,6 +1,7 @@
 package bench
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -177,6 +178,115 @@ func TestScoreWorkspaceReadsThePlanFile(t *testing.T) {
 	}
 	if r := ScoreWorkspace(ws, renderKey); r.Found != 1 || r.Recall != 1 {
 		t.Fatalf("got %+v", r)
+	}
+}
+
+// A run that delivers its plan at the path its .rdd-plus.json declares is scored from that path; a
+// declaration that escapes is refused with a note and the default path is read instead; and a
+// workspace with no plan anywhere keeps today's result and note.
+func TestScoreWorkspaceResolvesTheDeclaredPlanPath(t *testing.T) {
+	body := plan("| F1 | src/render.js:12 escape | M | yes | E1 | open | me | - | - |\n", "| E1 | c | cmd | i | o | m | r | observado |\n")
+	cases := []struct {
+		name      string
+		setup     func(t *testing.T, ws string)
+		wantFound bool
+		wantPath  string // PlanPath when a plan was found; "" means it must stay empty
+		wantNote  string // a substring one note must carry for a refused declaration
+	}{
+		{
+			name: "declared elsewhere",
+			setup: func(t *testing.T, ws string) {
+				declarePlan(t, ws, "docs/testing/test-plan-other.md")
+				writePlanAt(t, ws, "docs/testing/test-plan-other.md", body)
+			},
+			wantFound: true, wantPath: "docs/testing/test-plan-other.md",
+		},
+		{
+			name:      "no plan anywhere",
+			setup:     func(t *testing.T, ws string) {},
+			wantFound: false,
+		},
+		{
+			name: "a \"../\" declaration is refused",
+			setup: func(t *testing.T, ws string) {
+				declarePlan(t, ws, "../outside.md")
+				writePlan(t, ws, body)
+			},
+			wantFound: true, wantPath: PlanPath, wantNote: "escapes",
+		},
+		{
+			name: "an absolute declaration is refused",
+			setup: func(t *testing.T, ws string) {
+				declarePlan(t, ws, filepath.Join(ws, "outside.md"))
+				writePlan(t, ws, body)
+			},
+			wantFound: true, wantPath: PlanPath, wantNote: "absolute",
+		},
+	}
+	scorers := []struct {
+		name  string
+		score func(t *testing.T, ws string, key Key) Result
+	}{
+		{"ScoreWorkspace", func(_ *testing.T, ws string, key Key) Result { return ScoreWorkspace(ws, key) }},
+		{"ScoreWorkspaceWithAdjudication", func(t *testing.T, ws string, key Key) Result {
+			r, err := ScoreWorkspaceWithAdjudication(ws, key, nil)
+			if err != nil {
+				t.Fatalf("ScoreWorkspaceWithAdjudication: %v", err)
+			}
+			return r
+		}},
+	}
+	for _, sc := range scorers {
+		for _, tc := range cases {
+			t.Run(sc.name+"/"+tc.name, func(t *testing.T) {
+				ws := t.TempDir()
+				tc.setup(t, ws)
+				r := sc.score(t, ws, renderKey)
+				if r.PlanFound != tc.wantFound {
+					t.Fatalf("PlanFound = %v, want %v (%+v)", r.PlanFound, tc.wantFound, r)
+				}
+				if r.PlanPath != tc.wantPath {
+					t.Fatalf("PlanPath = %q, want %q", r.PlanPath, tc.wantPath)
+				}
+				if tc.wantFound && r.Found == 0 {
+					t.Fatalf("the plan that was read credited no defect: %+v", r)
+				}
+				joined := strings.Join(r.Notes, "\n")
+				if tc.wantNote != "" && !strings.Contains(joined, tc.wantNote) {
+					t.Fatalf("notes %v do not name the refusal (%q)", r.Notes, tc.wantNote)
+				}
+				if !tc.wantFound && !strings.Contains(joined, "no plan") {
+					t.Fatalf("notes %v lack the no-plan note", r.Notes)
+				}
+				if tc.wantFound && strings.Contains(joined, "no plan") {
+					t.Fatalf("a plan was read and still carries a no-plan note: %v", r.Notes)
+				}
+			})
+		}
+	}
+}
+
+// declarePlan writes the workspace's plan declaration.
+func declarePlan(t *testing.T, ws, declared string) {
+	t.Helper()
+	if err := os.MkdirAll(ws, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := fmt.Sprintf(`{"planPath":%q}`, declared)
+	if err := os.WriteFile(filepath.Join(ws, plancheck.ConfigName), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// writePlanAt writes a plan at a workspace-relative path.
+func writePlanAt(t *testing.T, ws, rel, content string) {
+	t.Helper()
+	p := filepath.Join(ws, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 

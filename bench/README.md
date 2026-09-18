@@ -84,7 +84,11 @@ identical every time. There is little to remove.
 ## Scoring
 
 The runner copies `fixture/` into a fresh workspace, runs the flow under evaluation there, and
-reads the `docs/testing/test-plan.md` it produced. For every key defect:
+reads the plan the workspace declares in `.rdd-plus.json`, or `docs/testing/test-plan.md` when it
+declares none. `result.json` records the path it read as `plan_path`. A declaration that cannot be
+read or that escapes the workspace is refused: the default path is read instead, and the refusal is
+named in the run's notes so a run is never silently scored as having delivered no plan. For every
+key defect:
 
 - **found** when a finding row, together with the Evidence ledger rows it cites, names the same
   file and either a line within ±5 of the key line or any of the key's keywords;
@@ -186,14 +190,16 @@ the run's notes, apart from tests that are simply red everywhere.
 `Pinning test` cell. It measures the claim, caught measures the outcome, and a run that pins more
 than it catches is naming tests that distinguish nothing.
 
-Every run keeps the plan it produced as `test-plan.md` beside its `result.json`, even when the
-workspace is removed, so older runs can be re-scored when the rule changes:
-`rdd-plus bench score --case bench/cases/<id> --plan <results>/<id>/<run>/test-plan.md`.
+Every run keeps the plan it produced as `test-plan.md` beside its `result.json`, whatever path the
+workspace declared, even when the workspace is removed, so older runs can be re-scored when the
+rule changes: `rdd-plus bench score --case bench/cases/<id> --plan <results>/<id>/<run>/test-plan.md`.
 
-A valid run that never wrote `docs/testing/test-plan.md` scores zero and is reported as
-`NO PLAN` (`no_plan` in the aggregate and the history): the flow ran and did not persist its
-deliverable, which is a different failure from missing the defect. Runs where the agent did not
-complete are `FAILED`, excluded from recall, and make the command exit 3.
+A valid run whose selected plan file is absent scores zero and is reported as `NO PLAN` (`no_plan` in the
+aggregate and the history): the flow ran and did not persist its deliverable at the path it promised,
+which is a different failure from missing the defect. The selected path is the one the workspace
+declares, else `docs/testing/test-plan.md`, so a run that declares a path, does not write it and leaves a
+plan at the default path also reads `NO PLAN` — the declaration is the run's promise. Runs where the agent
+did not complete are `FAILED`, excluded from recall, and make the command exit 3.
 
 ### Skill versions in the history
 
