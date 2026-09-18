@@ -199,8 +199,8 @@ func TestScoreWorkspaceOnADeclaredPathThatCannotBeReadAsAPlan(t *testing.T) {
 		t.Fatalf("PlanFound = %v, PlanPath = %q; an unread plan credits nothing", r.PlanFound, r.PlanPath)
 	}
 	want := `declared plan "docs/testing/plan-dir" exists but was not read as a plan`
-	if !strings.Contains(strings.Join(r.Notes, "\n"), want) {
-		t.Fatalf("notes %v do not say the path exists: %q", r.Notes, want)
+	if fmt.Sprint(r.Notes) != fmt.Sprint([]string{"no plan", want}) {
+		t.Fatalf("notes = %v, want exactly [no plan, %s]", r.Notes, want)
 	}
 	if _, err := ScoreWorkspaceWithAdjudication(ws, renderKey, nil); err == nil {
 		t.Fatalf("the adjudicated scorer no longer refuses an unreadable declared plan")
@@ -217,6 +217,7 @@ func TestScoreWorkspaceResolvesTheDeclaredPlanPath(t *testing.T) {
 		wantNotes      []string
 		wantExactNotes []string
 		wantNoteCount  int
+		wantNoNotes    bool
 	}{
 		{
 			name: "declared elsewhere",
@@ -224,7 +225,7 @@ func TestScoreWorkspaceResolvesTheDeclaredPlanPath(t *testing.T) {
 				declarePlan(t, ws, "docs/testing/test-plan-other.md")
 				writePlanAt(t, ws, "docs/testing/test-plan-other.md", body)
 			},
-			wantFound: true, wantPath: "docs/testing/test-plan-other.md",
+			wantFound: true, wantPath: "docs/testing/test-plan-other.md", wantNoNotes: true,
 		},
 		{
 			name: "declared plan absent, default plan present",
@@ -261,7 +262,8 @@ func TestScoreWorkspaceResolvesTheDeclaredPlanPath(t *testing.T) {
 				declarePlan(t, ws, "../escape.md")
 				writePlan(t, ws, body)
 			},
-			wantFound: true, wantPath: PlanPath, wantNotes: []string{"escapes"}, wantNoteCount: 1,
+			wantFound: true, wantPath: PlanPath, wantNoteCount: 1,
+			wantNotes: []string{"declared plan path refused", `escapes the worktree: "../escape.md"`},
 		},
 		{
 			name: "an absolute declaration is refused",
@@ -269,7 +271,8 @@ func TestScoreWorkspaceResolvesTheDeclaredPlanPath(t *testing.T) {
 				declarePlan(t, ws, filepath.Join(ws, "outside.md"))
 				writePlan(t, ws, body)
 			},
-			wantFound: true, wantPath: PlanPath, wantNotes: []string{"absolute"}, wantNoteCount: 1,
+			wantFound: true, wantPath: PlanPath, wantNoteCount: 1,
+			wantNotes: []string{"declared plan path refused", "must be repository-relative", "is absolute"},
 		},
 	}
 	scorers := []struct {
@@ -299,6 +302,9 @@ func TestScoreWorkspaceResolvesTheDeclaredPlanPath(t *testing.T) {
 				}
 				if tc.wantFound && r.Found == 0 {
 					t.Fatalf("the plan that was read credited no defect: %+v", r)
+				}
+				if tc.wantNoNotes && len(r.Notes) != 0 {
+					t.Fatalf("notes = %v, want none: a plan was read and nothing was overridden", r.Notes)
 				}
 				joined := strings.Join(r.Notes, "\n")
 				if tc.wantNoteCount > 0 && len(r.Notes) != tc.wantNoteCount {
