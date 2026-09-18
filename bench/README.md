@@ -198,8 +198,10 @@ A valid run whose selected plan file is absent scores zero and is reported as `N
 aggregate and the history): the flow ran and did not persist its deliverable at the path it promised,
 which is a different failure from missing the defect. The selected path is the one the workspace
 declares, else `docs/testing/test-plan.md`, so a run that declares a path, does not write it and leaves a
-plan at the default path also reads `NO PLAN` — the declaration is the run's promise. Runs where the agent
-did not complete are `FAILED`, excluded from recall, and make the command exit 3.
+plan at the default path also reads `NO PLAN` — the declaration is the run's promise. A declared-but-absent
+plan reports the declaration it honoured alongside the default plan it ignored, and a declared path that is
+there but was not read as a plan says so instead of claiming it is missing. Runs where the agent did not
+complete are `FAILED`, excluded from recall, and make the command exit 3.
 
 ### Skill versions in the history
 

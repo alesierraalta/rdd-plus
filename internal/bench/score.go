@@ -2,6 +2,7 @@ package bench
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -87,30 +88,69 @@ type citation struct {
 	last  int
 }
 
+type planPathResolution struct {
+	refusalNote  string
+	declared     bool
+	declaredPath string
+}
+
 // resolvePlanPath returns the workspace-relative plan a run delivered: the path its .rdd-plus.json
-// declares, else PlanPath. ResolvePath only ever returns a validated repository-relative path: an
+// declares, else PlanPath. DeclaredPath only ever returns a validated repository-relative path: an
 // absolute or escaping declaration is refused there, not returned. A refusal falls back to PlanPath
 // with a note naming it, so the run's record says why the declared plan was not the one read.
-func resolvePlanPath(ws string) (string, string) {
-	declared, err := plancheck.ResolvePath(ws, nil)
+func resolvePlanPath(ws string) (string, planPathResolution) {
+	declared, err := plancheck.DeclaredPath(ws, nil)
 	if err != nil {
-		return PlanPath, fmt.Sprintf("declared plan path refused (%v); read %s instead", err, PlanPath)
+		return PlanPath, planPathResolution{
+			refusalNote: fmt.Sprintf("declared plan path refused (%v); read %s instead", err, PlanPath),
+		}
 	}
-	return declared, ""
+	if declared == "" {
+		return PlanPath, planPathResolution{}
+	}
+	return declared, planPathResolution{declared: true, declaredPath: declared}
+}
+
+// noteMissingDeclaredPlan names the plan a declaration overrode when the declared path yielded no plan.
+// It distinguishes a path that is not there from one that is there and was not read as a plan, because a
+// note that says "was not found" about an existing file is a false statement in the run's record.
+func noteMissingDeclaredPlan(ws string, r Result, resolution planPathResolution) Result {
+	if r.PlanFound || !resolution.declared {
+		return r
+	}
+	declared := resolution.declaredPath
+	note := ""
+	switch {
+	case pathExists(filepath.Join(ws, declared)):
+		note = fmt.Sprintf("declared plan %q exists but was not read as a plan", declared)
+	case pathExists(filepath.Join(ws, PlanPath)):
+		note = fmt.Sprintf("declared plan %q was not found; default plan %q was not read", declared, PlanPath)
+	default:
+		note = fmt.Sprintf("declared plan %q was not found; default plan %q holds nothing either", declared, PlanPath)
+	}
+	r.Notes = append(r.Notes, note)
+	return r
+}
+
+// pathExists reports whether the path is there, whatever it is: absent and unreadable are different
+// answers, and only the caller knows which one the note should carry.
+func pathExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // ScoreWorkspace scores the plan a workspace delivered: the path it declares, else PlanPath. A
 // missing plan scores zero.
 func ScoreWorkspace(ws string, key Key) Result {
-	path, note := resolvePlanPath(ws)
+	path, resolution := resolvePlanPath(ws)
 	r := ScorePlanFile(filepath.Join(ws, path), key)
-	if note != "" {
-		r.Notes = append(r.Notes, note)
+	if resolution.refusalNote != "" {
+		r.Notes = append(r.Notes, resolution.refusalNote)
 	}
 	if r.PlanFound {
 		r.PlanPath = path
 	}
-	return r
+	return noteMissingDeclaredPlan(ws, r, resolution)
 }
 
 // ScorePlanFile scores one plan file, such as the copy a run keeps next to its result.json.
