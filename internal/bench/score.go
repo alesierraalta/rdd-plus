@@ -62,7 +62,8 @@ type Result struct {
 	Suite                SuiteResult    `json:"suite"`
 	Workspace            string         `json:"workspace,omitempty"`
 	PlanFound            bool           `json:"plan_found"`
-	PlanFormat           string         `json:"plan_format"` // FormatTable, FormatProse or FormatEmpty
+	PlanPath             string         `json:"plan_path,omitempty"` // workspace-relative path read, set only when a plan was found
+	PlanFormat           string         `json:"plan_format"`         // FormatTable, FormatProse or FormatEmpty
 	// LightActivated records that the run declared a scoped run its own plan validates. It is the only
 	// durable answer to "did the mode run?": a defect found, a well-formed ordinary plan, or a line that
 	// merely looks like a declaration leaves it false.
@@ -86,9 +87,30 @@ type citation struct {
 	last  int
 }
 
-// ScoreWorkspace reads the plan from a workspace and scores it; a missing plan scores zero.
+// resolvePlanPath returns the workspace-relative plan a run delivered: the path its .rdd-plus.json
+// declares, else PlanPath. ResolvePath only ever returns a validated repository-relative path: an
+// absolute or escaping declaration is refused there, not returned. A refusal falls back to PlanPath
+// with a note naming it, so the run's record says why the declared plan was not the one read.
+func resolvePlanPath(ws string) (string, string) {
+	declared, err := plancheck.ResolvePath(ws, nil)
+	if err != nil {
+		return PlanPath, fmt.Sprintf("declared plan path refused (%v); read %s instead", err, PlanPath)
+	}
+	return declared, ""
+}
+
+// ScoreWorkspace scores the plan a workspace delivered: the path it declares, else PlanPath. A
+// missing plan scores zero.
 func ScoreWorkspace(ws string, key Key) Result {
-	return ScorePlanFile(filepath.Join(ws, PlanPath), key)
+	path, note := resolvePlanPath(ws)
+	r := ScorePlanFile(filepath.Join(ws, path), key)
+	if note != "" {
+		r.Notes = append(r.Notes, note)
+	}
+	if r.PlanFound {
+		r.PlanPath = path
+	}
+	return r
 }
 
 // ScorePlanFile scores one plan file, such as the copy a run keeps next to its result.json.

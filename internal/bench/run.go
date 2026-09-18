@@ -111,7 +111,7 @@ type Aggregate struct {
 	CostUSD        float64  `json:"cost_usd"`
 	Invalid        int      `json:"invalid"`
 	Failed         int      `json:"failed"`  // agent did not run to completion; excluded from recall
-	NoPlan         int      `json:"no_plan"` // valid runs that never wrote docs/testing/test-plan.md; scored zero
+	NoPlan         int      `json:"no_plan"` // valid runs whose selected plan file is absent; scored zero
 	// LightActivated counts the valid runs whose own plan declares a validated scoped run: the reading's
 	// answer to "did the mode run?", next to what it cost and what it caught.
 	LightActivated int    `json:"light_activated"`
@@ -616,7 +616,10 @@ func finish(res Result, opts Options, keepWS bool) Result {
 	// that fails is a note on the case, not a failure — the case was scored, what is lost is rescoring it
 	// later — and the note is computed here, before the result is persisted, because one added afterwards is
 	// a note nobody reads.
-	if data, err := os.ReadFile(filepath.Join(res.Workspace, PlanPath)); err == nil {
+	// The copy keeps its name (test-plan.md) whatever the workspace declared, so rescore reads it
+	// unchanged. The refusal note, if any, was already added by ScoreWorkspace before this.
+	path, _ := resolvePlanPath(res.Workspace)
+	if data, err := os.ReadFile(filepath.Join(res.Workspace, path)); err == nil {
 		if err := os.WriteFile(filepath.Join(dir, "test-plan.md"), data, 0o644); err != nil {
 			res.Notes = append(res.Notes, "the plan could not be kept beside the result: "+err.Error())
 		}

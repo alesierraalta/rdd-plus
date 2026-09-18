@@ -63,6 +63,25 @@ func TestFinishKeepsThePlanWhenItRemovesTheWorkspace(t *testing.T) {
 	}
 }
 
+// A plan kept from a workspace that declared another path still lands under the name rescore reads.
+func TestFinishKeepsADeclaredPlanUnderTheKeptName(t *testing.T) {
+	dir := t.TempDir()
+	ws := filepath.Join(dir, "ws")
+	declarePlan(t, ws, "docs/testing/test-plan-other.md")
+	writePlanAt(t, ws, "docs/testing/test-plan-other.md", "# declared plan\n")
+	res := finish(Result{Workspace: ws}, Options{}, false)
+	if res.Workspace != "" {
+		t.Fatalf("workspace kept: %q", res.Workspace)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "test-plan.md"))
+	if err != nil || string(got) != "# declared plan\n" {
+		t.Fatalf("kept plan = %q, %v", got, err)
+	}
+	if r := ScorePlanFile(filepath.Join(dir, "test-plan.md"), Key{ID: "c"}); !r.PlanFound {
+		t.Fatal("the kept copy is not scorable")
+	}
+}
+
 // Activation is the run's own validated declaration, read from the plan the run left behind. A defect
 // it found, a well-formed ordinary plan, or a line that merely looks like a declaration is not
 // activation — this is the signal that separates "the mode ran" from "the mode never ran".
