@@ -44,3 +44,38 @@ tests skipped, which is exactly the gap this tool exists for, and from the low c
 **Conclusion**: keep using it on changes of this kind. It is not yet at "I would not merge without it",
 because both findings were limited and pre-existing; the check that decided this task's readiness
 remains the focused suite plus the real-workspace before/after.
+
+---
+
+## 2026-09-18 — #106, name the declaration a missing plan overrode
+
+**Task**: make a declared-but-absent plan report the declaration it honoured and the default plan it ignored,
+on a real branch, before its PR. Same function as the previous entry's fix.
+
+**Tool used**: Yes — `breakcheck`, five probes on the working tree.
+
+**Findings**
+
+| Finding | Verdict | What happened |
+|---|---|---|
+| F-106-1: the new note said `was not found` about a declared path that **exists** (an unreadable file, or a directory) | **TRUE POSITIVE — material, introduced by this change** | Fixed in this PR: the note now distinguishes an absent path from one that exists and was not read, and a test pins it. **The tool found a defect in the code under review, not in code that already shipped.** |
+| F-106-2: the plain scorer treats an unreadable plan as absent while the adjudicated scorer refuses, because `ScorePlanFile` discards the read error | **USEFUL (limited)** | Pre-existing and outside the change's blast radius; recorded with its reproducer, candidate for a follow-up issue. |
+
+**True positives**: 1 of them material and caused by this change; 1 limited and pre-existing.
+**False positives**: 0.
+**Missed issues**: none known; the writer's tests had covered absent files only, and this campaign covered the
+case they skipped — the same shape of gap as the previous entry, which is now twice in a row.
+**Changes made because of the tool**: the note logic was corrected and a test added, i.e. **the code shipped
+is different, and truer, because the campaign ran**. This is the first entry where the tool changed behaviour
+rather than documentation.
+**Previously run by me**: focused suite, build, gofmt, and a review of the diff — none of which covered an
+existing-but-unreadable declared path.
+
+**Main friction**: none new. Copy, probe file, run: three commands, no configuration, no model spend. The
+probe that found the defect took one `chmod` line to write.
+
+**Conclusion**: this is the first time the tool earned its place on its own: it found a defect in the change
+being reviewed, at a cost of minutes, and the fix is pinned by a test. Still not "no merge without it" — one
+material finding in two tasks is a real signal, but the sample is two. Worth watching whether the next tasks
+repeat the pattern, and worth noting what made it work: the campaign attacked the **new** logic, not the code
+around it.

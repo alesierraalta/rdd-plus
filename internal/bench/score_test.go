@@ -184,14 +184,39 @@ func TestScoreWorkspaceReadsThePlanFile(t *testing.T) {
 // A run that delivers its plan at the path its .rdd-plus.json declares is scored from that path; a
 // declaration that escapes is refused with a note and the default path is read instead; and a
 // workspace with no plan anywhere keeps today's result and note.
+// A declared path that exists but cannot be read as a plan is not a missing plan, and the run's record must
+// not say it is. The two scorers differ today: the plain one treats the read failure as an absent plan and
+// says the path exists instead, while the adjudicated one refuses and hands the error back. Pinning both
+// keeps the difference visible rather than letting either claim the path was not found.
+func TestScoreWorkspaceOnADeclaredPathThatCannotBeReadAsAPlan(t *testing.T) {
+	ws := t.TempDir()
+	declarePlan(t, ws, "docs/testing/plan-dir")
+	if err := os.MkdirAll(filepath.Join(ws, "docs/testing/plan-dir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r := ScoreWorkspace(ws, renderKey)
+	if r.PlanFound || r.PlanPath != "" {
+		t.Fatalf("PlanFound = %v, PlanPath = %q; an unread plan credits nothing", r.PlanFound, r.PlanPath)
+	}
+	want := `declared plan "docs/testing/plan-dir" exists but was not read as a plan`
+	if !strings.Contains(strings.Join(r.Notes, "\n"), want) {
+		t.Fatalf("notes %v do not say the path exists: %q", r.Notes, want)
+	}
+	if _, err := ScoreWorkspaceWithAdjudication(ws, renderKey, nil); err == nil {
+		t.Fatalf("the adjudicated scorer no longer refuses an unreadable declared plan")
+	}
+}
+
 func TestScoreWorkspaceResolvesTheDeclaredPlanPath(t *testing.T) {
 	body := plan("| F1 | src/render.js:12 escape | M | yes | E1 | open | me | - | - |\n", "| E1 | c | cmd | i | o | m | r | observado |\n")
 	cases := []struct {
-		name      string
-		setup     func(t *testing.T, ws string)
-		wantFound bool
-		wantPath  string // PlanPath when a plan was found; "" means it must stay empty
-		wantNote  string // a substring one note must carry for a refused declaration
+		name           string
+		setup          func(t *testing.T, ws string)
+		wantFound      bool
+		wantPath       string // PlanPath when a plan was found; "" means it must stay empty
+		wantNotes      []string
+		wantExactNotes []string
+		wantNoteCount  int
 	}{
 		{
 			name: "declared elsewhere",
@@ -202,17 +227,41 @@ func TestScoreWorkspaceResolvesTheDeclaredPlanPath(t *testing.T) {
 			wantFound: true, wantPath: "docs/testing/test-plan-other.md",
 		},
 		{
-			name:      "no plan anywhere",
-			setup:     func(t *testing.T, ws string) {},
+			name: "declared plan absent, default plan present",
+			setup: func(t *testing.T, ws string) {
+				declarePlan(t, ws, "docs/testing/test-plan-other.md")
+				writePlan(t, ws, body)
+			},
 			wantFound: false,
+			wantExactNotes: []string{
+				"no plan",
+				`declared plan "docs/testing/test-plan-other.md" was not found; default plan "docs/testing/test-plan.md" was not read`,
+			},
+		},
+		{
+			name: "declared plan absent, default plan absent",
+			setup: func(t *testing.T, ws string) {
+				declarePlan(t, ws, "docs/testing/test-plan-other.md")
+			},
+			wantFound: false,
+			wantExactNotes: []string{
+				"no plan",
+				`declared plan "docs/testing/test-plan-other.md" was not found; default plan "docs/testing/test-plan.md" holds nothing either`,
+			},
+		},
+		{
+			name:           "no plan anywhere",
+			setup:          func(t *testing.T, ws string) {},
+			wantFound:      false,
+			wantExactNotes: []string{"no plan"},
 		},
 		{
 			name: "a \"../\" declaration is refused",
 			setup: func(t *testing.T, ws string) {
-				declarePlan(t, ws, "../outside.md")
+				declarePlan(t, ws, "../escape.md")
 				writePlan(t, ws, body)
 			},
-			wantFound: true, wantPath: PlanPath, wantNote: "escapes",
+			wantFound: true, wantPath: PlanPath, wantNotes: []string{"escapes"}, wantNoteCount: 1,
 		},
 		{
 			name: "an absolute declaration is refused",
@@ -220,7 +269,7 @@ func TestScoreWorkspaceResolvesTheDeclaredPlanPath(t *testing.T) {
 				declarePlan(t, ws, filepath.Join(ws, "outside.md"))
 				writePlan(t, ws, body)
 			},
-			wantFound: true, wantPath: PlanPath, wantNote: "absolute",
+			wantFound: true, wantPath: PlanPath, wantNotes: []string{"absolute"}, wantNoteCount: 1,
 		},
 	}
 	scorers := []struct {
@@ -252,8 +301,16 @@ func TestScoreWorkspaceResolvesTheDeclaredPlanPath(t *testing.T) {
 					t.Fatalf("the plan that was read credited no defect: %+v", r)
 				}
 				joined := strings.Join(r.Notes, "\n")
-				if tc.wantNote != "" && !strings.Contains(joined, tc.wantNote) {
-					t.Fatalf("notes %v do not name the refusal (%q)", r.Notes, tc.wantNote)
+				if tc.wantNoteCount > 0 && len(r.Notes) != tc.wantNoteCount {
+					t.Fatalf("notes = %v, want %d note(s)", r.Notes, tc.wantNoteCount)
+				}
+				for _, want := range tc.wantNotes {
+					if !strings.Contains(joined, want) {
+						t.Fatalf("notes %v do not contain %q", r.Notes, want)
+					}
+				}
+				if tc.wantExactNotes != nil && fmt.Sprint(r.Notes) != fmt.Sprint(tc.wantExactNotes) {
+					t.Fatalf("notes = %v, want %v", r.Notes, tc.wantExactNotes)
 				}
 				if !tc.wantFound && !strings.Contains(joined, "no plan") {
 					t.Fatalf("notes %v lack the no-plan note", r.Notes)

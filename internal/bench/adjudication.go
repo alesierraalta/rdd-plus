@@ -203,15 +203,15 @@ func ScorePlanFileWithAdjudication(path string, key Key, adj *Adjudication) (Res
 // ScoreWorkspaceWithAdjudication scores the plan a workspace delivered — the path it declares, else
 // PlanPath — and applies a record to it.
 func ScoreWorkspaceWithAdjudication(ws string, key Key, adj *Adjudication) (Result, error) {
-	path, note := resolvePlanPath(ws)
+	path, resolution := resolvePlanPath(ws)
 	r, err := ScorePlanFileWithAdjudication(filepath.Join(ws, path), key, adj)
-	if note != "" {
-		r.Notes = append(r.Notes, note)
+	if resolution.refusalNote != "" {
+		r.Notes = append(r.Notes, resolution.refusalNote)
 	}
 	if r.PlanFound {
 		r.PlanPath = path
 	}
-	return r, err
+	return noteMissingDeclaredPlan(ws, r, resolution), err
 }
 
 // ApplyAdjudication applies decisions only after their case, row text, and keyed defect references are verified.
