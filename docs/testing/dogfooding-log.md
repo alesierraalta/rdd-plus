@@ -156,3 +156,15 @@ noticing that a verified revision had not reached the commit.
 
 **Conclusion**: keep running it, and keep the expectation honest. Two material findings in four tasks, and one
 task where the tool found nothing while a broken `master` sat behind a green worktree.
+
+**Closed after the merge.** PR #111 landed as `970fc23` and the merged result was verified in a clean copy:
+`internal/bench` and `internal/plan` pass, all sixteen refusal subtests that were red now pass, and the build is
+clean. The loop #107 left open is closed.
+
+**Two process rules this arc produced**, both from failures of mine rather than of the tool:
+
+1. **Verification covers a revision, not a commit.** Freezing hashes on a worktree proves nothing about what
+   ships if the commit is assembled by hand: #107's guard sat verified-but-uncommitted while `master` went red.
+   After committing, compare each committed blob against the frozen hashes (`git show HEAD:<path> | sha256sum`).
+2. **A merge is not verified by the worktree it came from.** Run the suite on the merged result — a clean copy of
+   `origin/master` after the merge — or a red `master` stays red behind a green branch.
