@@ -168,3 +168,34 @@ clean. The loop #107 left open is closed.
    After committing, compare each committed blob against the frozen hashes (`git show HEAD:<path> | sha256sum`).
 2. **A merge is not verified by the worktree it came from.** Run the suite on the merged result — a clean copy of
    `origin/master` after the merge — or a red `master` stays red behind a green branch.
+
+---
+
+## 2026-09-18 — CI: make those two rules mechanical
+
+**Task**: add the workflow that runs the suite on the pushed commit, so rule 2 stops depending on my memory.
+
+**Tool used**: Yes — `breakcheck`, five probes on the workflow, the Makefile and the README.
+
+**Findings**
+
+| Finding | Verdict | What happened |
+|---|---|---|
+| — | **NONE against the candidate** | The probes checked the claims instead of the file: the command set fails at the commit that broke `master` (exit 1), the `gofmt` step fails on an unformatted tree, the triggers are what they say, and the YAML parses. |
+| `make vet` printed unformatted files and exited 0 | **USEFUL (pre-existing)** | Found while probing the new `gofmt` step: the local lint a developer runs reported the problem and still succeeded. The Makefile in this change makes it fail. |
+| Without `node`, the JavaScript half of the suite **skips and the run reports PASS, exit 0** | **USEFUL (design decision made measurable)** | Probe P3 on a compiled test binary with `node` removed from `PATH`. This is why the workflow installs node: otherwise CI would be green over a suite that quietly verified less. |
+
+**True positives**: 0 in the new file; 2 real facts about the repository that the probes turned up.
+**False positives**: 0.
+**Missed issues**: unknown at campaign time. The honest framing: most of this task's value came from probes that the
+campaign prescribes and that I ran as part of it — the difference between "the workflow exists" and "the workflow
+would have caught the failure that motivated it".
+**Changes made because of the tool**: the node step and its comment exist because a probe measured the skip, not
+because the README says node is optional.
+**Previously run by me**: the full suite in a clean copy of `master` (13 packages, 69s) to define what CI should run.
+
+**Main friction**: none. Every probe was a shell command in a throwaway copy.
+
+**Conclusion**: the campaign found no defect in the artifact and two facts about the repository it lives in, which
+is the useful shape of a "clean" result: the file passed, and what the file depends on got measured instead of
+assumed.

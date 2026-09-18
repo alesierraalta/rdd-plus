@@ -83,6 +83,10 @@ Integration tests build the CLI once and drive it with real repositories in temp
 directories; they are skipped under `-short`. The differential test compares the Go gate with the
 original Node hook when `node` and `~/.claude/hooks/testing-gate.mjs` are present.
 
+CI runs that suite on every pull request and on every push to `master`, with `node` installed so the
+benchmark's JavaScript cases run instead of skipping. It checks `gofmt`, `go vet`, the build and
+`go test ./... -count=1` — the same commands `make vet`, `make build` and `make test` run locally.
+
 ## Pending
 
 - The eval harness (`assets/skills/test-strategy/evals/run_evals.py`, `selftest.py`) and the
