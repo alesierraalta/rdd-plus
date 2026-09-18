@@ -68,3 +68,39 @@ from it reaches `master`.
    per case and a threshold declared before the run, instead of diluting ten light units inside
    fifty noisy ones.
 3. Do not re-propose the same shape change until (1) is answered.
+
+---
+
+## 2026-09-18 — correction: the "no plan" finding was a blind spot of the instrument
+
+Forensics on the two runs recorded above as producing no plan, made after that entry was published.
+Both kept their workspace, and **both contain a plan**:
+
+```
+n01-csv-rfc4180/2        docs/testing/test-plan.csv-line.md      (8 867 bytes)   + .rdd-plus.json
+ g01-inventory-reserve/2  docs/testing/test-plan-inventory.md     (7 446 bytes)   + .rdd-plus.json
+```
+
+Each declared its path in `.rdd-plus.json` at the workspace root — the scoped-plan route the skill's
+rule 12 teaches, and the one `plan check`, the Stop gate and `check` all honour. Both runs also called
+`plan admit --execute --record`. The benchmark, however, scores only the fixed path
+(`filepath.Join(workspace, PlanPath)`, `internal/bench/adjudication.go:205`), and `bench/README.md:193`
+documents exactly that: a run which does not write `docs/testing/test-plan.md` scores zero.
+
+So `no plan` here means *not at the path the scorer reads*, not *the agent delivered nothing*, and it is
+a property of the instrument rather than of the skill version under test.
+
+**What this changes.**
+
+- The rejection stands, but not for the reason first recorded. Removing the two runs from the argument
+  leaves the light-subset caught rate (13/15 → 7/15 over ten runs), overall cost ($2.149 → $2.206),
+  overall turns (1731 → 1791), and a precision that stays unadjudicated on both sides.
+- The bound is narrow: those two units hold two defects each, so reading their plans could add at most
+  four reported defect-runs — `found` would move from 78/91 toward 82/91 at best, against a baseline of
+  86/93 (90.1% versus 92.5%). The catch rate is unaffected, because it comes from the tests and not from
+  the plan (`caught` 65/91). The decision is therefore best read as **not adopted with weak evidence**,
+  and the retry criterion below matters more than the rejection itself.
+- Original follow-up 1 is answered, not pending.
+- New follow-up: until the benchmark's blind spot is resolved, any comparison involving plan shape must
+  state whether a run used the declared-plan route, because a legitimate scoped plan and a missing plan
+  are indistinguishable to the scorer today.
