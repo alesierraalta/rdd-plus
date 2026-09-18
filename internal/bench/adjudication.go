@@ -13,6 +13,9 @@ import (
 )
 
 const (
+	// planReadFailureNotePrefix identifies a selected plan path that exists but could not be read.
+	planReadFailureNotePrefix = "plan read failure: "
+
 	// VerdictDefect records that a finding row genuinely reports a keyed defect.
 	VerdictDefect = "defect"
 	// VerdictFalsePositive records that a finding row claims a defect that is not there.
@@ -191,6 +194,7 @@ func ScorePlanFileWithAdjudication(path string, key Key, adj *Adjudication) (Res
 		r := Score("", key)
 		r.Notes = append(r.Notes, "no plan")
 		if !errors.Is(err, os.ErrNotExist) {
+			r.Notes = append(r.Notes, planReadFailureNotePrefix+err.Error())
 			return r, fmt.Errorf("read plan: %w", err)
 		}
 		return r, nil
@@ -204,6 +208,9 @@ func ScorePlanFileWithAdjudication(path string, key Key, adj *Adjudication) (Res
 // PlanPath — and applies a record to it.
 func ScoreWorkspaceWithAdjudication(ws string, key Key, adj *Adjudication) (Result, error) {
 	path, resolution := resolvePlanPath(ws)
+	if resolution.refused {
+		return scoreRefusedPlan(key, resolution), nil
+	}
 	r, err := ScorePlanFileWithAdjudication(filepath.Join(ws, path), key, adj)
 	if resolution.refusalNote != "" {
 		r.Notes = append(r.Notes, resolution.refusalNote)
