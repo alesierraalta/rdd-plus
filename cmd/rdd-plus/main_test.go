@@ -415,6 +415,59 @@ func asExit(err error, target *exec.ExitError) bool {
 	return ok
 }
 
+func TestDefaultConfigDirUsesRunnerEnvironment(t *testing.T) {
+	home := t.TempDir()
+	tests := []struct {
+		name   string
+		claude string
+		pi     string
+		want   string
+	}{
+		{
+			name:   "CLAUDE_CONFIG_DIR wins and is trimmed",
+			claude: "  " + filepath.Join(home, "claude") + "  ",
+			pi:     filepath.Join(home, "pi"),
+			want:   filepath.Join(home, "claude"),
+		},
+		{
+			name:   "only CLAUDE_CONFIG_DIR",
+			claude: filepath.Join(home, "claude"),
+			want:   filepath.Join(home, "claude"),
+		},
+		{
+			name: "only PI_CODING_AGENT_DIR and trimmed",
+			pi:   "  " + filepath.Join(home, "pi") + "  ",
+			want: filepath.Join(home, "pi"),
+		},
+		{
+			name:   "empty CLAUDE_CONFIG_DIR uses PI_CODING_AGENT_DIR",
+			claude: " \t ",
+			pi:     filepath.Join(home, "pi"),
+			want:   filepath.Join(home, "pi"),
+		},
+		{
+			name: "neither uses HOME",
+			want: filepath.Join(home, ".claude"),
+		},
+		{
+			name:   "empty values use HOME",
+			claude: " \t ",
+			pi:     "\n",
+			want:   filepath.Join(home, ".claude"),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("HOME", home)
+			t.Setenv("CLAUDE_CONFIG_DIR", tt.claude)
+			t.Setenv("PI_CODING_AGENT_DIR", tt.pi)
+			if got := defaultConfigDir(); got != tt.want {
+				t.Fatalf("defaultConfigDir() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 // The feedback command is the destination the gate's offer always lacked: --template prints a
 // skeleton, --file records it, and no flags reads the reports back.
 func TestFeedbackCLI(t *testing.T) {
@@ -444,7 +497,7 @@ func TestFeedbackCLI(t *testing.T) {
 	body := "ts: 2026-09-10T12:00:00Z\n" +
 		"repo: " + dir + "\n" +
 		"plan: docs/testing/test-plan.md\n" +
-		"skill: 0.3.6\n" +
+		"skill: test-strategy 0.3.10\n" +
 		"build: test\n" +
 		"paid: it found the defect\n" +
 		"cost: one hour\n" +

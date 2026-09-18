@@ -4,7 +4,7 @@ description: "Trigger: breakcheck, romper esto, intenta romperlo, testing advers
 license: Apache-2.0
 metadata:
   author: "alesierraalta"
-  version: "0.1.0"
+  version: "0.1.1"
   requires_rdd_plus: "0.3.8"
   scope: [common]
   auto_invoke: "Explicit invocation to break a change before RDD: bounded adversarial probes and a readiness disposition"
@@ -72,7 +72,7 @@ Load only on explicit invocation ("breakcheck", "romper esto", or "testing adver
 
 ## Beta feedback obligation
 
-After finishing, including blocked or partial runs, record the retrospective in the existing ledger and keep it out of chat. Generate the existing template, fill only `ts`, `repo`, `plan`, `skill`, `build`, `paid`, `cost`, `reason`, and `verdict` (`paid`, `partly`, or `ceremony`), with optional `guess` and `freeform`; the parser rejects unknown keys. Acknowledge briefly only after submit succeeds; disclose storage failure and do not claim feedback was recorded.
+After finishing, including blocked or partial runs, record the retrospective in the existing ledger and keep it out of chat. Generate the existing template, fill only `ts`, `repo`, `plan`, `skill`, `build`, `paid`, `cost`, `reason`, and `verdict` (`paid`, `partly`, or `ceremony`), with optional `guess` and `freeform`; the parser rejects unknown keys. Set `skill` to what actually ran as `<name>` or `<name> <version>`; a breakcheck run records `breakcheck <its version>`, not the template's embedded test-strategy default. Acknowledge briefly only after submit succeeds; disclose storage failure and do not claim feedback was recorded.
 
 ```sh
 feedback_file="$(mktemp)"   # scratch path, outside the repository

@@ -199,3 +199,39 @@ because the README says node is optional.
 **Conclusion**: the campaign found no defect in the artifact and two facts about the repository it lives in, which
 is the useful shape of a "clean" result: the file passed, and what the file depends on got measured instead of
 assumed.
+
+---
+
+## 2026-09-18 — feedback record fidelity: where it lands, and what it says ran
+
+**Task**: act on the review of the 178 accumulated retrospectives (that count was the ledger's size when the review ran) — a benchmark run's feedback no longer lands
+in the operator's ledger, and the `skill` field stops carrying eight incompatible shapes.
+
+**Tool used**: Yes — `breakcheck`, six probes on the change.
+
+**Findings**
+
+| Finding | Verdict | What happened |
+|---|---|---|
+| F-114-1: an operator running under Pi with `PI_CODING_AGENT_DIR` set now reads a different ledger; a history under `~/.claude` looks empty | **USEFUL (limited)** | Accepted with documentation: the README now states the resolution order and that a ledger elsewhere is reached with `--config-dir`. Fixing it in code would mean guessing which ledger the operator meant. |
+| F-114-2: the shape is enforced on the CLI write path only — `feedback.Record()` still stores whatever a Go caller passes | **LOW VALUE** | Recorded, not chased: the CLI is the only production writer and `Record` is the internal API the tests use. |
+| The README's own example named `breakcheck 0.1.0` while this change bumps the skill to `0.1.1` | **USEFUL (low)** | Fixed in this PR: the example now says `<its version>`, so the next bump cannot falsify it again. |
+
+**True positives**: two limited and one low, all recorded; the load-bearing claim was confirmed rather than
+repaired.
+**False positives**: 0.
+**Missed issues**: unknown at campaign time — the verifier's question, not this campaign's.
+**Changes made because of the tool**: the stale example, and the sentence that tells an operator how to reach a
+ledger living under another directory.
+**Previously run by me**: the focused suite (`feedback`, `cmd`, `bench`, `assets`), build, gofmt, vet, and a
+review of the diff.
+
+**Main friction**: none from the tool. Two probes had to be rerun because I wrote them wrong — I submitted an
+unfilled template, and my accept/refuse comparison printed ❌ for four probes that had behaved correctly. That is
+my friction, not the tool's, and it is the kind of thing this log exists to keep visible: a probe's own bug looks
+exactly like a finding until it is checked.
+
+**Conclusion**: the probes here are cheap and the load-bearing one is end-to-end (the operator's ledger stays at
+the operator's ledger gained no rows while the isolated one gained the record (178 rows at that moment, 179 when the verifier reproduced it), which is what a hygiene change needs. Worth noting what the
+campaign did **not** do: it did not migrate the 137 rows already written, because rewriting an append-only ledger
+to look tidy contradicts what it is for.

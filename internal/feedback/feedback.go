@@ -68,6 +68,9 @@ var knownKeys = map[string]bool{
 // keyLine matches `key: value`; a line that does not match continues the previous value.
 var keyLine = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_-]*):[ \t]?(.*)$`)
 
+// skillShape accepts a lowercase skill name with an optional dotted numeric version.
+var skillShape = regexp.MustCompile(`^[a-z][a-z0-9-]*(?: [0-9]+(?:\.[0-9]+)+)?$`)
+
 // Parse reads the `key: value` template shape: a value runs to the next key, blank lines and
 // comment lines are ignored, and an unknown key or an empty required field is a refusal.
 func Parse(text string) (Report, error) {
@@ -111,6 +114,9 @@ func Parse(text string) (Report, error) {
 		if val(req) == "" {
 			return Report{}, fmt.Errorf("missing required field: %s", req)
 		}
+	}
+	if !skillShape.MatchString(r.Skill) {
+		return Report{}, fmt.Errorf("skill %q must match <name> or <name> <version> (lowercase name, optional dotted numeric version)", r.Skill)
 	}
 	if !isVerdict(r.Verdict) {
 		return Report{}, fmt.Errorf("verdict %q must be one of: %s", r.Verdict, strings.Join(Verdicts, ", "))
@@ -337,19 +343,27 @@ func gitAt(dir string, args ...string) (string, error) {
 	return string(out), err
 }
 
+var skillName = regexp.MustCompile(`(?m)^\s*name:\s*"?([^"\n]+?)"?\s*$`)
 var skillVersion = regexp.MustCompile(`(?m)^\s*version:\s*"?([^"\n]+?)"?\s*$`)
 
-// EmbeddedSkillVersion reads the version of the embedded test-strategy skill, so a report records
+// EmbeddedSkillIdentity reads the identity of the embedded test-strategy skill, so a report records
 // the skill that produced it and not merely the binary that wrote the row.
-func EmbeddedSkillVersion() string {
+func EmbeddedSkillIdentity() string {
 	data, err := fs.ReadFile(assets.Skills(), "test-strategy/SKILL.md")
 	if err != nil {
 		return "unknown"
 	}
-	if m := skillVersion.FindSubmatch(data); m != nil {
-		return strings.TrimSpace(string(m[1]))
+	nameMatch := skillName.FindSubmatch(data)
+	versionMatch := skillVersion.FindSubmatch(data)
+	if nameMatch == nil || versionMatch == nil {
+		return "unknown"
 	}
-	return "unknown"
+	name := strings.TrimSpace(string(nameMatch[1]))
+	version := strings.TrimSpace(string(versionMatch[1]))
+	if name == "" || version == "" {
+		return "unknown"
+	}
+	return name + " " + version
 }
 
 func isVerdict(v string) bool {
