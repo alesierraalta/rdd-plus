@@ -1,0 +1,40 @@
+name: CI
+
+# The suite the commit carries, not the one the worktree had. #107 shipped without a guard its own
+# tests assert: the branch was green, master went red, and nothing ran the tests on what was pushed.
+# This job runs them there.
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      # The bench drives `node --test` for the JavaScript corpus. Without node those tests skip, and a
+      # silent skip is a green run that verified less than it claims.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: gofmt
+        run: test -z "$(gofmt -l .)"
+      - name: vet
+        run: go vet ./...
+      - name: build
+        run: make build
+      - name: test
+        run: go test ./... -count=1
