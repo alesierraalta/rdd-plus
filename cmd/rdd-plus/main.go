@@ -97,6 +97,11 @@ feedback [--config-dir <dir>] [--template] [--file <path>] [--plan <path>] [--su
 `
 
 func defaultConfigDir() string {
+	for _, key := range []string{"CLAUDE_CONFIG_DIR", "PI_CODING_AGENT_DIR"} {
+		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+			return value
+		}
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ".claude"
@@ -305,7 +310,7 @@ func runFeedback(args []string) int {
 			TS:    time.Now().UTC().Format(time.RFC3339),
 			Repo:  feedback.RepoRoot("."),
 			Plan:  *plan,
-			Skill: feedback.EmbeddedSkillVersion(),
+			Skill: feedback.EmbeddedSkillIdentity(),
 			Build: buildinfo.String(),
 		}))
 		return 0

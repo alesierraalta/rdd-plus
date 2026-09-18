@@ -26,7 +26,10 @@ receive skills but their transports are documented rather than wired. Claude's s
 and running it again changes nothing. A skill you edited locally is moved to
 `~/.claude/skills/.rdd-plus-backup/<name>-<timestamp>/` before it is replaced. An unparseable
 `settings.json` aborts the run before anything is written. Use `--config-dir` to target another
-Claude directory, `--hosts` to narrow installation, and `--dry-run` to see the plan.
+Claude directory, `--hosts` to narrow installation, and `--dry-run` to see the plan. Without an
+explicit `--config-dir`, commands resolve the directory in this order: `CLAUDE_CONFIG_DIR`, then
+`PI_CODING_AGENT_DIR`, then `~/.claude`; empty values are ignored, and a ledger that lives under a
+different directory is reached with `--config-dir`.
 
 ## Commands
 
@@ -211,7 +214,7 @@ rdd-plus feedback                     # no flags: the summary, the cheapest path
 ```
 
 One report is `paid`, `cost`, `reason`, and a `verdict` of `paid`, `partly`, or `ceremony`; `guess`
-and `freeform` are optional. Each report appends one JSON line to
+and `freeform` are optional. The `skill` field names what actually ran as `<name>` or `<name> <version>`; for example, a breakcheck run records `breakcheck <its version>`. Each report appends one JSON line to
 `<config-dir>/telemetry/run-feedback.jsonl` and one section to `run-feedback.md`, beside the gate's
 own log. The summary counts reports, verdicts, and skill versions and prints the `guess` lines of
 the most recent reports; it clusters nothing and invents no score.

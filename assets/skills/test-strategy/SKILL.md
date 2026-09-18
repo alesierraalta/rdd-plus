@@ -4,7 +4,7 @@ description: "Trigger: haz el testing, testea esto, prueba esto, test this, test
 license: Apache-2.0
 metadata:
   author: "alesierraalta"
-  version: "0.3.9"
+  version: "0.3.10"
   requires_rdd_plus: "0.3.8"
   scope: [common]
   auto_invoke: "Any request to test something: infer scope and mode from repo state, build or resume the persisted plan, execute it through specialized testing skills"
@@ -23,7 +23,7 @@ This skill decides WHICH targets and routes; siblings do the work.
 
 ## Tooling
 
-This skill is written for `rdd-plus 0.3.7`, and `rdd-plus version` prints the build present.
+This skill is written for `rdd-plus 0.3.8`, and `rdd-plus version` prints the build present.
 Install it from the repository with `make build`, which writes `bin/rdd-plus`; put that on `PATH`,
 or use `go install github.com/alesierraalta/rdd-plus/cmd/rdd-plus@latest` once the module is
 published. Without the binary the run continues on documented fallbacks: `plan init` is replaced
@@ -98,7 +98,8 @@ records its own retrospective.** Use `mktemp` for a scratch file outside the rep
 `rdd-plus feedback --template` into it, fill only the existing fields (`ts`, `repo`, `plan`, `skill`,
 `build`, `paid`, `cost`, `reason`, `verdict` of `paid`, `partly`, or `ceremony`, optional `guess` and
 `freeform`), then submit with `rdd-plus feedback --file`; add no fields because the parser rejects
-unknown keys.
+unknown keys. Set `skill` to what actually ran as `<name>` or `<name> <version>`; a breakcheck run
+records `breakcheck <its version>`, not the template's default embedded test-strategy identity.
 
 ## Beta retrospective
 
