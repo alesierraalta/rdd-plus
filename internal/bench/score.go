@@ -161,6 +161,11 @@ func noteMissingDeclaredPlan(ws string, r Result, resolution planPathResolution)
 	if r.PlanFound || !resolution.declared {
 		return r
 	}
+	for _, note := range r.Notes {
+		if strings.HasPrefix(note, planReadFailureNotePrefix) {
+			return r
+		}
+	}
 	declared := resolution.declaredPath
 	note := ""
 	switch {

@@ -123,3 +123,36 @@ campaign's score on this change is one material finding of its own and three it 
 missed issues" in the table above was written before the verifier ran. Keeping that sentence as written, with
 this paragraph under it, is the point of the log: a tool that is trusted without being checked is the failure
 mode we are trying to avoid.
+
+---
+
+## 2026-09-18 — #109, name a failed plan read instead of calling it absent
+
+**Task**: stop the plain scorer from reporting a plan that exists but cannot be read as if it were absent, and
+pin the one difference that legitimately remains between the two scorers. The branch also had to carry a repair:
+`master`'s suite was red because #107's commit omitted the guard in `adjudication.go`.
+
+**Tool used**: Yes — `breakcheck`, six probes on the working tree.
+
+**Findings**
+
+| Finding | Verdict | What happened |
+|---|---|---|
+| — | **NONE** | Every probe matched its expectation: the failure note names the cause in both scorers, the declaration note stands down instead of repeating it, an absent plan is unchanged, and the refusal contract is restored identically in both scorers. |
+
+**True positives**: 0.
+**False positives**: 0.
+**Missed issues**: unknown at campaign time — and the honest framing is that this run was cheap because the design was already pinned by the specification: six probes confirmed it rather than exploring it. Whether it missed anything is the verifier's question, not this campaign's.
+**Changes made because of the tool**: none. The one defect in this branch — `master` red, and worse, the adjudicated scorer reading a path the plain one refuses — was found by the writer's own test run and the parent's investigation of it, not by probing.
+**Previously run by me**: the focused suite (green here, red on `master`), build, gofmt, vet, and a diff review.
+
+**Main friction**: none.
+
+**What this entry is worth**: a campaign that finds nothing is only evidence if the probes could have failed.
+These could: the note-composition probes are exactly where the previous two campaigns found their material
+defects, and P5 checks a behaviour that `master` demonstrably lacks. So the honest read is "the change is clean
+within its scope", not "the campaign earned its keep today". The expensive part of this task was elsewhere —
+noticing that a verified revision had not reached the commit.
+
+**Conclusion**: keep running it, and keep the expectation honest. Two material findings in four tasks, and one
+task where the tool found nothing while a broken `master` sat behind a green worktree.

@@ -184,26 +184,52 @@ func TestScoreWorkspaceReadsThePlanFile(t *testing.T) {
 // A run that delivers its plan at the path its .rdd-plus.json declares is scored from that path; a
 // declaration that escapes is refused with a note and the default path is read instead; and a
 // workspace with no plan anywhere keeps today's result and note.
-// A declared path that exists but cannot be read as a plan is not a missing plan, and the run's record must
-// not say it is. The two scorers differ today: the plain one treats the read failure as an absent plan and
-// says the path exists instead, while the adjudicated one refuses and hands the error back. Pinning both
-// keeps the difference visible rather than letting either claim the path was not found.
-func TestScoreWorkspaceOnADeclaredPathThatCannotBeReadAsAPlan(t *testing.T) {
-	ws := t.TempDir()
-	declarePlan(t, ws, "docs/testing/plan-dir")
-	if err := os.MkdirAll(filepath.Join(ws, "docs/testing/plan-dir"), 0o755); err != nil {
-		t.Fatal(err)
+// A plan path that exists but cannot be read as a plan is not a missing plan. Both scorers name the
+// read failure in their result; the adjudicated scorer also returns it as an error.
+func TestScoreWorkspaceReportsPlanReadFailure(t *testing.T) {
+	cases := []struct {
+		name           string
+		declaredPath   string
+		unreadablePath string
+	}{
+		{name: "default plan", unreadablePath: PlanPath},
+		{name: "declared plan", declaredPath: "docs/testing/plan-dir", unreadablePath: "docs/testing/plan-dir"},
 	}
-	r := ScoreWorkspace(ws, renderKey)
-	if r.PlanFound || r.PlanPath != "" {
-		t.Fatalf("PlanFound = %v, PlanPath = %q; an unread plan credits nothing", r.PlanFound, r.PlanPath)
-	}
-	want := `declared plan "docs/testing/plan-dir" exists but was not read as a plan`
-	if fmt.Sprint(r.Notes) != fmt.Sprint([]string{"no plan", want}) {
-		t.Fatalf("notes = %v, want exactly [no plan, %s]", r.Notes, want)
-	}
-	if _, err := ScoreWorkspaceWithAdjudication(ws, renderKey, nil); err == nil {
-		t.Fatalf("the adjudicated scorer no longer refuses an unreadable declared plan")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ws := t.TempDir()
+			if tc.declaredPath != "" {
+				declarePlan(t, ws, tc.declaredPath)
+			}
+			path := filepath.Join(ws, filepath.FromSlash(tc.unreadablePath))
+			if err := os.MkdirAll(path, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			_, readErr := os.ReadFile(path)
+			if readErr == nil {
+				t.Fatal("reading a directory unexpectedly succeeded")
+			}
+			wantNotes := []string{"no plan", planReadFailureNotePrefix + readErr.Error()}
+
+			plain := ScoreWorkspace(ws, renderKey)
+			if plain.PlanFound || plain.PlanPath != "" {
+				t.Fatalf("PlanFound = %v, PlanPath = %q; an unread plan credits nothing", plain.PlanFound, plain.PlanPath)
+			}
+			if fmt.Sprint(plain.Notes) != fmt.Sprint(wantNotes) {
+				t.Fatalf("plain notes = %v, want exactly %v", plain.Notes, wantNotes)
+			}
+
+			adjudicated, err := ScoreWorkspaceWithAdjudication(ws, renderKey, nil)
+			if err == nil {
+				t.Fatal("the adjudicated scorer did not return the read error")
+			}
+			if !strings.Contains(err.Error(), readErr.Error()) {
+				t.Fatalf("error = %v, want it to include %v", err, readErr)
+			}
+			if fmt.Sprint(adjudicated.Notes) != fmt.Sprint(wantNotes) {
+				t.Fatalf("adjudicated notes = %v, want exactly %v", adjudicated.Notes, wantNotes)
+			}
+		})
 	}
 }
 

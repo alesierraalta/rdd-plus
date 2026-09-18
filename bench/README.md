@@ -205,9 +205,11 @@ around the guard: when it falls back to the default path, that path is checked l
 A run that declares a
 path, does not write it and leaves a plan at the default path also reads `NO PLAN` — the declaration is the
 run's promise. A declared-but-absent
-plan reports the declaration it honoured alongside the default plan it ignored, and a declared path that is
-there but was not read as a plan says so instead of claiming it is missing. Runs where the agent did not
-complete are `FAILED`, excluded from recall, and make the command exit 3.
+plan reports the declaration it honoured alongside the default plan it ignored. When the selected path is
+there but cannot be read as a plan, both scorers name the read failure in the result and score zero, while the
+adjudicated scorer additionally returns it as an error, making `rescore` fail loudly rather than silently
+scoring an unreadable kept copy. Runs where the agent did not complete are `FAILED`, excluded from recall, and
+make the command exit 3.
 
 ### Skill versions in the history
 
