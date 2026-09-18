@@ -197,8 +197,14 @@ rule changes: `rdd-plus bench score --case bench/cases/<id> --plan <results>/<id
 A valid run whose selected plan file is absent scores zero and is reported as `NO PLAN` (`no_plan` in the
 aggregate and the history): the flow ran and did not persist its deliverable at the path it promised,
 which is a different failure from missing the defect. The selected path is the one the workspace
-declares, else `docs/testing/test-plan.md`, so a run that declares a path, does not write it and leaves a
-plan at the default path also reads `NO PLAN` — the declaration is the run's promise. A declared-but-absent
+declares, else `docs/testing/test-plan.md`; the plan read must resolve inside the workspace, and a path that
+resolves outside through a symlink is refused like an absolute or `..` declaration. A workspace or a plan path
+the bench cannot resolve is refused as well, because containment that cannot be checked is not containment;
+a plan path that is simply not there stays the ordinary `NO PLAN`. A rejected declaration does not become a way
+around the guard: when it falls back to the default path, that path is checked like any other.
+A run that declares a
+path, does not write it and leaves a plan at the default path also reads `NO PLAN` — the declaration is the
+run's promise. A declared-but-absent
 plan reports the declaration it honoured alongside the default plan it ignored, and a declared path that is
 there but was not read as a plan says so instead of claiming it is missing. Runs where the agent did not
 complete are `FAILED`, excluded from recall, and make the command exit 3.

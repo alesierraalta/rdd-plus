@@ -79,3 +79,47 @@ being reviewed, at a cost of minutes, and the fix is pinned by a test. Still not
 material finding in two tasks is a real signal, but the sample is two. Worth watching whether the next tasks
 repeat the pattern, and worth noting what made it work: the campaign attacked the **new** logic, not the code
 around it.
+
+---
+
+## 2026-09-18 — #107, refuse a plan that resolves outside the workspace
+
+**Task**: make the bench refuse a plan path that a symlink resolves outside the workspace, on a real branch,
+before its PR.
+
+**Tool used**: Yes — `breakcheck`, five probes on the working tree.
+
+**Findings**
+
+| Finding | Verdict | What happened |
+|---|---|---|
+| F-107-1: a symlink **loop** fell through the guard's early return into the absent flow, and the note then claimed `was not found` about a path that exists | **TRUE POSITIVE — material, caused by this change** | Fixed in this PR: a non-`ErrNotExist` resolution failure is refused with a note naming it, pinned for both scorers. |
+| Chains, a symlinked workspace, in-workspace links, plain files | **CONFIRMED CORRECT** | The guard follows chains to the real target, does not refuse a workspace reached through a symlink, and leaves legitimate links alone. |
+
+**True positives**: 1, material and caused by this change.
+**False positives**: 0.
+**Missed issues**: none known at campaign time — but note *why* this one appeared: a symlink **loop** was not in
+the task document's own list of test cases either. The campaign found the case that the specification, the tests
+and my review all skipped, which is now three tasks in a row with the same shape. (The independent verifier
+later found three further holes: see the note at the end of this entry.)
+**Changes made because of the tool**: the loop is refused instead of reported as missing. Second time the code
+that ships is different because the campaign ran.
+**Previously run by me**: focused suite, build, gofmt, vet and a full diff review — none of which exercised a
+link that cannot be followed.
+
+**Main friction**: none. The probe that found this was six lines, and the whole campaign stayed inside the
+throwaway-copy pattern already in use.
+
+**Conclusion**: the tool has now earned its place twice on the same day, both times by attacking what the change
+introduced. The pattern is stable enough to name: **write the probes for the cases the task document does not
+list**. The value is not in finding bugs already shipped — it is in finding the one the author already
+convinced themselves about.
+
+**What the verifier added, and what it costs this entry's story**: the independent verification found **three
+holes this campaign missed** — the guard skipped containment when the workspace root could not be resolved, the
+kept-copy step still read a refused path, and a rejected declaration returned before the guard so it could read
+an escaping default — plus loose assertions in the loop test. All three were closed before the PR. So the
+campaign's score on this change is one material finding of its own and three it did not see, and the phrase "no
+missed issues" in the table above was written before the verifier ran. Keeping that sentence as written, with
+this paragraph under it, is the point of the log: a tool that is trusted without being checked is the failure
+mode we are trying to avoid.

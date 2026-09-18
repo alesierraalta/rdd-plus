@@ -90,25 +90,68 @@ type citation struct {
 
 type planPathResolution struct {
 	refusalNote  string
+	refused      bool
 	declared     bool
 	declaredPath string
 }
 
 // resolvePlanPath returns the workspace-relative plan a run delivered: the path its .rdd-plus.json
 // declares, else PlanPath. DeclaredPath only ever returns a validated repository-relative path: an
-// absolute or escaping declaration is refused there, not returned. A refusal falls back to PlanPath
-// with a note naming it, so the run's record says why the declared plan was not the one read.
+// absolute or escaping declaration is refused there, not returned, and the fallback to PlanPath carries a
+// note naming it. Whatever path will be read then has to resolve inside the workspace; a path that cannot
+// be checked, cannot be followed, or resolves outside is refused before it is read.
 func resolvePlanPath(ws string) (string, planPathResolution) {
 	declared, err := plancheck.DeclaredPath(ws, nil)
-	if err != nil {
-		return PlanPath, planPathResolution{
-			refusalNote: fmt.Sprintf("declared plan path refused (%v); read %s instead", err, PlanPath),
+
+	path := PlanPath
+	resolution := planPathResolution{}
+	switch {
+	case err != nil:
+		// The declaration is refused lexically and the default path is read instead — and that fallback
+		// is guarded like any other selection, because a rejected declaration must not become a way to
+		// read an unchecked path.
+		resolution.refusalNote = fmt.Sprintf("declared plan path refused (%v); read %s instead", err, PlanPath)
+	case declared != "":
+		path = declared
+		resolution.declared = true
+		resolution.declaredPath = declared
+	}
+
+	root, rootErr := filepath.EvalSymlinks(ws)
+	target, targetErr := filepath.EvalSymlinks(filepath.Join(ws, path))
+	if rootErr != nil {
+		// Containment cannot be proven without the real workspace, and a path that cannot be checked is
+		// not a path that is inside. Returning here would read the plan unchecked.
+		resolution.refused = true
+		resolution.refusalNote = joinNotes(resolution.refusalNote, fmt.Sprintf("workspace %q could not be resolved (%v); the plan was not read", ws, rootErr))
+		return path, resolution
+	}
+	if targetErr != nil {
+		// Absent is the ordinary flow. Anything else — a symlink loop, a link that cannot be
+		// followed — is a path that cannot be read as a plan, and saying it is missing would be
+		// the same false claim this bench has been removing.
+		if os.IsNotExist(targetErr) {
+			return path, resolution
 		}
+		resolution.refused = true
+		resolution.refusalNote = joinNotes(resolution.refusalNote, fmt.Sprintf("selected plan path %q refused: %v", path, targetErr))
+		return path, resolution
 	}
-	if declared == "" {
-		return PlanPath, planPathResolution{}
+	rel, err := filepath.Rel(root, target)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		resolution.refused = true
+		resolution.refusalNote = joinNotes(resolution.refusalNote, fmt.Sprintf("selected plan path %q refused: resolves outside workspace to %q", path, target))
 	}
-	return declared, planPathResolution{declared: true, declaredPath: declared}
+	return path, resolution
+}
+
+// joinNotes keeps an earlier refusal and the one that decided the outcome in a single note, so a rejected
+// declaration that also escapes does not lose either fact.
+func joinNotes(first, second string) string {
+	if first == "" {
+		return second
+	}
+	return first + "; " + second
 }
 
 // noteMissingDeclaredPlan names the plan a declaration overrode when the declared path yielded no plan.
@@ -139,10 +182,20 @@ func pathExists(path string) bool {
 	return err == nil
 }
 
+// scoreRefusedPlan returns the zero score for a selected plan path that must not be read.
+func scoreRefusedPlan(key Key, resolution planPathResolution) Result {
+	r := Score("", key)
+	r.Notes = append(r.Notes, resolution.refusalNote)
+	return r
+}
+
 // ScoreWorkspace scores the plan a workspace delivered: the path it declares, else PlanPath. A
 // missing plan scores zero.
 func ScoreWorkspace(ws string, key Key) Result {
 	path, resolution := resolvePlanPath(ws)
+	if resolution.refused {
+		return scoreRefusedPlan(key, resolution)
+	}
 	r := ScorePlanFile(filepath.Join(ws, path), key)
 	if resolution.refusalNote != "" {
 		r.Notes = append(r.Notes, resolution.refusalNote)

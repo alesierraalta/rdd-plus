@@ -329,6 +329,203 @@ func TestScoreWorkspaceResolvesTheDeclaredPlanPath(t *testing.T) {
 	}
 }
 
+// A declared path whose symlink cannot be followed at all — a loop — is not an absent plan. The path is
+// there and cannot be read as a plan, and reporting it as missing would be the same false claim this bench
+// has been removing elsewhere.
+func TestScoreWorkspaceRefusesASymlinkItCannotFollow(t *testing.T) {
+	ws := t.TempDir()
+	declarePlan(t, ws, "docs/testing/a.md")
+	symlinkPlan(t, ws, "docs/testing/a.md", "b.md")
+	symlinkPlan(t, ws, "docs/testing/b.md", "a.md")
+	for _, sc := range []struct {
+		name  string
+		score func(string) (Result, error)
+	}{
+		{"ScoreWorkspace", func(ws string) (Result, error) { return ScoreWorkspace(ws, renderKey), nil }},
+		{"ScoreWorkspaceWithAdjudication", func(ws string) (Result, error) { return ScoreWorkspaceWithAdjudication(ws, renderKey, nil) }},
+	} {
+		t.Run(sc.name, func(t *testing.T) {
+			r, err := sc.score(ws)
+			if err != nil {
+				t.Fatalf("a refused plan is not a failure: %v", err)
+			}
+			if r.PlanFound || r.PlanPath != "" {
+				t.Fatalf("PlanFound = %v, PlanPath = %q; a plan that cannot be read credits nothing", r.PlanFound, r.PlanPath)
+			}
+			if len(r.Notes) != 1 || !strings.Contains(r.Notes[0], "refused") || !strings.Contains(r.Notes[0], "docs/testing/a.md") {
+				t.Fatalf("notes = %v, want one refusal naming the declared path", r.Notes)
+			}
+		})
+	}
+}
+
+// A workspace the guard cannot resolve cannot prove its plan is inside, so the plan is not read: "cannot be
+// checked" and "is inside" are different answers, and only one of them is safe.
+func TestScoreWorkspaceRefusesWhenContainmentCannotBeProven(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "no-such-workspace")
+	for _, sc := range []struct {
+		name  string
+		score func(string) (Result, error)
+	}{
+		{"ScoreWorkspace", func(ws string) (Result, error) { return ScoreWorkspace(ws, renderKey), nil }},
+		{"ScoreWorkspaceWithAdjudication", func(ws string) (Result, error) {
+			return ScoreWorkspaceWithAdjudication(ws, renderKey, nil)
+		}},
+	} {
+		t.Run(sc.name, func(t *testing.T) {
+			r, err := sc.score(missing)
+			if err != nil {
+				t.Fatalf("an unresolvable workspace is not a failure here: %v", err)
+			}
+			if r.PlanFound || r.PlanPath != "" {
+				t.Fatalf("PlanFound = %v, PlanPath = %q; an unchecked plan credits nothing", r.PlanFound, r.PlanPath)
+			}
+			if len(r.Notes) != 1 || !strings.Contains(r.Notes[0], "could not be resolved") {
+				t.Fatalf("notes = %v, want one note saying the workspace could not be resolved", r.Notes)
+			}
+		})
+	}
+}
+
+func TestScoreWorkspaceRefusesSymlinkEscapes(t *testing.T) {
+	body := plan("| F1 | src/render.js:12 escape | M | yes | E1 | open | me | - | - |\n", "| E1 | c | cmd | i | o | m | r | observado |\n")
+	cases := []struct {
+		name      string
+		setup     func(t *testing.T, ws string) []string
+		wantFound bool
+		wantPath  string
+		wantNotes []string
+	}{
+		{
+			name: "declared path escapes through a symlink",
+			setup: func(t *testing.T, ws string) []string {
+				outside := writeOutsidePlan(t, body)
+				declarePlan(t, ws, "docs/testing/link.md")
+				symlinkPlan(t, ws, "docs/testing/link.md", outside)
+				return []string{fmt.Sprintf("selected plan path %q refused: resolves outside workspace to %q", "docs/testing/link.md", outside)}
+			},
+		},
+		{
+			name: "default path escapes through a symlink",
+			setup: func(t *testing.T, ws string) []string {
+				outside := writeOutsidePlan(t, body)
+				symlinkPlan(t, ws, PlanPath, outside)
+				return []string{fmt.Sprintf("selected plan path %q refused: resolves outside workspace to %q", PlanPath, outside)}
+			},
+		},
+		{
+			name: "declared path stays inside through a symlink",
+			setup: func(t *testing.T, ws string) []string {
+				writePlanAt(t, ws, "docs/testing/real-plan.md", body)
+				declarePlan(t, ws, "docs/testing/link.md")
+				symlinkPlan(t, ws, "docs/testing/link.md", filepath.Join(ws, "docs/testing/real-plan.md"))
+				return []string{}
+			},
+			wantFound: true,
+			wantPath:  "docs/testing/link.md",
+		},
+		{
+			name: "a rejected declaration does not smuggle an escaping default",
+			setup: func(t *testing.T, ws string) []string {
+				outside := writeOutsidePlan(t, body)
+				declarePlan(t, ws, "../escape.md")
+				symlinkPlan(t, ws, PlanPath, outside)
+				// Both facts travel in one note: the rejected declaration and the refusal of the fallback it
+				// would otherwise have read.
+				return []string{fmt.Sprintf(
+					"declared plan path refused (.rdd-plus.json escapes the worktree: %q); read %s instead; selected plan path %q refused: resolves outside workspace to %q",
+					"../escape.md", PlanPath, PlanPath, outside)}
+			},
+		},
+		{
+			name: "declared path is absent",
+			setup: func(t *testing.T, ws string) []string {
+				declarePlan(t, ws, "docs/testing/missing.md")
+				return []string{
+					"no plan",
+					`declared plan "docs/testing/missing.md" was not found; default plan "docs/testing/test-plan.md" holds nothing either`,
+				}
+			},
+		},
+		{
+			name: "escaping default is ignored when the declaration is safe",
+			setup: func(t *testing.T, ws string) []string {
+				outside := writeOutsidePlan(t, body)
+				symlinkPlan(t, ws, PlanPath, outside)
+				declarePlan(t, ws, "docs/testing/declared.md")
+				writePlanAt(t, ws, "docs/testing/declared.md", body)
+				return []string{}
+			},
+			wantFound: true,
+			wantPath:  "docs/testing/declared.md",
+		},
+	}
+
+	scorers := []struct {
+		name  string
+		score func(t *testing.T, ws string, key Key) Result
+	}{
+		{"ScoreWorkspace", func(_ *testing.T, ws string, key Key) Result {
+			return ScoreWorkspace(ws, key)
+		}},
+		{"ScoreWorkspaceWithAdjudication", func(t *testing.T, ws string, key Key) Result {
+			r, err := ScoreWorkspaceWithAdjudication(ws, key, nil)
+			if err != nil {
+				t.Fatalf("ScoreWorkspaceWithAdjudication: %v", err)
+			}
+			return r
+		}},
+	}
+	for _, scorer := range scorers {
+		for _, tc := range cases {
+			t.Run(scorer.name+"/"+tc.name, func(t *testing.T) {
+				ws := t.TempDir()
+				wantNotes := tc.setup(t, ws)
+				r := scorer.score(t, ws, renderKey)
+				if r.PlanFound != tc.wantFound {
+					t.Fatalf("PlanFound = %v, want %v (%+v)", r.PlanFound, tc.wantFound, r)
+				}
+				if r.PlanPath != tc.wantPath {
+					t.Fatalf("PlanPath = %q, want %q", r.PlanPath, tc.wantPath)
+				}
+				if len(r.Notes) != len(wantNotes) {
+					t.Fatalf("note count = %d, want %d: %v", len(r.Notes), len(wantNotes), r.Notes)
+				}
+				if fmt.Sprint(r.Notes) != fmt.Sprint(wantNotes) {
+					t.Fatalf("notes = %v, want exactly %v", r.Notes, wantNotes)
+				}
+				if tc.wantFound {
+					if r.Found != 1 || r.FindingRows != 1 {
+						t.Fatalf("found = %d, finding rows = %d; the selected plan was not scored", r.Found, r.FindingRows)
+					}
+				} else if r.Found != 0 || r.FindingRows != 0 || r.PlanFound || r.PlanPath != "" {
+					t.Fatalf("refused or absent plan was credited: found=%d rows=%d plan_found=%v plan_path=%q", r.Found, r.FindingRows, r.PlanFound, r.PlanPath)
+				}
+			})
+		}
+	}
+}
+
+func writeOutsidePlan(t *testing.T, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "outside.md")
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func symlinkPlan(t *testing.T, ws, rel, target string) {
+	t.Helper()
+	link := filepath.Join(ws, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // declarePlan writes the workspace's plan declaration.
 func declarePlan(t *testing.T, ws, declared string) {
 	t.Helper()
