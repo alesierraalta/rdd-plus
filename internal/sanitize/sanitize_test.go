@@ -235,6 +235,37 @@ func TestIDIsStableUnderOneKeyAndDifferentUnderAnother(t *testing.T) {
 	}
 }
 
+func TestLoadKeyInSharesOneSaltWithLoadKey(t *testing.T) {
+	dir := t.TempDir()
+	fromConfig, err := LoadKey(dir)
+	if err != nil {
+		t.Fatalf("load key from config dir: %v", err)
+	}
+	fromTelemetry, err := LoadKeyIn(filepath.Join(dir, "telemetry"))
+	if err != nil {
+		t.Fatalf("load key from telemetry dir: %v", err)
+	}
+	if got, want := fromTelemetry.ID("repo", "same-value"), fromConfig.ID("repo", "same-value"); got != want {
+		t.Fatalf("LoadKeyIn pseudonym = %q, LoadKey pseudonym = %q", got, want)
+	}
+
+	saltCount := 0
+	if err := filepath.WalkDir(dir, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !entry.IsDir() && entry.Name() == ".salt" {
+			saltCount++
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("walk telemetry directory: %v", err)
+	}
+	if saltCount != 1 {
+		t.Fatalf("found %d salt files, want exactly one", saltCount)
+	}
+}
+
 func TestLoadKeySurvivesConcurrentFirstUse(t *testing.T) {
 	dir := t.TempDir()
 	const workers = 8

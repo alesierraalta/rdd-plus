@@ -58,7 +58,8 @@ When it fires, the feedback names the files and asks for `test-strategy` ("haz e
 It is a reminder, not an approval gate.
 
 Telemetry: every decision appends one JSON line to `~/.claude/telemetry/testing-gate.jsonl`
-(override with `TESTING_GATE_LOG`), so the invocation rate is measurable over time.
+(override with `TESTING_GATE_LOG`), so the invocation rate is measurable over time. Its `repo`, `session`
+and `plan` fields are pseudonyms, not names.
 
 ## Skills
 
@@ -206,6 +207,19 @@ and `freeform` are optional. Each report appends one JSON line to
 `<config-dir>/telemetry/run-feedback.jsonl` and one section to `run-feedback.md`, beside the gate's
 own log. The summary counts reports, verdicts, and skill versions and prints the `guess` lines of
 the most recent reports; it clusters nothing and invents no score.
+
+### Sanitization
+
+Before writing, identity values become stable per-installation pseudonyms so runs of the same target
+still compare. Free text loses the project-specific instance while keeping what the method did. A
+secret in `paid`, `cost`, or `reason` refuses the whole report and writes nothing; in `guess` or
+`freeform`, it is redacted. New rows carry `"sanitized":true`. The local-only files
+`<config-dir>/telemetry/.salt` and `<config-dir>/telemetry/.pseudonyms.jsonl` must never be published:
+the first reverses every pseudonym and the second maps them back to names. Rows written before this
+stage existed keep their old shape and are counted in the summary.
+
+The same project is not correlated across the two ledgers: the feedback ledger seals the absolute
+worktree root, while the gate ledger seals the repository directory name.
 
 ## Benchmark
 

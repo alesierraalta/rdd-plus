@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/alesierraalta/rdd-plus/internal/sanitize"
 )
 
 const gitTimeout = 10 * time.Second
@@ -65,7 +67,8 @@ func appendEntry(path string, e *Entry) {
 	if path == "" {
 		return
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	telemetryDir := filepath.Dir(path)
+	if err := os.MkdirAll(telemetryDir, 0o700); err != nil {
 		return
 	}
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
@@ -73,11 +76,47 @@ func appendEntry(path string, e *Entry) {
 		return
 	}
 	defer f.Close()
+	e = sealEntry(telemetryDir, e)
 	line, err := json.Marshal(e)
 	if err != nil {
 		return
 	}
 	_, _ = f.Write(append(line, '\n'))
+}
+
+func sealEntry(telemetryDir string, e *Entry) *Entry {
+	if e == nil {
+		return nil
+	}
+	sealed := *e
+	if e.SkillsLoaded != nil {
+		sealed.SkillsLoaded = make([]string, len(e.SkillsLoaded))
+		copy(sealed.SkillsLoaded, e.SkillsLoaded)
+	}
+	key, err := sanitize.LoadKeyIn(telemetryDir)
+	if err != nil {
+		// Drop identity rather than write it raw; decision fields survive on purpose so the row remains useful.
+		sealed.Repo = ""
+		sealed.Session = ""
+		sealed.Plan = ""
+		return &sealed
+	}
+	remember := func(prefix, original string) string {
+		pseudonym := key.ID(prefix, original)
+		// The map is a local operator aid; a map failure must not lose the usable measurement or its invocation rate.
+		_ = key.Remember(telemetryDir, pseudonym, original)
+		return pseudonym
+	}
+	if e.Repo != "" {
+		sealed.Repo = remember("repo", e.Repo)
+	}
+	if e.Session != "" {
+		sealed.Session = remember("sess", e.Session)
+	}
+	if e.Plan != "" {
+		sealed.Plan = remember("plan", e.Plan)
+	}
+	return &sealed
 }
 
 func emit(w io.Writer, reason string) { emitWith(w, reason, "") }

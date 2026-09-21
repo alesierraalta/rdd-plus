@@ -34,7 +34,13 @@ const saltSize = 32
 
 // LoadKey reads or creates the installation-local telemetry salt.
 func LoadKey(configDir string) (*Key, error) {
-	telemetryDir := filepath.Join(configDir, "telemetry")
+	return LoadKeyIn(filepath.Join(configDir, "telemetry"))
+}
+
+// LoadKeyIn reads or creates the telemetry salt inside the telemetry directory itself — the
+// directory that holds a ledger — so every ledger in one directory shares one salt and the same
+// value gets the same pseudonym in each of them.
+func LoadKeyIn(telemetryDir string) (*Key, error) {
 	if err := os.MkdirAll(telemetryDir, 0700); err != nil {
 		return nil, fmt.Errorf("create telemetry directory: %w", err)
 	}

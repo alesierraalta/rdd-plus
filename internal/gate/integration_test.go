@@ -102,6 +102,7 @@ type hookRun struct {
 	code    int
 	out     string
 	err     string
+	raw     string
 	entries []map[string]any
 }
 
@@ -128,6 +129,7 @@ func runBinary(t *testing.T, bin, cwd string, stdin string, extraEnv ...string) 
 	}
 	r := hookRun{code: code, out: stdout.String(), err: stderr.String()}
 	if data, err := os.ReadFile(logFile); err == nil {
+		r.raw = string(data)
 		for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
 			if line == "" {
 				continue
@@ -498,8 +500,13 @@ func TestBinaryProperties(t *testing.T) {
 		if e == nil {
 			t.Fatal("no log entry")
 		}
-		if e["session"] != "s-1" || e["repo"] != filepath.Base(d) || e["changed_source"] != float64(1) || e["fired"] != true {
+		session, sessionOK := e["session"].(string)
+		repo, repoOK := e["repo"].(string)
+		if !sessionOK || !strings.HasPrefix(session, "sess-") || !repoOK || !strings.HasPrefix(repo, "repo-") || e["changed_source"] != float64(1) || e["fired"] != true {
 			t.Fatalf("unexpected entry %v", e)
+		}
+		if strings.Contains(r.raw, filepath.Base(d)) {
+			t.Fatalf("persisted line contains raw repository name %q: %s", filepath.Base(d), r.raw)
 		}
 		if _, ok := e["ts"].(string); !ok {
 			t.Fatalf("ts missing: %v", e)
