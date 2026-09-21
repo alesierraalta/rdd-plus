@@ -328,7 +328,7 @@ func runFeedback(args []string) int {
 			if key, err := sanitize.LoadKey(*configDir); err == nil {
 				recordedRepo = key.ID("repo", r.Repo)
 			}
-			if resolved, ok := sanitize.Resolve(*configDir, recordedRepo); ok {
+			if resolved, ok := sanitize.Resolve(sanitize.TelemetryDir(*configDir), recordedRepo); ok {
 				recordedRepo = resolved
 			} else {
 				recordedRepo += " (local map unavailable)"

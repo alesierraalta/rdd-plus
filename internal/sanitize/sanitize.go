@@ -32,9 +32,15 @@ type Key struct {
 
 const saltSize = 32
 
+// TelemetryDir is the one place that knows where a config directory keeps its ledgers, its salt
+// and its resolution map. Every caller derives from it, so no caller can disagree about the layout.
+func TelemetryDir(configDir string) string {
+	return filepath.Join(configDir, "telemetry")
+}
+
 // LoadKey reads or creates the installation-local telemetry salt.
 func LoadKey(configDir string) (*Key, error) {
-	return LoadKeyIn(filepath.Join(configDir, "telemetry"))
+	return LoadKeyIn(TelemetryDir(configDir))
 }
 
 // LoadKeyIn reads or creates the telemetry salt inside the telemetry directory itself — the
@@ -125,8 +131,7 @@ type pseudonymRecord struct {
 }
 
 // Remember appends one pseudonym-to-value line to the local resolution map.
-func (k *Key) Remember(configDir, pseudonym, value string) error {
-	telemetryDir := filepath.Join(configDir, "telemetry")
+func (k *Key) Remember(telemetryDir, pseudonym, value string) error {
 	if err := os.MkdirAll(telemetryDir, 0700); err != nil {
 		return fmt.Errorf("create telemetry directory: %w", err)
 	}
@@ -154,8 +159,8 @@ func (k *Key) Remember(configDir, pseudonym, value string) error {
 }
 
 // Resolve answers the original value for a pseudonym from the local map.
-func Resolve(configDir, pseudonym string) (string, bool) {
-	file, err := os.Open(filepath.Join(configDir, "telemetry", ".pseudonyms.jsonl"))
+func Resolve(telemetryDir, pseudonym string) (string, bool) {
+	file, err := os.Open(filepath.Join(telemetryDir, ".pseudonyms.jsonl"))
 	if err != nil {
 		return "", false
 	}
@@ -194,7 +199,7 @@ var secretDetectors = []secretDetector{
 	{kind: "npm_token", re: regexp.MustCompile(`(?i:\bnpm_)[A-Za-z0-9]{36}`)},
 	{kind: "jwt", re: regexp.MustCompile(`\beyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+`)},
 	{kind: "connection_string", re: regexp.MustCompile(`(?i)\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|amqp)://[^/\s:@]+:[^@\s]+@[^\s]+`)},
-	{kind: "credential_userinfo", re: regexp.MustCompile(`\b[^\s@/:]+:[^\s@]{3,}@[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?`)},
+	{kind: "credential_userinfo", re: regexp.MustCompile(`\b[^\s@/:]+:[^\s@]{6,}@[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?`)},
 	{kind: "credential_assignment", re: regexp.MustCompile(`(?i)\b(?:password|passwd|passphrase|secret|token|api_key|apikey|access_key|client_secret|authorization)\b\s*[:=]\s*[^\s]{8,}`)},
 	{kind: "authorization", re: regexp.MustCompile(`(?i)\b(?:Bearer|Basic)\s+\S{16,}`)},
 }

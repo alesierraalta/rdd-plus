@@ -248,14 +248,14 @@ func TestRecordWritesTheLocalResolutionMap(t *testing.T) {
 	if err := Record(dir, r); err != nil {
 		t.Fatalf("Record: %v", err)
 	}
-	telemetryInfo, err := os.Stat(filepath.Join(dir, "telemetry"))
+	telemetryInfo, err := os.Stat(sanitize.TelemetryDir(dir))
 	if err != nil {
 		t.Fatalf("telemetry directory: %v", err)
 	}
 	if got := telemetryInfo.Mode().Perm(); got != 0o700 {
 		t.Fatalf("telemetry mode = %o, want 700", got)
 	}
-	mapPath := filepath.Join(dir, "telemetry", ".pseudonyms.jsonl")
+	mapPath := filepath.Join(sanitize.TelemetryDir(dir), ".pseudonyms.jsonl")
 	mapInfo, err := os.Stat(mapPath)
 	if err != nil {
 		t.Fatalf("pseudonym map: %v", err)
@@ -271,14 +271,14 @@ func TestRecordWritesTheLocalResolutionMap(t *testing.T) {
 	if err := json.Unmarshal([]byte(strings.TrimSpace(string(line))), &recorded); err != nil {
 		t.Fatalf("recorded line: %v", err)
 	}
-	if got, ok := sanitize.Resolve(dir, recorded.Repo); !ok || got != r.Repo {
+	if got, ok := sanitize.Resolve(sanitize.TelemetryDir(dir), recorded.Repo); !ok || got != r.Repo {
 		t.Fatalf("Resolve(%q) = %q, %v; want %q, true", recorded.Repo, got, ok, r.Repo)
 	}
 }
 
 func TestRecordRefusesToWriteWhenTheLocalMapCannotBeWritten(t *testing.T) {
 	dir := t.TempDir()
-	telemetryDir := filepath.Join(dir, "telemetry")
+	telemetryDir := sanitize.TelemetryDir(dir)
 	if err := os.MkdirAll(telemetryDir, 0o700); err != nil {
 		t.Fatalf("telemetry directory: %v", err)
 	}
@@ -302,7 +302,7 @@ func TestRecordRefusesASecretWithoutTouchingTheLocalMap(t *testing.T) {
 	if err := Record(dir, accepted); err != nil {
 		t.Fatalf("Record accepted report: %v", err)
 	}
-	mapPath := filepath.Join(dir, "telemetry", ".pseudonyms.jsonl")
+	mapPath := filepath.Join(sanitize.TelemetryDir(dir), ".pseudonyms.jsonl")
 	before, err := os.ReadFile(mapPath)
 	if err != nil {
 		t.Fatalf("pseudonym map: %v", err)
@@ -330,7 +330,7 @@ func TestRecordRefusesASecretWithoutTouchingTheLocalMap(t *testing.T) {
 	if err := Record(empty, refused); err == nil {
 		t.Fatal("Record accepted a report whose required field held a secret")
 	}
-	if _, err := os.Stat(filepath.Join(empty, "telemetry", ".pseudonyms.jsonl")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(sanitize.TelemetryDir(empty), ".pseudonyms.jsonl")); !os.IsNotExist(err) {
 		t.Fatalf("a refusal created a local map: %v", err)
 	}
 }

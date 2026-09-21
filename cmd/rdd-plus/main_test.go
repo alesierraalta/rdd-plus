@@ -16,6 +16,7 @@ import (
 	"github.com/alesierraalta/rdd-plus/internal/buildinfo"
 	"github.com/alesierraalta/rdd-plus/internal/evidence"
 	plancheck "github.com/alesierraalta/rdd-plus/internal/plan"
+	"github.com/alesierraalta/rdd-plus/internal/sanitize"
 )
 
 // buildCLI compiles the command once per test binary; the contract under test is the process's,
@@ -429,7 +430,7 @@ func TestFeedbackCLI(t *testing.T) {
 			t.Fatalf("template missing %q:\n%s", want, out)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(dir, "telemetry")); !os.IsNotExist(err) {
+	if _, err := os.Stat(sanitize.TelemetryDir(dir)); !os.IsNotExist(err) {
 		t.Fatalf("--template must write nothing, found a telemetry directory")
 	}
 
@@ -491,7 +492,7 @@ func TestFeedbackCLI(t *testing.T) {
 	}
 
 	// Every refusal wrote nothing: the ledger still holds the one accepted report.
-	raw, err := os.ReadFile(filepath.Join(dir, "telemetry", "run-feedback.jsonl"))
+	raw, err := os.ReadFile(filepath.Join(sanitize.TelemetryDir(dir), "run-feedback.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}

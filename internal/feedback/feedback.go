@@ -51,14 +51,22 @@ type Report struct {
 	Sanitized bool `json:"sanitized,omitempty"`
 }
 
+func ledgerPathIn(telemetryDir string) string {
+	return filepath.Join(telemetryDir, "run-feedback.jsonl")
+}
+
 // LedgerPath is the append-only JSONL ledger of reports under configDir.
 func LedgerPath(configDir string) string {
-	return filepath.Join(configDir, "telemetry", "run-feedback.jsonl")
+	return ledgerPathIn(sanitize.TelemetryDir(configDir))
+}
+
+func markdownPathIn(telemetryDir string) string {
+	return filepath.Join(telemetryDir, "run-feedback.md")
 }
 
 // MarkdownPath is the readable rendering of the same reports under configDir.
 func MarkdownPath(configDir string) string {
-	return filepath.Join(configDir, "telemetry", "run-feedback.md")
+	return markdownPathIn(sanitize.TelemetryDir(configDir))
 }
 
 // requiredFields are the fields a report cannot be recorded without.
@@ -155,7 +163,8 @@ const markdownHeader = "# Run feedback\n\nOne section per `rdd-plus feedback` re
 // Record appends one report to the ledger and one section to the markdown file. Both files are
 // append-only.
 func Record(configDir string, r Report) error {
-	key, err := sanitize.LoadKey(configDir)
+	telemetryDir := sanitize.TelemetryDir(configDir)
+	key, err := sanitize.LoadKeyIn(telemetryDir)
 	if err != nil {
 		return fmt.Errorf("load telemetry key: %w", err)
 	}
@@ -211,28 +220,29 @@ func Record(configDir string, r Report) error {
 	// recording the row anyway would leave the operator unable to resolve the pseudonym with no
 	// signal that it happened, so a map failure stays hard.
 	for _, entry := range mappings {
-		if err := key.Remember(configDir, entry.pseudonym, entry.original); err != nil {
+		if err := key.Remember(telemetryDir, entry.pseudonym, entry.original); err != nil {
 			return fmt.Errorf("remember %s pseudonym: %w", entry.name, err)
 		}
 	}
 
-	if err := os.MkdirAll(filepath.Dir(LedgerPath(configDir)), 0o700); err != nil {
+	ledgerPath := ledgerPathIn(telemetryDir)
+	markdownPath := markdownPathIn(telemetryDir)
+	if err := os.MkdirAll(filepath.Dir(ledgerPath), 0o700); err != nil {
 		return err
 	}
 	line, err := json.Marshal(r)
 	if err != nil {
 		return err
 	}
-	if err := appendFile(LedgerPath(configDir), append(line, '\n')); err != nil {
+	if err := appendFile(ledgerPath, append(line, '\n')); err != nil {
 		return err
 	}
-	md := MarkdownPath(configDir)
-	if _, err := os.Stat(md); os.IsNotExist(err) {
-		if err := appendFile(md, []byte(markdownHeader)); err != nil {
+	if _, err := os.Stat(markdownPath); os.IsNotExist(err) {
+		if err := appendFile(markdownPath, []byte(markdownHeader)); err != nil {
 			return err
 		}
 	}
-	return appendFile(md, []byte(renderSection(r)))
+	return appendFile(markdownPath, []byte(renderSection(r)))
 }
 
 // renderSection is the readable rendering of one report.

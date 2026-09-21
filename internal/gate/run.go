@@ -53,7 +53,7 @@ func DefaultLogPath(configDir string) string {
 		}
 		configDir = filepath.Join(home, ".claude")
 	}
-	return filepath.Join(configDir, "telemetry", "testing-gate.jsonl")
+	return filepath.Join(sanitize.TelemetryDir(configDir), "testing-gate.jsonl")
 }
 
 // unreadablePayloadEntry is the line a hook leaves when it could not read what it was handed: it ran, and it

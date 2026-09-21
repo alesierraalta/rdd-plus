@@ -62,6 +62,14 @@ func TestScanFindsAnInlineCredentialWithoutAScheme(t *testing.T) {
 	}
 }
 
+func TestScanLeavesAShortUserInfoAlone(t *testing.T) {
+	for _, value := range []string{"a:bcd@c", "a:b@c", "12:30@noon"} {
+		if got := Scan(value); len(got) != 0 {
+			t.Fatalf("scan(%q) = %v, want no secrets", value, got)
+		}
+	}
+}
+
 func TestScanLeavesAnEmailAddressAlone(t *testing.T) {
 	for _, value := range []string{"someone@example.com", "first.last@sub.example.org"} {
 		if got := Scan(value); len(got) != 0 {
@@ -235,34 +243,35 @@ func TestIDIsStableUnderOneKeyAndDifferentUnderAnother(t *testing.T) {
 	}
 }
 
-func TestLoadKeyInSharesOneSaltWithLoadKey(t *testing.T) {
-	dir := t.TempDir()
-	fromConfig, err := LoadKey(dir)
+func TestOneTelemetryDirectoryHoldsOneSaltAndOneMap(t *testing.T) {
+	configDir := t.TempDir()
+	telemetryDir := TelemetryDir(configDir)
+	fromConfig, err := LoadKey(configDir)
 	if err != nil {
 		t.Fatalf("load key from config dir: %v", err)
 	}
-	fromTelemetry, err := LoadKeyIn(filepath.Join(dir, "telemetry"))
+	fromTelemetry, err := LoadKeyIn(telemetryDir)
 	if err != nil {
 		t.Fatalf("load key from telemetry dir: %v", err)
 	}
-	if got, want := fromTelemetry.ID("repo", "same-value"), fromConfig.ID("repo", "same-value"); got != want {
-		t.Fatalf("LoadKeyIn pseudonym = %q, LoadKey pseudonym = %q", got, want)
+	pseudonym := fromConfig.ID("repo", "same-value")
+	if got := fromTelemetry.ID("repo", "same-value"); got != pseudonym {
+		t.Fatalf("LoadKeyIn pseudonym = %q, LoadKey pseudonym = %q", got, pseudonym)
 	}
-
-	saltCount := 0
-	if err := filepath.WalkDir(dir, func(path string, entry os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if !entry.IsDir() && entry.Name() == ".salt" {
-			saltCount++
-		}
-		return nil
-	}); err != nil {
-		t.Fatalf("walk telemetry directory: %v", err)
+	if err := fromTelemetry.Remember(telemetryDir, pseudonym, "same-value"); err != nil {
+		t.Fatalf("remember: %v", err)
 	}
-	if saltCount != 1 {
-		t.Fatalf("found %d salt files, want exactly one", saltCount)
+	if got, ok := Resolve(telemetryDir, pseudonym); !ok || got != "same-value" {
+		t.Fatalf("resolve(%q) = %q, %t; want original value", pseudonym, got, ok)
+	}
+	for _, name := range []string{".salt", ".pseudonyms.jsonl"} {
+		if _, err := os.Stat(filepath.Join(telemetryDir, name)); err != nil {
+			t.Fatalf("stat %s: %v", name, err)
+		}
+	}
+	nestedDir := filepath.Join(telemetryDir, filepath.Base(TelemetryDir("")))
+	if _, err := os.Stat(nestedDir); !os.IsNotExist(err) {
+		t.Fatalf("nested telemetry directory = %v, want absent", err)
 	}
 }
 
@@ -300,7 +309,7 @@ func TestLoadKeySurvivesConcurrentFirstUse(t *testing.T) {
 		t.Fatal("concurrent loads returned no salt")
 	}
 
-	raw, err := os.ReadFile(filepath.Join(dir, "telemetry", ".salt"))
+	raw, err := os.ReadFile(filepath.Join(TelemetryDir(dir), ".salt"))
 	if err != nil {
 		t.Fatalf("read published salt: %v", err)
 	}
@@ -311,7 +320,7 @@ func TestLoadKeySurvivesConcurrentFirstUse(t *testing.T) {
 
 func TestLoadKeyReturnsWhenAStaleLockDirectoryIsPresent(t *testing.T) {
 	dir := t.TempDir()
-	telemetryDir := filepath.Join(dir, "telemetry")
+	telemetryDir := TelemetryDir(dir)
 	if err := os.MkdirAll(telemetryDir, 0700); err != nil {
 		t.Fatalf("create telemetry directory: %v", err)
 	}
@@ -346,7 +355,7 @@ func TestLoadKeyReturnsWhenAStaleLockDirectoryIsPresent(t *testing.T) {
 
 func TestLoadKeyIgnoresAStrayTemporaryFile(t *testing.T) {
 	dir := t.TempDir()
-	telemetryDir := filepath.Join(dir, "telemetry")
+	telemetryDir := TelemetryDir(dir)
 	if err := os.MkdirAll(telemetryDir, 0700); err != nil {
 		t.Fatalf("create telemetry directory: %v", err)
 	}
@@ -376,7 +385,7 @@ func TestLoadKeyIsIdempotentAndPrivate(t *testing.T) {
 	if !reflect.DeepEqual(first.salt, second.salt) {
 		t.Fatalf("salt changed between loads: %x and %x", first.salt, second.salt)
 	}
-	info, err := os.Stat(filepath.Join(dir, "telemetry", ".salt"))
+	info, err := os.Stat(filepath.Join(TelemetryDir(dir), ".salt"))
 	if err != nil {
 		t.Fatalf("stat salt: %v", err)
 	}
@@ -387,21 +396,22 @@ func TestLoadKeyIsIdempotentAndPrivate(t *testing.T) {
 
 func TestRememberAndResolveRoundTrip(t *testing.T) {
 	dir := t.TempDir()
+	telemetryDir := TelemetryDir(dir)
 	key, err := LoadKey(dir)
 	if err != nil {
 		t.Fatalf("load key: %v", err)
 	}
 	pseudonym := key.ID("user", "alice@example.com")
-	if err := key.Remember(dir, pseudonym, "alice@example.com"); err != nil {
+	if err := key.Remember(telemetryDir, pseudonym, "alice@example.com"); err != nil {
 		t.Fatalf("remember: %v", err)
 	}
-	if got, ok := Resolve(dir, pseudonym); !ok || got != "alice@example.com" {
+	if got, ok := Resolve(telemetryDir, pseudonym); !ok || got != "alice@example.com" {
 		t.Fatalf("resolve(%q) = %q, %t, want original value", pseudonym, got, ok)
 	}
-	if got, ok := Resolve(dir, "user-unknown"); ok || got != "" {
+	if got, ok := Resolve(telemetryDir, "user-unknown"); ok || got != "" {
 		t.Fatalf("resolve unknown = %q, %t, want empty false", got, ok)
 	}
-	if got, ok := Resolve(t.TempDir(), pseudonym); ok || got != "" {
+	if got, ok := Resolve(TelemetryDir(t.TempDir()), pseudonym); ok || got != "" {
 		t.Fatalf("resolve missing map = %q, %t, want empty false", got, ok)
 	}
 }

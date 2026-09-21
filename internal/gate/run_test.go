@@ -56,6 +56,23 @@ func TestAppendEntrySealsTheIdentityFields(t *testing.T) {
 	}
 }
 
+func TestGateAndFeedbackShareOneResolutionMap(t *testing.T) {
+	telemetryDir := t.TempDir()
+	key, err := sanitize.LoadKeyIn(telemetryDir)
+	if err != nil {
+		t.Fatalf("load telemetry key: %v", err)
+	}
+	repo := "recognisable-repository-literal"
+	appendEntry(filepath.Join(telemetryDir, "testing-gate.jsonl"), &Entry{Repo: repo})
+	if got, ok := sanitize.Resolve(telemetryDir, key.ID("repo", repo)); !ok || got != repo {
+		t.Fatalf("resolve gate pseudonym = %q, %v; want %q, true", got, ok, repo)
+	}
+	nestedDir := filepath.Join(telemetryDir, filepath.Base(sanitize.TelemetryDir("")))
+	if _, err := os.Stat(nestedDir); !os.IsNotExist(err) {
+		t.Fatalf("nested telemetry directory = %v, want absent", err)
+	}
+}
+
 func TestAppendEntryWritesNoRawIdentityWhenTheSaltCannotBeLoaded(t *testing.T) {
 	telemetryDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(telemetryDir, ".salt"), []byte("invalid"), 0o600); err != nil {
@@ -124,7 +141,7 @@ func TestSealEntryLeavesAnAbsentSessionAbsent(t *testing.T) {
 		t.Fatalf("non-empty session = %q, want sess- pseudonym", withSession.Session)
 	}
 
-	mapPath := filepath.Join(telemetryDir, "telemetry", ".pseudonyms.jsonl")
+	mapPath := filepath.Join(telemetryDir, ".pseudonyms.jsonl")
 	raw, err := os.ReadFile(mapPath)
 	if err != nil {
 		t.Fatalf("read local resolution map: %v", err)
