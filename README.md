@@ -10,6 +10,104 @@ imagining the inputs nobody expects, writing the probe. The binaries do the dete
 installing the skills, wiring the hook that keeps them invoked, and reporting what the
 environment can do so a skill degrades explicitly instead of failing on a tool it assumed.
 
+## Install with an agent
+
+This block is a prompt, not a description: hand it to an agent that has a shell and let it drive the
+install end to end. An install has five steps a model can each skip in silence — the binary that
+never reaches `PATH`, the hook wired to a binary you will delete tomorrow, the rehearsal that never
+ran, the warning read as a verdict, the host declared working because its configuration file was
+written. This project's whole subject is that last failure, so the prompt asks for the exit code and
+the output line behind every claim, and rehearses into a throwaway configuration directory before it
+touches yours.
+
+````text
+Install rdd-plus on this machine and leave it working. Answer in the language the operator wrote to
+you in, and prove every step with the command you ran, its exit code, and the output line that
+carries the claim.
+
+Rules:
+- Never write "installed", "wired" or "working" without the exit code and the output that shows it.
+- Never edit ~/.claude/settings.json by hand. `rdd-plus sync` owns that merge: it preserves every
+  existing setting and hook, adds the gate once, and refuses a file it cannot parse.
+- Decide where the binary will live before the first `sync`. The hook records the absolute path of
+  the binary that ran sync, so run sync from the binary you intend to keep, after it is on PATH.
+- When a step fails, stop and report the failure verbatim instead of improvising around it.
+
+1. Prerequisites. `git --version` and `go version`; go.mod declares `go 1.26`, and the module has no
+   third-party dependencies, so Go and git are the whole requirement. docker, node, python3, claude,
+   codegraph, rtk, gentle-ai and engram are optional. `rdd-plus doctor` names what each one's absence
+   degrades, and that report is the authority rather than a list here.
+
+2. Install the binary. Pick one:
+   a. Published: `go install github.com/alesierraalta/rdd-plus/cmd/rdd-plus@latest`, which lands in
+      `$(go env GOPATH)/bin`. Ensure that directory is on PATH, then confirm with
+      `command -v rdd-plus`.
+   b. From a source checkout, which is what running the tests and the mutants requires:
+      `git clone https://github.com/alesierraalta/rdd-plus.git && cd rdd-plus && make build` writes
+      `bin/rdd-plus`. `make test` runs the suite, `make vet` runs gofmt and go vet, and
+      `go run ./tools/mutants` applies 23 literal mutations to a copy of the tree and requires every
+      one killed. That last one copies the whole working tree file by file, so a checkout carrying
+      local tool state — a `.codegraph/daemon.sock`, for instance — fails before it applies
+      anything: report that, and do not delete the directory to get past it.
+
+3. Prove the binary runs: `rdd-plus version` prints the version and the revision it was built from —
+   `unknown` for a `go install` build, a commit hash for a build from a checkout, with `+dirty` when
+   that checkout has uncommitted changes.
+
+4. Rehearse the install without touching the real configuration. `--config-dir` targets one Claude
+   directory and nothing else, which is what makes this safe:
+
+   ```sh
+   tmp=$(mktemp -d)
+   rdd-plus sync --config-dir "$tmp/cfg" --dry-run     # the plan, writing nothing
+   rdd-plus sync --config-dir "$tmp/cfg"               # $tmp/cfg/skills plus settings.json
+   rdd-plus doctor --config-dir "$tmp/cfg"             # must exit 0
+   ```
+
+   The report carries one line per embedded skill, the command the wired hook runs, whether that
+   command answered, and the capabilities; the line that decides is `verdict: healthy` with exit 0.
+   `doctor --json` prints the same report as a machine reads it.
+
+5. Install for real: `rdd-plus sync` with no `--config-dir` (default `~/.claude`; `--hosts` narrows
+   the run to named hosts), then `rdd-plus doctor`, which must exit 0. A skill you edited locally is
+   moved to `~/.claude/skills/.rdd-plus-backup/<name>-<timestamp>/` before it is replaced, so the run
+   is reversible. Read doctor's warning about the binaries, not only its verdict: doctor compares the
+   binary the hook invokes with the `rdd-plus` on PATH, and when they are different files it says the
+   two would give different verdicts. If it warns, run sync again from the PATH binary and re-check.
+
+6. Two hosts cannot be wired from here. Pi takes `assets/hosts/pi/settings.stop-hook.json` merged
+   into its settings (Pi reads the same `~/.claude/skills`, so it already has the skills), and OpenCode
+   takes `assets/hosts/opencode/rdd-plus.ts` as a plugin. Both shapes were read from their
+   documentation and nobody has watched them fire here: install them if asked, and say plainly that
+   they are unverified instead of reporting them as working.
+
+7. Prove the hook answers without waiting for a real session. In a throwaway git repository, commit a
+   file, write a transcript whose first timestamp precedes the change, touch a production source file,
+   then hand the gate the payload its host would:
+
+   ```sh
+   printf '%s' "{\"session_id\":\"install-check\",\"transcript_path\":\"$tmp/transcript.jsonl\",\"cwd\":\"$tmp/repo\",\"hook_event_name\":\"Stop\",\"stop_hook_active\":false}" \
+     | TESTING_GATE_LOG="$tmp/gate.jsonl" rdd-plus gate
+   ```
+
+   Expected: exit 0, a Stop payload naming the changed file, and one line in `$tmp/gate.jsonl` reading
+   `"fired":true`. A payload the gate cannot read (`printf '{ broken' | rdd-plus gate`) also exits 0
+   and leaves one line reading `"skipped":"unreadable_payload"`. Exit 0 is the contract: the gate
+   grades the turn, it never breaks it, so a non-zero exit is a defect and not a refusal.
+
+8. To leave a project under the discipline and not only the machine: `rdd-plus plan init` writes
+   `docs/testing/test-plan.md`, and `rdd-plus check` exits 1 naming what the repository still owes,
+   layer by layer, from git and the plan alone — no hook payload, no transcript, no host, which is
+   also what makes it usable from CI.
+
+Report a table of command → exit code → the line that proves it, then name what you could not
+verify and why. If doctor does not exit 0 with `verdict: healthy`, the install is not finished: say
+which problem line it printed.
+````
+
+A correct run ends with `rdd-plus doctor` exiting 0, `verdict: healthy`, one line per embedded skill,
+and the Stop hook wired to the binary you kept. The section below is the same install, for a person.
+
 ## Install
 
 ```sh
