@@ -457,6 +457,9 @@ func TestFeedbackCLI(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("submit exit = %d\n%s", code, out)
 	}
+	if !strings.Contains(out, "recorded paid feedback for "+dir) || strings.Contains(out, "repo-") {
+		t.Fatalf("submit must resolve the local repository pseudonym: %q", out)
+	}
 	out, code = runCLI(t, bin, "feedback", "--config-dir", dir, "--summary")
 	if code != 0 || !strings.Contains(out, "1 report") || !strings.Contains(out, "paid: 1") {
 		t.Fatalf("summary after one report = %d\n%s", code, out)
