@@ -28,13 +28,14 @@ Install it from the repository with `make build`, which writes `bin/rdd-plus`; p
 or use `go install github.com/alesierraalta/rdd-plus/cmd/rdd-plus@latest` once the module is
 published. Without the binary the run continues on documented fallbacks: `plan init` is replaced
 by copying [assets/test-plan-template.md](assets/test-plan-template.md) (rule 12); `plan check` by
-applying its checks by hand, as aligned with test-strategy 0.3.11 — the Findings section is a table
-and a finding is a row carrying `path:line` and an evidence id that exists, with no id repeated;
-settled rows name a pinning test; statuses stay inside the closed vocabulary; the tables keep their
-shape (a blank line, a prose line or a fence interrupts them, and a row's cells match its header);
-`Run` cells hold valid run slugs; a `Light:` declaration validates, names a ranked target it
-corroborates and gives every layer it leaves out a reason — and saying in the report that the gate
-was applied by hand, which is a weaker claim than the binary's; and `doctor` by deciding CodeGraph
+applying its checks by hand, as aligned with test-strategy 0.3.11 — the Findings section exists and is a
+table, and a finding is a row carrying `path:line` and an evidence id that exists, with no finding or
+evidence id repeated and no `razonado` row inside the ledger; settled rows name a pinning test;
+statuses stay inside the closed vocabulary; a prose line closes a table and a fenced block is
+documentation, never rows, while a row's cells must match its header; a `Run` column's cells hold
+valid run slugs; a `Light:` declaration validates, is corroborated by a ranked target or a `path:line`
+citation, and gives every layer it leaves out a reason — and saying in the report that the gate was
+applied by hand, which is a weaker claim than the binary's; and `doctor` by deciding CodeGraph
 availability from `codegraph` and `git ls-files`
 instead of the capability probe.
 The run's process feedback — what paid off, what was ceremony, where a rule had to be
