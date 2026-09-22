@@ -1,5 +1,7 @@
 package tui
 
+import "bytes"
+
 // key is one decoded input event. Everything the interaction model binds has a value; every
 // other byte, including digits the model ignores, decodes to keyUnknown.
 type key int
@@ -15,10 +17,7 @@ const (
 	keyCtrlC
 )
 
-// decode turns one read of terminal bytes into keys. Terminals deliver an escape sequence in a
-// single read, so a lone ESC is the esc key while an ESC-[ that does not finish as an up/down
-// arrow inside the same buffer is a partial sequence: unknown, never a panic.
-func decode(p []byte) []key {
+func decodeComplete(p []byte) []key {
 	var keys []key
 	for i := 0; i < len(p); {
 		b := p[i]
@@ -62,4 +61,25 @@ func decode(p []byte) []key {
 		}
 	}
 	return keys
+}
+
+// decoder holds a trailing partial escape sequence across reads: VMIN=1 can end a read after ESC or ESC-[ alone, and firing those early would quit or mis-navigate the menu.
+type decoder struct{ pending []byte }
+
+func (d *decoder) decode(p []byte) []key {
+	buf := append(append(make([]byte, 0, len(d.pending)+len(p)), d.pending...), p...)
+	d.pending = nil
+	i := bytes.LastIndexByte(buf, 0x1b)
+	if i >= 0 && (len(buf)-i == 1 || (len(buf)-i == 2 && buf[i+1] == '[')) {
+		d.pending = append([]byte(nil), buf[i:]...)
+		buf = buf[:i]
+	}
+	return decodeComplete(buf)
+}
+
+// flush emits held bytes once input is exhausted, so a trailing lone ESC still becomes keyEsc.
+func (d *decoder) flush() []key {
+	p := d.pending
+	d.pending = nil
+	return decodeComplete(p)
 }

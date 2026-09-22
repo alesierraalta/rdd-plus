@@ -207,3 +207,16 @@ func TestRunInputExhaustedIsNotQuit(t *testing.T) {
 		t.Errorf("Run exhausted input: %v, want io.EOF", err)
 	}
 }
+
+func TestRunArrowSplitAcrossReads(t *testing.T) {
+	s := &spy{}
+	var out bytes.Buffer
+	in := io.MultiReader(strings.NewReader("\x1b"), strings.NewReader("[B"), strings.NewReader("\r"), strings.NewReader("q"))
+	if err := Run(in, &out, s.deps()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	hasTitle := strings.Contains(out.String(), "rdd-plus tui: features")
+	if s.featuresCall != 1 || s.statusCalls != 0 || !hasTitle {
+		t.Errorf("features=%d status=%d hasTitle=%v, want 1, 0, true", s.featuresCall, s.statusCalls, hasTitle)
+	}
+}

@@ -84,9 +84,14 @@ func Run(in io.Reader, out io.Writer, deps Deps) error {
 		return err
 	}
 	buf := make([]byte, 256)
+	var dec decoder
 	for {
 		n, readErr := in.Read(buf)
-		for _, k := range decode(buf[:n]) {
+		keys := dec.decode(buf[:n])
+		if readErr != nil {
+			keys = append(keys, dec.flush()...)
+		}
+		for _, k := range keys {
 			if a.handle(k) {
 				return nil
 			}
