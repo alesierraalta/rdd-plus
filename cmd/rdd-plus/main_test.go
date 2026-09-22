@@ -115,6 +115,68 @@ func TestCLIContract(t *testing.T) {
 	}
 }
 
+// The TUI needs a real terminal; on a pipe it must refuse before tui.Run and point at the
+// non-interactive equivalents instead of hanging on a loop no one can drive.
+func TestTUIRefusesWithoutATerminal(t *testing.T) {
+	t.Setenv("RDD_PLUS_HOME", t.TempDir())
+	bin := buildCLI(t)
+	cmd := exec.Command(bin, "tui")
+	cmd.Stdin = strings.NewReader("")
+	out, err := cmd.CombinedOutput()
+	code := 0
+	if ee := (&exec.ExitError{}); err != nil {
+		if ok := asExit(err, ee); ok {
+			code = ee.ExitCode()
+		} else {
+			t.Fatalf("run: %v", err)
+		}
+	}
+	if code != 1 {
+		t.Fatalf("exit = %d, want 1\n%s", code, out)
+	}
+	for _, name := range []string{"status", "feature", "sync --dry-run"} {
+		if !strings.Contains(string(out), name) {
+			t.Errorf("refusal does not name %q:\n%s", name, out)
+		}
+	}
+}
+
+// /dev/null is a character device, so a mode-bit guard let it through and tui.Run drew a frame
+// before failing. The refusal must come first, with no ANSI reaching stdout.
+func TestTUIRefusesNullDeviceStdinWithoutDrawing(t *testing.T) {
+	t.Setenv("RDD_PLUS_HOME", t.TempDir())
+	bin := buildCLI(t)
+	null, err := os.Open("/dev/null")
+	if err != nil {
+		t.Skipf("cannot open /dev/null: %v", err)
+	}
+	defer null.Close()
+	cmd := exec.Command(bin, "tui")
+	cmd.Stdin = null
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	err = cmd.Run()
+	code := 0
+	if ee := (&exec.ExitError{}); err != nil {
+		if ok := asExit(err, ee); ok {
+			code = ee.ExitCode()
+		} else {
+			t.Fatalf("run: %v", err)
+		}
+	}
+	if code != 1 {
+		t.Fatalf("exit = %d, want 1\nstderr: %s\nstdout: %q", code, stderr.String(), stdout.String())
+	}
+	for _, name := range []string{"status", "feature", "sync --dry-run"} {
+		if !strings.Contains(stderr.String(), name) {
+			t.Errorf("refusal does not name %q:\n%s", name, stderr.String())
+		}
+	}
+	if strings.Contains(stdout.String(), "\x1b[?25l") {
+		t.Fatalf("stdout received a frame before the refusal: %q", stdout.String())
+	}
+}
+
 // ledgerHeader is the shipped Evidence ledger header. The `Admit` and `Digest` columns are the two a
 // recording run reads and writes, so a fixture drifting from this header would test another contract.
 const ledgerHeader = "| Id | Claim | Executed | Admit | Inputs and parameters | Observed | Digest | Mutation or negative control → result | Reproduction | Label (`observado` / `razonado`, literal) |\n" +
@@ -804,7 +866,7 @@ func TestUsageListsEveryBenchSubcommand(t *testing.T) {
 			t.Errorf("usage does not document %q", sub)
 		}
 	}
-	for _, cmd := range []string{"gate", "sync", "doctor", "bench", "plan", "feedback", "version"} {
+	for _, cmd := range []string{"gate", "sync", "doctor", "bench", "plan", "feedback", "version", "tui"} {
 		if !strings.Contains(usage, "  "+cmd+" ") {
 			t.Errorf("usage does not document the %q command", cmd)
 		}

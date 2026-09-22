@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -29,6 +30,7 @@ import (
 	"github.com/alesierraalta/rdd-plus/internal/sanitize"
 	"github.com/alesierraalta/rdd-plus/internal/state"
 	"github.com/alesierraalta/rdd-plus/internal/sync"
+	"github.com/alesierraalta/rdd-plus/internal/tui"
 )
 
 // exitArtifact is what the CLI returns when its machine-readable output could not be written: the run
@@ -51,6 +53,7 @@ commands:
            no transcript, no host. Exit 1 when there is something to do.
   status   report the local installation state and optional features
   feature  list, enable, or disable an optional feature
+  tui      interactive menu over status, feature toggles, and the sync dry-run plan
   feedback record an honest process report on the method itself, or read the reports back
            (--template | --file <path> | --summary)
   version  print the version
@@ -138,6 +141,8 @@ func main() {
 		os.Exit(runStatus(os.Args[2:]))
 	case "feature":
 		os.Exit(runFeature(os.Args[2:]))
+	case "tui":
+		os.Exit(runTUI(os.Args[2:]))
 	case "feedback":
 		os.Exit(runFeedback(os.Args[2:]))
 	case "version":
@@ -174,6 +179,31 @@ type statusReport struct {
 
 const unknownAvailableVersion = "unknown (no update check yet)"
 
+// statusView assembles the status table once for both `status` and the TUI's status pane.
+func statusView() (tui.StatusView, error) {
+	path, err := state.Path()
+	if err != nil {
+		return tui.StatusView{}, err
+	}
+	stateExists := true
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		stateExists = false
+	} else if err != nil {
+		return tui.StatusView{}, err
+	}
+	features, err := currentFeatureStates()
+	if err != nil {
+		return tui.StatusView{}, err
+	}
+	return tui.StatusView{
+		StateRoot:        filepath.Dir(path),
+		StateExists:      stateExists,
+		InstalledVersion: buildinfo.Version,
+		AvailableVersion: unknownAvailableVersion,
+		Features:         features,
+	}, nil
+}
+
 func runStatus(args []string) int {
 	jsonOutput := false
 	for _, arg := range args {
@@ -185,29 +215,20 @@ func runStatus(args []string) int {
 		return 2
 	}
 
-	path, err := state.Path()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "status:", err)
-		return 1
-	}
-	stateExists := true
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		stateExists = false
-	} else if err != nil {
-		fmt.Fprintln(os.Stderr, "status:", err)
-		return 1
-	}
-	features, err := currentFeatureStates()
+	view, err := statusView()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "status:", err)
 		return 1
 	}
 	report := statusReport{
-		StateRoot:        filepath.Dir(path),
-		StateExists:      stateExists,
-		InstalledVersion: buildinfo.Version,
-		AvailableVersion: unknownAvailableVersion,
-		Features:         features,
+		StateRoot:        view.StateRoot,
+		StateExists:      view.StateExists,
+		InstalledVersion: view.InstalledVersion,
+		AvailableVersion: view.AvailableVersion,
+		Features:         make([]statusFeature, len(view.Features)),
+	}
+	for i, row := range view.Features {
+		report.Features[i] = statusFeature{ID: row.ID, Title: row.Title, Enabled: row.Enabled}
 	}
 	if jsonOutput {
 		encoded, err := json.Marshal(report)
@@ -276,15 +297,15 @@ func runFeature(args []string) int {
 	}
 }
 
-func currentFeatureStates() ([]statusFeature, error) {
+func currentFeatureStates() ([]tui.FeatureRow, error) {
 	declarations := feature.All()
-	states := make([]statusFeature, 0, len(declarations))
+	states := make([]tui.FeatureRow, 0, len(declarations))
 	for _, declaration := range declarations {
 		enabled, err := feature.Enabled(declaration.ID)
 		if err != nil {
 			return nil, err
 		}
-		states = append(states, statusFeature{ID: declaration.ID, Title: declaration.Title, Enabled: enabled})
+		states = append(states, tui.FeatureRow{ID: declaration.ID, Title: declaration.Title, Enabled: enabled})
 	}
 	return states, nil
 }
@@ -334,6 +355,33 @@ func yesNo(value bool) string {
 	return "no"
 }
 
+// runTUI wires the interactive menu to the same sources the subcommands read. The guard runs before
+// tui.Run: raw mode exists only on linux/darwin terminals, and a pipe cannot be driven key-per-key,
+// so a non-TTY stdin or stdout (or any other OS) is refused with the non-interactive equivalents instead.
+func runTUI(args []string) int {
+	if len(args) > 0 {
+		fmt.Fprintf(os.Stderr, "tui: unexpected argument %q\n", args[0])
+		return 2
+	}
+	isTTY := tui.IsTerminal(os.Stdin) && tui.IsTerminal(os.Stdout)
+	supportedOS := runtime.GOOS == "linux" || runtime.GOOS == "darwin"
+	if !isTTY || !supportedOS {
+		fmt.Fprintln(os.Stderr, "tui: needs an interactive terminal; use status, feature, or sync --dry-run instead")
+		return 1
+	}
+	if err := tui.Run(os.Stdin, os.Stdout, tui.Deps{
+		Status:     statusView,
+		Features:   currentFeatureStates,
+		SetFeature: feature.Set,
+		Preview:    feature.Preview,
+		SyncPlan:   syncPlan,
+	}); err != nil {
+		fmt.Fprintln(os.Stderr, "tui:", err)
+		return 1
+	}
+	return 0
+}
+
 func runSync(args []string) int {
 	fs := flag.NewFlagSet("sync", flag.ContinueOnError)
 	configDir := fs.String("config-dir", defaultConfigDir(), "Claude config directory")
@@ -349,19 +397,7 @@ func runSync(args []string) int {
 		fmt.Fprintln(os.Stderr, "sync:", err)
 		return 2
 	}
-	home, homeErr := os.UserHomeDir()
-	if homeErr != nil {
-		home = ""
-	}
-	var discovery sync.Discovery
-	if flagSet(fs, "config-dir") {
-		discovery = sync.DiscoverHosts(home, *configDir)
-	} else {
-		discovery = sync.DiscoverHosts(home)
-	}
-	if homeErr != nil {
-		discovery.Problems = append(discovery.Problems, fmt.Sprintf("cannot determine home directory: %v", homeErr))
-	}
+	discovery := discoverSync(*configDir, flagSet(fs, "config-dir"))
 	if flagSet(fs, "config-dir") {
 		discovery.Hosts = filterSyncHosts(discovery.Hosts, map[string]bool{"claude": true})
 	}
@@ -369,20 +405,52 @@ func runSync(args []string) int {
 		discovery.Hosts = filterSyncHosts(discovery.Hosts, selected)
 	}
 
-	bin, err := os.Executable()
-	if err == nil {
-		bin, _ = filepath.Abs(bin)
-	}
-	report, err := sync.SyncHosts(discovery.Hosts, bin, sync.Options{DryRun: *dryRun, Force: *force})
-	report.LookedFor = discovery.LookedFor
-	report.DiscoveryErrors = discovery.Problems
-	report.ClaudeConfigDir = discovery.ClaudeConfigDir
-	fmt.Print(report.String())
+	text, err := syncReport(discovery, sync.Options{DryRun: *dryRun, Force: *force})
+	fmt.Print(text)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "sync:", err)
 		return 1
 	}
 	return 0
+}
+
+// discoverSync builds the host discovery sync runs against; an explicit --config-dir narrows the
+// result to Claude, and a home directory that cannot be determined is a problem to report, not a
+// failure, because discovery still answers with what it could see.
+func discoverSync(configDir string, explicitConfigDir bool) sync.Discovery {
+	home, homeErr := os.UserHomeDir()
+	if homeErr != nil {
+		home = ""
+	}
+	var discovery sync.Discovery
+	if explicitConfigDir {
+		discovery = sync.DiscoverHosts(home, configDir)
+	} else {
+		discovery = sync.DiscoverHosts(home)
+	}
+	if homeErr != nil {
+		discovery.Problems = append(discovery.Problems, fmt.Sprintf("cannot determine home directory: %v", homeErr))
+	}
+	return discovery
+}
+
+// syncReport runs the sync planner over discovery and returns the classified report text: the one
+// output path `sync` prints and the TUI's dry-run plan shows.
+func syncReport(discovery sync.Discovery, opts sync.Options) (string, error) {
+	bin, err := os.Executable()
+	if err == nil {
+		bin, _ = filepath.Abs(bin)
+	}
+	report, err := sync.SyncHosts(discovery.Hosts, bin, opts)
+	report.LookedFor = discovery.LookedFor
+	report.DiscoveryErrors = discovery.Problems
+	report.ClaudeConfigDir = discovery.ClaudeConfigDir
+	return report.String(), err
+}
+
+// syncPlan is the TUI's plan view: the dry-run planner only — writes nothing, forces nothing.
+func syncPlan() (string, error) {
+	return syncReport(discoverSync("", false), sync.Options{DryRun: true})
 }
 
 func parseSyncHosts(raw string, explicit bool) (map[string]bool, error) {
