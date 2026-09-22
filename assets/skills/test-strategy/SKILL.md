@@ -31,8 +31,9 @@ by copying [assets/test-plan-template.md](assets/test-plan-template.md) (rule 12
 applying its checks by hand, as aligned with test-strategy 0.3.11 — the Findings section exists and is a
 table, and a finding is a row carrying `path:line` and an evidence id that exists, with no finding or
 evidence id repeated and no `razonado` row inside the ledger; settled rows name a pinning test;
-statuses stay inside the closed vocabulary; a prose line closes a table and a fenced block is
-documentation, never rows, while a row's cells must match its header; a `Run` column's cells hold
+statuses stay inside the closed vocabulary; a prose line closes a table, a fenced block is
+documentation and an unclosed fence fails closed, while a row's cells must match its header; a `Run`
+column's cells hold
 valid run slugs; a `Light:` declaration validates, is corroborated by a ranked target or a `path:line`
 citation, and gives every layer it leaves out a reason — and saying in the report that the gate was
 applied by hand, which is a weaker claim than the binary's; and `doctor` by deciding CodeGraph

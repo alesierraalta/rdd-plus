@@ -54,6 +54,15 @@ func TestFindingsStatusVocabularyMatchesShippedTemplate(t *testing.T) {
 	for _, status := range strings.Split(FindingsStatusList, ", ") {
 		accepted[strings.TrimSpace(status)] = true
 	}
+	// FindingsStatusList is the human-facing list; findingsStatuses is what Check enforces. A status
+	// added to one and not the other is the same drift one door along.
+	enforced := map[string]bool{}
+	for status := range findingsStatuses {
+		enforced[status] = true
+	}
+	if !reflect.DeepEqual(accepted, enforced) {
+		t.Fatalf("the check enforces %v, but FindingsStatusList documents %q", enforced, FindingsStatusList)
+	}
 	if !reflect.DeepEqual(documented, accepted) {
 		t.Fatalf("template statuses %q do not match FindingsStatusList %q", statusLine, FindingsStatusList)
 	}
