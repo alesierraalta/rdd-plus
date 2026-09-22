@@ -19,7 +19,7 @@ func validText() string {
 		"ts: 2026-09-10T12:00:00Z\n" +
 		"repo: /repo\n" +
 		"plan: docs/testing/test-plan.md\n" +
-		"skill: 0.3.6\n" +
+		"skill: test-strategy 0.3.9\n" +
 		"build: 0.3.6 (abc1234)\n" +
 		"paid: the plan made me write the row first\n" +
 		"cost: two hours\n" +
@@ -37,7 +37,7 @@ func TestParseReadsTheTemplateShape(t *testing.T) {
 	if r.TS != "2026-09-10T12:00:00Z" || r.Repo != "/repo" || r.Plan != "docs/testing/test-plan.md" {
 		t.Fatalf("identity mangled: %+v", r)
 	}
-	if r.Skill != "0.3.6" || r.Build != "0.3.6 (abc1234)" {
+	if r.Skill != "test-strategy 0.3.9" || r.Build != "0.3.6 (abc1234)" {
 		t.Fatalf("build identity mangled: %+v", r)
 	}
 	if r.Paid != "the plan made me write the row first" || r.Cost != "two hours" {
@@ -48,6 +48,40 @@ func TestParseReadsTheTemplateShape(t *testing.T) {
 	}
 	if r.Guess != "I cannot tell a probe from a pin" || r.Freeform != "ship it" {
 		t.Fatalf("optional fields mangled: %+v", r)
+	}
+}
+
+func TestParseValidatesSkillIdentityShape(t *testing.T) {
+	tests := []struct {
+		name    string
+		skill   string
+		wantErr bool
+	}{
+		{name: "breakcheck version", skill: "breakcheck 0.1.0"},
+		{name: "test strategy version", skill: "test-strategy 0.3.9"},
+		{name: "bare name", skill: "breakcheck"},
+		{name: "bare version", skill: "0.3.9", wantErr: true},
+		{name: "free prose", skill: "bounded campaign, five probes", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			text := strings.Replace(validText(), "skill: test-strategy 0.3.9", "skill: "+tt.skill, 1)
+			_, err := Parse(text)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("Parse accepted an invalid skill identity")
+				}
+				for _, want := range []string{"<name>", "<version>"} {
+					if !strings.Contains(err.Error(), want) {
+						t.Fatalf("refusal missing %q: %v", want, err)
+					}
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+		})
 	}
 }
 
@@ -104,8 +138,8 @@ func TestParseRefusesAVerdictOutsideTheThree(t *testing.T) {
 }
 
 func TestTemplateFillsTheIdentityAndNamesTheSubmitCommand(t *testing.T) {
-	got := Template(Report{TS: "t", Repo: "/repo", Plan: "/plan", Skill: "0.3.6", Build: "0.3.6 (abc)"})
-	for _, want := range []string{"ts: t", "repo: /repo", "plan: /plan", "skill: 0.3.6", "build: 0.3.6 (abc)"} {
+	got := Template(Report{TS: "t", Repo: "/repo", Plan: "/plan", Skill: "test-strategy 0.3.9", Build: "0.3.6 (abc)"})
+	for _, want := range []string{"ts: t", "repo: /repo", "plan: /plan", "skill: test-strategy 0.3.9", "build: 0.3.6 (abc)"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("template missing %q:\n%s", want, got)
 		}
@@ -462,6 +496,26 @@ func TestParseRefusesTheSanitizedMarkerAsAnInputKey(t *testing.T) {
 	}
 }
 
+func TestReadLoadsLegacySkillUnchangedAfterRecord(t *testing.T) {
+	enableFeedbackForTest(t)
+	dir := t.TempDir()
+	want := Report{
+		TS: "2026-09-10T12:00:00Z", Repo: "/repo", Plan: "p", Skill: "0.3.6", Build: "b",
+		Paid: "paid words", Cost: "one hour", Reason: "reason", Verdict: VerdictPaid,
+		Sanitized: true, // Record marks what it wrote; Read resolves the pseudonyms back to these values
+	}
+	if err := Record(dir, want); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	got, err := Read(dir)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if len(got) != 1 || got[0] != want {
+		t.Fatalf("legacy report changed: got %#v, want %#v", got, []Report{want})
+	}
+}
+
 func TestReadMissingLedgerIsEmptyNotAnError(t *testing.T) {
 	got, err := Read(t.TempDir())
 	if err != nil {
@@ -504,6 +558,59 @@ func TestSummaryCountsVerdictsAndSkillVersions(t *testing.T) {
 	}
 }
 
+func TestSummaryClassifiesUnknownVerdicts(t *testing.T) {
+	enableFeedbackForTest(t)
+	dir := t.TempDir()
+	if err := Record(dir, Report{TS: "2026-09-11T00:00:00Z", Repo: "/r", Plan: "p", Skill: "0.3.6", Build: "b",
+		Paid: "a", Cost: "b", Reason: "unknown", Verdict: "mystery"}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	got, err := Summary(dir)
+	if err != nil {
+		t.Fatalf("Summary: %v", err)
+	}
+	for _, want := range []string{
+		"unknown: 1",
+		"0.3.6: 1 (paid 0, partly 0, ceremony 0, unknown 1)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("summary missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestSummaryGroupsReportsByProject(t *testing.T) {
+	enableFeedbackForTest(t)
+	dir := t.TempDir()
+	records := []Report{
+		{TS: "2026-09-12T00:00:00Z", Repo: "/repo-a", Plan: "p", Skill: "0.3.6", Build: "b",
+			Paid: "a", Cost: "b", Reason: "partly", Verdict: VerdictPartly},
+		{TS: "2026-09-13T00:00:00Z", Repo: "/repo-z", Plan: "p", Skill: "0.3.6", Build: "b",
+			Paid: "a", Cost: "b", Reason: "paid", Verdict: VerdictPaid},
+	}
+	for _, r := range records {
+		if err := Record(dir, r); err != nil {
+			t.Fatalf("Record: %v", err)
+		}
+	}
+	got, err := Summary(dir)
+	if err != nil {
+		t.Fatalf("Summary: %v", err)
+	}
+	for _, want := range []string{
+		"by project:",
+		"/repo-z: 1 (paid 1, partly 0, ceremony 0)",
+		"/repo-a: 1 (paid 0, partly 1, ceremony 0)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("summary missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Index(got, "/repo-z:") > strings.Index(got, "/repo-a:") {
+		t.Fatalf("projects must be sorted by name:\n%s", got)
+	}
+}
+
 func TestSummaryListsRecentGuessesNewestFirst(t *testing.T) {
 	enableFeedbackForTest(t)
 	dir := t.TempDir()
@@ -535,6 +642,12 @@ func TestSummaryOnAMissingLedgerSaysSo(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToLower(got), "no reports") {
 		t.Fatalf("want a plain no-reports line, got:\n%s", got)
+	}
+}
+
+func TestEmbeddedSkillIdentityNamesTheEmbeddedSkill(t *testing.T) {
+	if got := EmbeddedSkillIdentity(); got != "test-strategy 0.3.10" {
+		t.Fatalf("embedded skill identity = %q, want %q", got, "test-strategy 0.3.10")
 	}
 }
 

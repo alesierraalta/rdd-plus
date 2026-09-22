@@ -56,6 +56,27 @@ func TestLoadKeyMissingFile(t *testing.T) {
 	}
 }
 
+func TestLoadKeyCleanControl(t *testing.T) {
+	clean := `{"id":"c1","language":"go","suite":"go test ./...","surface":"lib","control":"clean","defects":[]}`
+	key, err := LoadKey(writeKey(t, clean))
+	if err != nil {
+		t.Fatalf("clean control refused: %v", err)
+	}
+	if !key.IsCleanControl() {
+		t.Fatalf("IsCleanControl = false for %+v", key)
+	}
+
+	withDefect := `{"id":"c1","language":"go","suite":"go test ./...","surface":"lib","control":"clean","defects":[{"id":"d1","file":"src/a.go","line":3,"keywords":["limit"]}]}`
+	if _, err := LoadKey(writeKey(t, withDefect)); err == nil || !strings.Contains(err.Error(), "1 defect") {
+		t.Fatalf("clean control with one defect error = %v, want the count", err)
+	}
+
+	unknown := strings.Replace(clean, `"clean"`, `"mystery"`, 1)
+	if _, err := LoadKey(writeKey(t, unknown)); err == nil || !strings.Contains(err.Error(), `mystery`) || !strings.Contains(err.Error(), "clean") {
+		t.Fatalf("unknown control error = %v, want value and accepted control", err)
+	}
+}
+
 // A case's bounded request is the unit of work the run is asked to test. A key without one is the
 // generic case the bench has always run; a key that supplies a blank one is a mistake in the key, so
 // it is refused instead of being read back as "no request".

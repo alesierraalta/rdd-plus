@@ -23,6 +23,7 @@ type DefectResult struct {
 	File      string `json:"file"`
 	Line      int    `json:"line"`
 	Found     bool   `json:"found"`
+	Confirmed bool   `json:"confirmed"`
 	MatchedBy string `json:"matched_by,omitempty"` // "line" or "keyword"
 	// ClaimedPinned reports that the finding names a test pinning it; whether that test
 	// distinguishes anything is measured separately, by the catch check.
@@ -34,11 +35,20 @@ type DefectResult struct {
 type Result struct {
 	Case                 string         `json:"case"`
 	Run                  int            `json:"run"`
+	Control              bool           `json:"control"`
 	Defects              []DefectResult `json:"defects"`
 	Total                int            `json:"total"`
 	Found                int            `json:"found"`
 	Recall               float64        `json:"recall"`
 	FalsePositives       int            `json:"false_positives"`
+	UnmatchedFindings    int            `json:"unmatched_findings"`
+	PendingAdjudication  int            `json:"pending_adjudication"`
+	AdjudicatedTrue      int            `json:"adjudicated_true"`
+	AdjudicatedFalse     int            `json:"adjudicated_false"`
+	OutOfScope           int            `json:"out_of_scope"`
+	Precision            *float64       `json:"precision"`
+	AdjudicationComplete bool           `json:"adjudication_complete"`
+	MetricsVersion       int            `json:"metrics_version"`
 	FindingRows          int            `json:"finding_rows"`
 	FindingsWithEvidence int            `json:"findings_with_evidence"`
 	LedgerRows           int            `json:"ledger_rows"`
@@ -53,7 +63,8 @@ type Result struct {
 	Suite                SuiteResult    `json:"suite"`
 	Workspace            string         `json:"workspace,omitempty"`
 	PlanFound            bool           `json:"plan_found"`
-	PlanFormat           string         `json:"plan_format"` // FormatTable, FormatProse or FormatEmpty
+	PlanPath             string         `json:"plan_path,omitempty"` // workspace-relative path read, set only when a plan was found
+	PlanFormat           string         `json:"plan_format"`         // FormatTable, FormatProse or FormatEmpty
 	// LightActivated records that the run declared a scoped run its own plan validates. It is the only
 	// durable answer to "did the mode run?": a defect found, a well-formed ordinary plan, or a line that
 	// merely looks like a declaration leaves it false.
@@ -77,29 +88,144 @@ type citation struct {
 	last  int
 }
 
-// ScoreWorkspace reads the plan from a workspace and scores it; a missing plan scores zero.
+type planPathResolution struct {
+	refusalNote  string
+	refused      bool
+	declared     bool
+	declaredPath string
+}
+
+// resolvePlanPath returns the workspace-relative plan a run delivered: the path its .rdd-plus.json
+// declares, else PlanPath. DeclaredPath only ever returns a validated repository-relative path: an
+// absolute or escaping declaration is refused there, not returned, and the fallback to PlanPath carries a
+// note naming it. Whatever path will be read then has to resolve inside the workspace; a path that cannot
+// be checked, cannot be followed, or resolves outside is refused before it is read.
+func resolvePlanPath(ws string) (string, planPathResolution) {
+	declared, err := plancheck.DeclaredPath(ws, nil)
+
+	path := PlanPath
+	resolution := planPathResolution{}
+	switch {
+	case err != nil:
+		// The declaration is refused lexically and the default path is read instead — and that fallback
+		// is guarded like any other selection, because a rejected declaration must not become a way to
+		// read an unchecked path.
+		resolution.refusalNote = fmt.Sprintf("declared plan path refused (%v); read %s instead", err, PlanPath)
+	case declared != "":
+		path = declared
+		resolution.declared = true
+		resolution.declaredPath = declared
+	}
+
+	root, rootErr := filepath.EvalSymlinks(ws)
+	target, targetErr := filepath.EvalSymlinks(filepath.Join(ws, path))
+	if rootErr != nil {
+		// Containment cannot be proven without the real workspace, and a path that cannot be checked is
+		// not a path that is inside. Returning here would read the plan unchecked.
+		resolution.refused = true
+		resolution.refusalNote = joinNotes(resolution.refusalNote, fmt.Sprintf("workspace %q could not be resolved (%v); the plan was not read", ws, rootErr))
+		return path, resolution
+	}
+	if targetErr != nil {
+		// Absent is the ordinary flow. Anything else — a symlink loop, a link that cannot be
+		// followed — is a path that cannot be read as a plan, and saying it is missing would be
+		// the same false claim this bench has been removing.
+		if os.IsNotExist(targetErr) {
+			return path, resolution
+		}
+		resolution.refused = true
+		resolution.refusalNote = joinNotes(resolution.refusalNote, fmt.Sprintf("selected plan path %q refused: %v", path, targetErr))
+		return path, resolution
+	}
+	rel, err := filepath.Rel(root, target)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		resolution.refused = true
+		resolution.refusalNote = joinNotes(resolution.refusalNote, fmt.Sprintf("selected plan path %q refused: resolves outside workspace to %q", path, target))
+	}
+	return path, resolution
+}
+
+// joinNotes keeps an earlier refusal and the one that decided the outcome in a single note, so a rejected
+// declaration that also escapes does not lose either fact.
+func joinNotes(first, second string) string {
+	if first == "" {
+		return second
+	}
+	return first + "; " + second
+}
+
+// noteMissingDeclaredPlan names the plan a declaration overrode when the declared path yielded no plan.
+// It distinguishes a path that is not there from one that is there and was not read as a plan, because a
+// note that says "was not found" about an existing file is a false statement in the run's record.
+func noteMissingDeclaredPlan(ws string, r Result, resolution planPathResolution) Result {
+	if r.PlanFound || !resolution.declared {
+		return r
+	}
+	for _, note := range r.Notes {
+		if strings.HasPrefix(note, planReadFailureNotePrefix) {
+			return r
+		}
+	}
+	declared := resolution.declaredPath
+	note := ""
+	switch {
+	case pathExists(filepath.Join(ws, declared)):
+		note = fmt.Sprintf("declared plan %q exists but was not read as a plan", declared)
+	case pathExists(filepath.Join(ws, PlanPath)):
+		note = fmt.Sprintf("declared plan %q was not found; default plan %q was not read", declared, PlanPath)
+	default:
+		note = fmt.Sprintf("declared plan %q was not found; default plan %q holds nothing either", declared, PlanPath)
+	}
+	r.Notes = append(r.Notes, note)
+	return r
+}
+
+// pathExists reports whether the path is there, whatever it is: absent and unreadable are different
+// answers, and only the caller knows which one the note should carry.
+func pathExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// scoreRefusedPlan returns the zero score for a selected plan path that must not be read.
+func scoreRefusedPlan(key Key, resolution planPathResolution) Result {
+	r := Score("", key)
+	r.Notes = append(r.Notes, resolution.refusalNote)
+	return r
+}
+
+// ScoreWorkspace scores the plan a workspace delivered: the path it declares, else PlanPath. A
+// missing plan scores zero.
 func ScoreWorkspace(ws string, key Key) Result {
-	return ScorePlanFile(filepath.Join(ws, PlanPath), key)
+	path, resolution := resolvePlanPath(ws)
+	if resolution.refused {
+		return scoreRefusedPlan(key, resolution)
+	}
+	r := ScorePlanFile(filepath.Join(ws, path), key)
+	if resolution.refusalNote != "" {
+		r.Notes = append(r.Notes, resolution.refusalNote)
+	}
+	if r.PlanFound {
+		r.PlanPath = path
+	}
+	return noteMissingDeclaredPlan(ws, r, resolution)
 }
 
 // ScorePlanFile scores one plan file, such as the copy a run keeps next to its result.json.
 func ScorePlanFile(path string, key Key) Result {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		r := Score("", key)
-		r.Notes = append(r.Notes, "no plan")
-		return r
-	}
-	r := Score(string(raw), key)
-	r.PlanFound = true
+	r, _ := ScorePlanFileWithAdjudication(path, key, nil)
 	return r
 }
 
-// Score applies the scoring rule to plan text. A defect is found when a finding row cites its
-// file and either a line within LineTolerance or one of its keywords; a row matching no defect
-// is a false positive.
+// Score applies the mechanical proposal rules and leaves every finding row pending adjudication.
 func Score(plan string, key Key) Result {
-	r := Result{Case: key.ID, Total: len(key.Defects), LightActivated: plancheck.LightActivated(plan)}
+	r, _ := ScoreAdjudicated(plan, key, nil)
+	return r
+}
+
+// scoreMechanical applies the lexical and location rules without deciding whether a proposal is true.
+func scoreMechanical(plan string, key Key) Result {
+	r := Result{Case: key.ID, Control: key.IsCleanControl(), Total: len(key.Defects), LightActivated: plancheck.LightActivated(plan), MetricsVersion: MetricsVersion}
 	findings := plancheck.Section(plan, "Findings")
 	findingsHeader, rows := plancheck.Table(plan, "Findings")
 	r.FindingRows = len(rows)
@@ -125,6 +251,8 @@ func Score(plan string, key Key) Result {
 	}
 
 	// Attribution is per row, not per defect: one finding row is one claim.
+	// A clean control has no keyed defect to propose against, so every finding row is unmatched and stays pending
+	// until a decision makes it a false positive or out of scope.
 	claims := attribution(rows, key, ledgerByID)
 	r.RowsWithoutPath = claims.withoutPath
 	byID := map[string]*DefectResult{}
@@ -145,7 +273,7 @@ func Score(plan string, key Key) Result {
 	}
 	for _, m := range claims.matched {
 		if !m {
-			r.FalsePositives++
+			r.UnmatchedFindings++
 		}
 	}
 	if r.RowsWithoutPath > 0 {
@@ -176,8 +304,9 @@ type rowClaims struct {
 }
 
 // claimed reads one finding row against every defect and reports the ids it is credited to, plus whether it
-// matched a defect at all — which is what separates a finding from a false positive. A defect named by keyword is
-// credited directly; a row that matches only by line goes to the nearest defect.
+// has any lexical or location proposal. A proposal is deliberately not a verdict: adjudication decides whether
+// the row is a true finding, a false positive, or out of scope. A defect named by keyword is credited directly;
+// a row that matches only by line goes to the nearest defect.
 func claimed(text, linked string, defects []Defect) (map[string]bool, bool) {
 	ids := map[string]bool{}
 	var specific []Defect

@@ -17,6 +17,9 @@ bench/cases/<id>/
   fix/keep-<ID>/    every other defect fixed, defect <ID> left exactly as in fixture/ (multi-defect cases)
 ```
 
+A clean negative control ships `KEY.json` and `fixture/` only: with nothing planted there is nothing
+to fix and no variant to overlay.
+
 Node fixtures run with `node --test` (ESM, no dependencies). Go fixtures run with `go test ./...`
 (standard library only). Every suite is green with the defects present.
 
@@ -81,7 +84,11 @@ identical every time. There is little to remove.
 ## Scoring
 
 The runner copies `fixture/` into a fresh workspace, runs the flow under evaluation there, and
-reads the `docs/testing/test-plan.md` it produced. For every key defect:
+reads the plan the workspace declares in `.rdd-plus.json`, or `docs/testing/test-plan.md` when it
+declares none. `result.json` records the path it read as `plan_path`. A declaration that cannot be
+read or that escapes the workspace is refused: the default path is read instead, and the refusal is
+named in the run's notes so a run is never silently scored as having delivered no plan. For every
+key defect:
 
 - **found** when a finding row, together with the Evidence ledger rows it cites, names the same
   file and either a line within ±5 of the key line or any of the key's keywords;
@@ -100,8 +107,68 @@ only if it names several), and a row that matches by line alone goes to the near
 cases plant two defects within the line tolerance of each other, so without this a run that
 noticed one of them would read as having noticed both.
 
-A **false positive** is a finding whose location is not in the key. Recall is found over key
-defects; precision is found over findings.
+A **false positive** is a finding row a decision says is wrong. Lexical and location matching only
+**proposes** an association; nothing is a false positive by default. A row that matches nothing is
+**unmatched**, and a row nobody has decided is **pending**, which is what the summary, the
+aggregate and the history report.
+
+Recall is found over key defects; precision is found over findings.
+
+### The three facts about one defect
+
+- **reported** is the mechanical measure above: a row that cites the defect's file and either a
+  line within ±5 or one of its keywords counts. It needs no reviewer and is comparable across runs.
+- **confirmed** is the adjudicated measure: the row counts only once a person, or a recorded rule,
+  has said so through the record below.
+- **caught** is the test-verified measure: the agent's own tests distinguish the defective code from
+  the fixed one, plan or no plan.
+
+They are reported side by side, and a run that reports without confirming, or confirms without
+catching, shows up as a gap between the columns rather than as a single score.
+
+### The adjudication record
+
+`bench adjudicate` writes `<run>/adjudication.json` beside the plan and `result.json` of one run:
+
+```
+rdd-plus bench adjudicate --run bench/results/<ts>/<case>/<run> --pending
+rdd-plus bench adjudicate --run <run dir> --row 2 --verdict false_positive \
+  --by alesierraalta --reason "style claim, not a defect of this candidate"
+rdd-plus bench adjudicate --run <run dir> --row 2 --verdict defect --defect D1 \
+  --by alesierraalta --reason "the row names the defect the key plants" --replace
+```
+
+One decision per finding row, named by its 1-based index in the Findings table. Every decision
+carries the row's fingerprint, so one taken against different text is refused instead of applied,
+and `--replace` keeps the displaced decision under `superseded` instead of erasing the audit
+trail. The verdicts are:
+
+- `defect` — the row genuinely reports a keyed defect, which may be one matching never proposed;
+- `false_positive` — the row claims a defect that is not there;
+- `out_of_scope` — a valid observation outside the key (style, documentation, a pre-existing issue
+  the corpus does not plant). It is never a false positive and stays out of the precision
+  denominator.
+
+`bench rescore` reads the record of a run from that run's own directory, which the runner owns.
+`bench score` applies a record only when `--adjudication <path>` names it: it is never discovered
+beside the plan, because the plan a workspace holds sits in the area the evaluated subject writes,
+and a record found there would let the subject rule on its own finding rows. Naming a record that is
+not there is a refusal, not a silent skip.
+
+**Precision** is `confirmed / (confirmed + false positives)` over finding rows. It is undefined
+until at least one row has a decision — `null` in the JSON, `none` in the summary — and it is
+printed next to its pending count, so a run with zero recorded false positives is never read as a
+perfect one. `bench compare` refuses to compare two readings recorded under different metrics
+versions: version 1 counted an unmatched finding as a false positive, version 2 does not.
+
+### Clean negative controls
+
+Two cases plant nothing: `c01-clean-allocate` and `g05-clean-backoff`. A key declares
+`"control": "clean"` and no defects; a key with no defects that does not say so is still refused,
+and a control that carries a defect is refused too. A control contributes no defect to any
+denominator — its recall cells read `clean`, not `0/0` — and it measures the other side of the
+ledger: every finding row reported there is unmatched until decided, so a flow that invents
+findings shows up as rows to adjudicate and, once decided, as false positives.
 
 That is the **reported** measure. The **caught** measure asks whether the agent's tests distinguish
 the defective code from the correct one, plan or no plan: the test files the agent added or changed
@@ -123,14 +190,26 @@ the run's notes, apart from tests that are simply red everywhere.
 `Pinning test` cell. It measures the claim, caught measures the outcome, and a run that pins more
 than it catches is naming tests that distinguish nothing.
 
-Every run keeps the plan it produced as `test-plan.md` beside its `result.json`, even when the
-workspace is removed, so older runs can be re-scored when the rule changes:
-`rdd-plus bench score --case bench/cases/<id> --plan <results>/<id>/<run>/test-plan.md`.
+Every run keeps the plan it produced as `test-plan.md` beside its `result.json`, whatever path the
+workspace declared, even when the workspace is removed, so older runs can be re-scored when the
+rule changes: `rdd-plus bench score --case bench/cases/<id> --plan <results>/<id>/<run>/test-plan.md`.
 
-A valid run that never wrote `docs/testing/test-plan.md` scores zero and is reported as
-`NO PLAN` (`no_plan` in the aggregate and the history): the flow ran and did not persist its
-deliverable, which is a different failure from missing the defect. Runs where the agent did not
-complete are `FAILED`, excluded from recall, and make the command exit 3.
+A valid run whose selected plan file is absent scores zero and is reported as `NO PLAN` (`no_plan` in the
+aggregate and the history): the flow ran and did not persist its deliverable at the path it promised,
+which is a different failure from missing the defect. The selected path is the one the workspace
+declares, else `docs/testing/test-plan.md`; the plan read must resolve inside the workspace, and a path that
+resolves outside through a symlink is refused like an absolute or `..` declaration. A workspace or a plan path
+the bench cannot resolve is refused as well, because containment that cannot be checked is not containment;
+a plan path that is simply not there stays the ordinary `NO PLAN`. A rejected declaration does not become a way
+around the guard: when it falls back to the default path, that path is checked like any other.
+A run that declares a
+path, does not write it and leaves a plan at the default path also reads `NO PLAN` — the declaration is the
+run's promise. A declared-but-absent
+plan reports the declaration it honoured alongside the default plan it ignored. When the selected path is
+there but cannot be read as a plan, both scorers name the read failure in the result and score zero, while the
+adjudicated scorer additionally returns it as an error, making `rescore` fail loudly rather than silently
+scoring an unreadable kept copy. Runs where the agent did not complete are `FAILED`, excluded from recall, and
+make the command exit 3.
 
 ### Skill versions in the history
 
@@ -139,13 +218,37 @@ skill. Releases up to 3.4 were labelled `3.N`; the same lineage is written `0.3.
 onward (`3.0`…`3.4` ≡ `0.3.0`…`0.3.4`). Rows recorded under the old labels stay as they were
 written: the history is append-only, so a rename would rewrite evidence instead of adding to it.
 
+### Denominators and variability
+
+Every number is reported in a named unit, and the summary, the aggregate and the comparison name
+it:
+
+- **defect-runs**: keyed defects over valid runs. Two runs of one defect are two entries; this is
+  the unit behind `Recall` and `RecallCaught`.
+- **unique defects**: distinct `(case, defect id)` pairs, counted once however many of its runs
+  found, confirmed or caught it. This is the unit behind `recall_unique`, `recall_unique_caught`,
+  `unique_defects`, `unique_found`, `unique_confirmed` and `unique_caught`.
+
+A case whose valid runs disagree with each other is named as unstable in the summary and in the
+history row, so variability is a reading rather than a footnote. A keyed defect the catch check
+could not reach at all — its variant never ran — is counted as **inconclusive**, which is not the
+same answer as a defect no test distinguished.
+
 ### The baseline
 
 A number is citable only together with its instrument: the corpus commit, the scorer build, the
-skill version, the model, and at least two runs per configuration. One run of a `+dirty` build is a
+skill version, the model, the runner, the agent-config mode, the environment, and at least two runs
+per configuration. One run of a `+dirty` build is a
 reading, not a baseline, and `bench compare` refuses two runs whose case sets differ, whose recorded
 corpus digests differ, or whose per-case defect counts differ, so extending or editing the corpus
-starts a new series instead of a delta. Every run records `corpus`, a digest over the case names and
+starts a new series instead of a delta. It refuses them for the rest of the instrument too: a
+different model, runner, skill version, number of runs per case, agent-config mode, environment
+(os/arch) or metrics version is a field that moved, and the refusal names it. A difference in the
+suite runtimes (`node`, `go`) is reported in the comparison header without a refusal, because a
+refusal there would block every pair across a toolchain patch. The throwaway agent config is
+verified to hold exactly the embedded skills: a config that quietly carries anything else fails the
+run before it spends, which is what keeps an inherited configuration or a stray memory skill out of
+the measurement. Every run records `corpus`, a digest over the case names and
 defect ids it measured, in its aggregate and in a `corpus` column appended last to the history; a
 case that failed or was invalid still contributes its name and key defect ids to that digest.
 
@@ -209,8 +312,10 @@ compare` refuses when the two digests differ.
 | g02-config-merge | go | library | 2 | config-merge |
 | g03-batch-writer | go | worker | 2 | data-loss, error-reporting |
 | g04-skipped-guard | go | library | 1 | inclusive-boundary |
+| c01-clean-allocate | node | library | 0 (clean control) | — |
+| g05-clean-backoff | go | library | 0 (clean control) | — |
 
-Thirty-one defects across eighteen cases.
+Thirty-one defects across eighteen defective cases, plus two clean controls that plant nothing.
 
 ### The guarded-defect family
 

@@ -23,6 +23,9 @@ func TestAppendHistoryIsAdditive(t *testing.T) {
 	if strings.Count(string(md), "# Benchmark history") != 1 {
 		t.Fatalf("header must be written once: %s", md)
 	}
+	if !strings.Contains(string(md), "cannot be compared with one that does") {
+		t.Fatalf("history intro must explain missing agent-config provenance: %s", md)
+	}
 	if strings.Count(string(md), "| t0 |") != 1 || strings.Count(string(md), "| t1 |") != 1 {
 		t.Fatalf("both rows expected once: %s", md)
 	}
@@ -97,6 +100,55 @@ func TestHistoryAddsTheActivationColumn(t *testing.T) {
 	for i, want := range []string{`"light_activated":1`, `"light_activated":0`} {
 		if !strings.Contains(lines[i], want) {
 			t.Fatalf("row %d = %s, want %s", i, lines[i], want)
+		}
+	}
+}
+
+func TestHistoryAppendsAdjudicatedMetricsInDeclaredOrder(t *testing.T) {
+	dir := t.TempDir()
+	entry := HistoryEntry{
+		TS: "t", Kind: KindRun, Out: "o", Model: "m", Cases: 1, Defects: 2, Found: 1, Recall: 0.5,
+		Caught: 1, RecallCaught: 0.5, SkillVersion: "s", Scorer: "q", Runs: 2, MetricsVersion: MetricsVersion,
+		AgentConfig: ConfigBench, Environment: "linux/amd64",
+		UniqueDefects: 1, UniqueFound: 1, UniqueConfirmed: 0, UniqueCaught: 1, DefectRuns: 2, Controls: 1,
+		PendingAdjudication: 3, OutOfScope: 4, Inconclusive: 5,
+	}
+	if err := AppendHistory(dir, entry); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "history.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields := func(line string) []string {
+		parts := strings.Split(strings.Trim(line, "|"), "|")
+		for i := range parts {
+			parts[i] = strings.TrimSpace(parts[i])
+		}
+		return parts
+	}
+	header := strings.Split(strings.TrimSpace(historyHeader), "\n")[0]
+	var row string
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "| t |") {
+			row = line
+			break
+		}
+	}
+	if row == "" {
+		t.Fatalf("history row missing:\n%s", data)
+	}
+	h := fields(header)
+	r := fields(row)
+	if len(h) != len(r) {
+		t.Fatalf("header columns = %d, row columns = %d:\nheader %s\nrow %s", len(h), len(r), header, row)
+	}
+	wantHeaders := []string{"metrics version", "unique defects", "unique found", "unique confirmed", "unique caught", "defect runs", "controls", "precision", "pending", "out of scope", "inconclusive", "unstable", "agent config", "environment"}
+	wantValues := []string{"2", "1", "1", "0", "1", "2", "1", "-", "3", "4", "5", "-", "bench", "linux/amd64"}
+	start := len(h) - len(wantHeaders)
+	for i := range wantHeaders {
+		if h[start+i] != wantHeaders[i] || r[start+i] != wantValues[i] {
+			t.Fatalf("column %d = header %q, value %q; want header %q, value %q", start+i, h[start+i], r[start+i], wantHeaders[i], wantValues[i])
 		}
 	}
 }

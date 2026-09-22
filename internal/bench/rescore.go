@@ -2,6 +2,7 @@ package bench
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,18 +20,16 @@ func Rescore(results string, lookup func(caseName string) (string, error), suite
 	if err != nil {
 		return orig, err
 	}
-	agg := Aggregate{TS: time.Now().UTC().Format(time.RFC3339), Out: filepath.Join(results, "rescored"), Model: orig.Model,
-		RescoredFrom: results, RunTS: orig.TS, SkillVersion: skillVersionOf(results), Corpus: orig.Corpus, Runs: orig.Runs}
+	skillVersion := skillVersionOf(results)
+	provenance := provenanceForRescore(orig, skillVersion)
+	agg := Aggregate{TS: time.Now().UTC().Format(time.RFC3339), Out: filepath.Join(results, "rescored"), Model: provenance.Model,
+		RescoredFrom: results, RunTS: orig.TS, SkillVersion: provenance.SkillVersion, Corpus: provenance.Corpus, Runs: provenance.Runs,
+		Provenance: provenance}
 	for _, old := range orig.Cases {
 		res := old
 		agg.CostUSD += old.CostUSD
 		if old.Invalid || old.Failed {
 			agg.Cases = append(agg.Cases, res)
-			if old.Invalid {
-				agg.Invalid++
-			} else {
-				agg.Failed++
-			}
 			continue
 		}
 		caseDir, err := lookup(old.Case)
@@ -42,32 +41,30 @@ func Rescore(results string, lookup func(caseName string) (string, error), suite
 			return agg, fmt.Errorf("%s: %w", old.Case, err)
 		}
 		dir := filepath.Join(results, old.Case, fmt.Sprint(max(old.Run, 1)))
+		adj, err := runAdjudication(dir, old)
+		if err != nil {
+			return agg, fmt.Errorf("%s: %w", old.Case, err)
+		}
 		ws := filepath.Join(dir, "ws")
 		if st, err := os.Stat(ws); err == nil && st.IsDir() {
-			res = merge(old, ScoreWorkspace(ws, key))
+			scored, err := ScoreWorkspaceWithAdjudication(ws, key, adj)
+			if err != nil {
+				return agg, fmt.Errorf("%s: %w", old.Case, err)
+			}
+			res = merge(old, scored)
 			res.Catch = Discriminate(caseDir, ws, key, suiteTimeout)
 		} else {
-			res = merge(old, ScorePlanFile(filepath.Join(dir, "test-plan.md"), key))
+			scored, err := ScorePlanFileWithAdjudication(filepath.Join(dir, "test-plan.md"), key, adj)
+			if err != nil {
+				return agg, fmt.Errorf("%s: %w", old.Case, err)
+			}
+			res = merge(old, scored)
 			res.Catch = old.Catch // no workspace to re-check: the run's own verdict stands
 		}
 		res.Caught = res.Catch.Count()
 		agg.Cases = append(agg.Cases, res)
-		agg.Defects += res.Total
-		agg.Found += res.Found
-		agg.Caught += res.Caught
-		agg.ClaimedPinned += res.ClaimedPinned
-		agg.FalsePositives += res.FalsePositives
-		if !res.PlanFound {
-			agg.NoPlan++
-		}
-		if res.LightActivated {
-			agg.LightActivated++
-		}
 	}
-	if agg.Defects > 0 {
-		agg.Recall = float64(agg.Found) / float64(agg.Defects)
-		agg.RecallCaught = float64(agg.Caught) / float64(agg.Defects)
-	}
+	finalizeAggregate(&agg)
 	if err := os.MkdirAll(agg.Out, 0o755); err != nil {
 		return agg, err
 	}
@@ -78,6 +75,25 @@ func Rescore(results string, lookup func(caseName string) (string, error), suite
 		return agg, err
 	}
 	return agg, nil
+}
+
+// runAdjudication reads the record kept in a run's directory and checks it decides this run.
+// Applying one run's decisions to another run of the same case is the misattribution the record
+// exists to prevent, so the run number is checked rather than trusted. A malformed record is a
+// refusal: a rescore that ignored it would silently re-open the decisions it holds.
+func runAdjudication(dir string, old Result) (*Adjudication, error) {
+	path := filepath.Join(dir, AdjudicationFile)
+	adj, err := LoadAdjudication(path)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return nil, nil
+	case err != nil:
+		return nil, fmt.Errorf("%s: %w", AdjudicationFile, err)
+	}
+	if run := max(old.Run, 1); adj.Run != run {
+		return nil, fmt.Errorf("%s decides run %d of case %q, not run %d of case %q", AdjudicationFile, adj.Run, adj.Case, run, old.Case)
+	}
+	return &adj, nil
 }
 
 // skillVersionOf reads the skill version the history recorded for a results directory, so a

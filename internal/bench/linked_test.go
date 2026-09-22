@@ -42,6 +42,27 @@ func TestScoreWorkspaceReportsWhetherAPlanExisted(t *testing.T) {
 	}
 }
 
+// A plan the guard refused is not read, so it cannot be copied beside the result either: the copy step
+// used to read the path the scorer had just declined to read, which put the refused file on disk.
+func TestFinishDoesNotCopyAPlanItRefused(t *testing.T) {
+	dir := t.TempDir()
+	ws := filepath.Join(dir, "ws")
+	outside := filepath.Join(t.TempDir(), "outside-plan.md")
+	if err := os.WriteFile(outside, []byte("# outside\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(ws, "docs/testing"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(ws, PlanPath)); err != nil {
+		t.Skip("symlinks not supported here")
+	}
+	finish(Result{Workspace: ws}, Options{}, true)
+	if _, err := os.Stat(filepath.Join(dir, "test-plan.md")); !os.IsNotExist(err) {
+		t.Fatalf("a refused plan was copied beside the result: %v", err)
+	}
+}
+
 // The plan is the run's deliverable; it survives the workspace so a later scorer can re-read it.
 func TestFinishKeepsThePlanWhenItRemovesTheWorkspace(t *testing.T) {
 	dir := t.TempDir()
@@ -60,6 +81,25 @@ func TestFinishKeepsThePlanWhenItRemovesTheWorkspace(t *testing.T) {
 	}
 	if r := ScorePlanFile(filepath.Join(dir, "test-plan.md"), Key{ID: "c"}); !r.PlanFound {
 		t.Fatal("kept plan not scorable")
+	}
+}
+
+// A plan kept from a workspace that declared another path still lands under the name rescore reads.
+func TestFinishKeepsADeclaredPlanUnderTheKeptName(t *testing.T) {
+	dir := t.TempDir()
+	ws := filepath.Join(dir, "ws")
+	declarePlan(t, ws, "docs/testing/test-plan-other.md")
+	writePlanAt(t, ws, "docs/testing/test-plan-other.md", "# declared plan\n")
+	res := finish(Result{Workspace: ws}, Options{}, false)
+	if res.Workspace != "" {
+		t.Fatalf("workspace kept: %q", res.Workspace)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "test-plan.md"))
+	if err != nil || string(got) != "# declared plan\n" {
+		t.Fatalf("kept plan = %q, %v", got, err)
+	}
+	if r := ScorePlanFile(filepath.Join(dir, "test-plan.md"), Key{ID: "c"}); !r.PlanFound {
+		t.Fatal("the kept copy is not scorable")
 	}
 }
 
