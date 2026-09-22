@@ -416,6 +416,137 @@ func asExit(err error, target *exec.ExitError) bool {
 	return ok
 }
 
+func TestFeatureCLIList(t *testing.T) {
+	bin := buildCLI(t)
+	home := t.TempDir()
+	out, code := runCLIWithHomeEnv(t, home, bin, "feature", "list")
+	if code != 0 {
+		t.Fatalf("feature list exit = %d\n%s", code, out)
+	}
+	if !strings.Contains(out, "feedback") || !strings.Contains(out, "Feedback") || !strings.Contains(out, "disabled") {
+		t.Fatalf("feature list = %q", out)
+	}
+}
+
+func TestFeatureCLIEnablePersists(t *testing.T) {
+	bin := buildCLI(t)
+	home := t.TempDir()
+	out, code := runCLIWithHomeEnv(t, home, bin, "feature", "enable", "feedback")
+	if code != 0 || !strings.Contains(out, "feedback: enabled") {
+		t.Fatalf("feature enable = %d %q", code, out)
+	}
+	out, code = runCLIWithHomeEnv(t, home, bin, "feature", "list")
+	if code != 0 || !strings.Contains(out, "feedback\tFeedback\tenabled") {
+		t.Fatalf("feature list after enable = %d %q", code, out)
+	}
+}
+
+func TestFeatureCLIDisablePersists(t *testing.T) {
+	bin := buildCLI(t)
+	home := t.TempDir()
+	if out, code := runCLIWithHomeEnv(t, home, bin, "feature", "enable", "feedback"); code != 0 {
+		t.Fatalf("feature enable = %d %q", code, out)
+	}
+	out, code := runCLIWithHomeEnv(t, home, bin, "feature", "disable", "feedback")
+	if code != 0 || !strings.Contains(out, "feedback: disabled") {
+		t.Fatalf("feature disable = %d %q", code, out)
+	}
+	out, code = runCLIWithHomeEnv(t, home, bin, "feature", "list")
+	if code != 0 || !strings.Contains(out, "feedback\tFeedback\tdisabled") {
+		t.Fatalf("feature list after disable = %d %q", code, out)
+	}
+}
+
+func TestFeatureCLIPreviewWritesNothing(t *testing.T) {
+	bin := buildCLI(t)
+	home := t.TempDir()
+	out, code := runCLIWithHomeEnv(t, home, bin, "feature", "enable", "feedback", "--preview")
+	if code != 0 || !strings.Contains(out, "never publishable") {
+		t.Fatalf("feature preview = %d %q", code, out)
+	}
+	if _, err := os.Stat(filepath.Join(home, "state.json")); !os.IsNotExist(err) {
+		t.Fatalf("feature preview wrote state: %v", err)
+	}
+}
+
+func TestFeatureCLIUnknownIdExits2(t *testing.T) {
+	bin := buildCLI(t)
+	out, code := runCLIWithHomeEnv(t, t.TempDir(), bin, "feature", "enable", "missing")
+	if code != 2 || !strings.Contains(out, "missing") || !strings.Contains(out, "feedback") {
+		t.Fatalf("unknown feature = %d %q", code, out)
+	}
+}
+
+func TestStatusJSONParses(t *testing.T) {
+	bin := buildCLI(t)
+	home := t.TempDir()
+	out, code := runCLIWithHomeEnv(t, home, bin, "status", "--json")
+	if code != 0 {
+		t.Fatalf("status exit = %d\n%s", code, out)
+	}
+	var report struct {
+		StateRoot        string `json:"stateRoot"`
+		StateExists      bool   `json:"stateExists"`
+		InstalledVersion string `json:"installedVersion"`
+		AvailableVersion string `json:"availableVersion"`
+		Features         []struct {
+			ID      string `json:"id"`
+			Enabled bool   `json:"enabled"`
+		} `json:"features"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &report); err != nil {
+		t.Fatalf("status JSON: %v\n%s", err, out)
+	}
+	if report.StateRoot != home || report.StateExists || report.InstalledVersion != buildinfo.Version || report.AvailableVersion != "unknown (no update check yet)" {
+		t.Fatalf("status report = %+v", report)
+	}
+	if len(report.Features) != 1 || report.Features[0].ID != "feedback" || report.Features[0].Enabled {
+		t.Fatalf("status features = %+v", report.Features)
+	}
+}
+
+func TestFeedbackCLIRequiresOptInThenRecords(t *testing.T) {
+	bin := buildCLI(t)
+	home := t.TempDir()
+	configDir := t.TempDir()
+	report := filepath.Join(t.TempDir(), "report.md")
+	body := "ts: 2026-09-10T12:00:00Z\n" +
+		"repo: " + configDir + "\n" +
+		"plan: docs/testing/test-plan.md\n" +
+		"skill: 0.3.6\n" +
+		"build: test\n" +
+		"paid: it found the defect\n" +
+		"cost: one hour\n" +
+		"reason: it earned its keep\n" +
+		"verdict: paid\n"
+	if err := os.WriteFile(report, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, code := runCLIWithHomeEnv(t, home, bin, "feedback", "--config-dir", configDir, "--file", report)
+	wantRefusal := "feedback is disabled; enable it with: rdd-plus feature enable feedback"
+	if code == 0 || !strings.Contains(out, wantRefusal) {
+		t.Fatalf("disabled feedback = %d %q", code, out)
+	}
+	if _, err := os.Stat(filepath.Join(sanitize.TelemetryDir(configDir), "run-feedback.jsonl")); !os.IsNotExist(err) {
+		t.Fatalf("disabled feedback wrote ledger: %v", err)
+	}
+
+	if out, code = runCLIWithHomeEnv(t, home, bin, "feature", "enable", "feedback"); code != 0 {
+		t.Fatalf("enable feedback = %d %q", code, out)
+	}
+	out, code = runCLIWithHomeEnv(t, home, bin, "feedback", "--config-dir", configDir, "--file", report)
+	if code != 0 {
+		t.Fatalf("enabled feedback = %d %q", code, out)
+	}
+	raw, err := os.ReadFile(filepath.Join(sanitize.TelemetryDir(configDir), "run-feedback.jsonl"))
+	if err != nil {
+		t.Fatalf("ledger: %v", err)
+	}
+	if rows := len(strings.Split(strings.TrimSpace(string(raw)), "\n")); rows != 1 {
+		t.Fatalf("ledger rows = %d, want 1", rows)
+	}
+}
+
 // The feedback command is the destination the gate's offer always lacked: --template prints a
 // skeleton, --file records it, and no flags reads the reports back.
 func TestFeedbackCLI(t *testing.T) {
@@ -455,7 +586,11 @@ func TestFeedbackCLI(t *testing.T) {
 	if err := os.WriteFile(report, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	out, code = runCLI(t, bin, "feedback", "--config-dir", dir, "--file", report)
+	stateHome := t.TempDir()
+	if out, code := runCLIWithHomeEnv(t, stateHome, bin, "feature", "enable", "feedback"); code != 0 {
+		t.Fatalf("enable feedback exit = %d\n%s", code, out)
+	}
+	out, code = runCLIWithHomeEnv(t, stateHome, bin, "feedback", "--config-dir", dir, "--file", report)
 	if code != 0 {
 		t.Fatalf("submit exit = %d\n%s", code, out)
 	}
@@ -522,7 +657,11 @@ func TestFeedbackCLISanitizesPersistedSecretsAndFailsClosed(t *testing.T) {
 	if err := os.WriteFile(report, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if out, code := runCLI(t, bin, "feedback", "--config-dir", configDir, "--file", report); code != 0 {
+	stateHome := t.TempDir()
+	if out, code := runCLIWithHomeEnv(t, stateHome, bin, "feature", "enable", "feedback"); code != 0 {
+		t.Fatalf("enable feedback exit = %d\n%s", code, out)
+	}
+	if out, code := runCLIWithHomeEnv(t, stateHome, bin, "feedback", "--config-dir", configDir, "--file", report); code != 0 {
 		t.Fatalf("submit exit = %d\n%s", code, out)
 	}
 
@@ -608,6 +747,22 @@ func TestFeedbackCLISanitizesPersistedSecretsAndFailsClosed(t *testing.T) {
 	if got := len(strings.Split(strings.TrimSpace(string(unchanged)), "\n")); got != 1 {
 		t.Fatalf("fail-closed submission changed ledger row count to %d:\n%s", got, unchanged)
 	}
+}
+
+func runCLIWithHomeEnv(t *testing.T, home, bin string, args ...string) (string, int) {
+	t.Helper()
+	cmd := exec.Command(bin, args...)
+	cmd.Env = append(os.Environ(), "RDD_PLUS_HOME="+home)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		return string(out), 0
+	}
+	var ee exec.ExitError
+	if asExit(err, &ee) {
+		return string(out), ee.ExitCode()
+	}
+	t.Fatalf("run %v: %v", args, err)
+	return "", -1
 }
 
 func runCLI(t *testing.T, bin string, args ...string) (string, int) {

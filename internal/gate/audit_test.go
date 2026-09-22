@@ -13,7 +13,7 @@ import (
 // read as complete.
 func TestBuildAuditReasonNamesTheOwedLayers(t *testing.T) {
 	reason := BuildAuditReason("docs/testing/test-plan.md",
-		"layers swept: 1 of 5\n  assigned and never invoked: Security (appsec-adversarial-auditor)\n  assigned and never invoked: Persistence (database-persistence-testing)\nranked targets done: 3 of 7\n")
+		"layers swept: 1 of 5\n  assigned and never invoked: Security (appsec-adversarial-auditor)\n  assigned and never invoked: Persistence (database-persistence-testing)\nranked targets done: 3 of 7\n", true)
 	for _, want := range []string{
 		"docs/testing/test-plan.md",
 		"Security (appsec-adversarial-auditor)",
@@ -31,7 +31,7 @@ func TestBuildAuditReasonNamesTheOwedLayers(t *testing.T) {
 }
 
 func TestAuditReasonOffersFeedbackWithoutDemandingIt(t *testing.T) {
-	reason := BuildAuditReason("p.md", "layers swept: 2 of 5\n")
+	reason := BuildAuditReason("p.md", "layers swept: 2 of 5\n", true)
 	low := strings.ToLower(reason)
 	if !strings.Contains(low, "feedback") {
 		t.Fatalf("the operator asked to be offered feedback:\n%s", reason)
@@ -43,6 +43,17 @@ func TestAuditReasonOffersFeedbackWithoutDemandingIt(t *testing.T) {
 	for _, forbidden := range []string{"you must", "block", "refuse"} {
 		if strings.Contains(low, forbidden) {
 			t.Fatalf("this is a reminder, not a gate: %q in\n%s", forbidden, reason)
+		}
+	}
+}
+
+func TestReasonOmitsTheFeedbackOfferWhenDisabled(t *testing.T) {
+	for _, reason := range []string{
+		BuildAuditReason("p.md", "layers swept: 1 of 2\n", false),
+		BuildCompleteReason("p.md", false),
+	} {
+		if strings.Contains(reason, "rdd-plus feedback") || strings.Contains(reason, "Want the run graded") {
+			t.Fatalf("disabled feedback offer leaked into reason:\n%s", reason)
 		}
 	}
 }
@@ -197,7 +208,7 @@ func TestAuditLineIgnoresTheProseItUsedToCount(t *testing.T) {
 			"  assigned and never invoked (line 51): Security (appsec-adversarial-auditor)\n"+
 			"  assigned and never invoked (line 53): Persistence (database-persistence-testing)\n"+
 			"  assigned and never invoked (line 55): Critical e2e journeys (real-run-validation)\n"+
-			"ranked targets done: 3 of 7\n")}
+			"ranked targets done: 3 of 7\n", true)}
 	if line := auditLine(res); line != "rdd-plus: the testing plan owes nothing. Want feedback on this run?" {
 		t.Fatalf("the line must read the decision, never the report text: %q", line)
 	}

@@ -10,12 +10,38 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/alesierraalta/rdd-plus/internal/feature"
 	"github.com/alesierraalta/rdd-plus/internal/sanitize"
 )
 
 const gitTimeout = 10 * time.Second
+
+var feedbackOfferState = struct {
+	sync.Mutex
+	enabled atomic.Bool
+}{}
+
+func init() {
+	feedbackOfferState.enabled.Store(true)
+}
+
+func feedbackOfferEnabled() bool {
+	return feedbackOfferState.enabled.Load()
+}
+
+func decideForRun(in Input, d Deps, offerFeedback bool) (result Result) {
+	feedbackOfferState.Lock()
+	defer func() {
+		feedbackOfferState.enabled.Store(true)
+		feedbackOfferState.Unlock()
+	}()
+	feedbackOfferState.enabled.Store(offerFeedback)
+	return Decide(in, d)
+}
 
 func realGit(dir string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), gitTimeout)
@@ -163,7 +189,11 @@ func Run(stdin io.Reader, stdout io.Writer, logPath string, now time.Time) (code
 		return 0
 	}
 	in := *parsed
-	res := Decide(in, RealDeps(now))
+	offerFeedback, err := feature.Enabled("feedback")
+	if err != nil {
+		offerFeedback = false
+	}
+	res := decideForRun(in, RealDeps(now), offerFeedback)
 	if res.Entry != nil {
 		appendEntry(logPath, res.Entry)
 	}
@@ -171,7 +201,7 @@ func Run(stdin io.Reader, stdout io.Writer, logPath string, now time.Time) (code
 	case res.Fire:
 		emit(stdout, res.Reason)
 	case res.Audit:
-		emitWith(stdout, res.Reason, auditLine(res))
+		emitWith(stdout, res.Reason, auditLine(res, offerFeedback))
 	case res.Problem != "":
 		// A declaration the gate cannot read is a defect its operator can repair, and the model can too:
 		// both hear it. It is not an audit, so no counts ride along.
@@ -183,19 +213,27 @@ func Run(stdin io.Reader, stdout io.Writer, logPath string, now time.Time) (code
 // auditLine is what the operator sees without the model saying anything. It renders the decision, not
 // the reason text: breadth is owed by layers, by ranked targets, or by both, and a run that swept every
 // layer it planned still owes if its ranked targets are pending.
-func auditLine(res Result) string {
+func auditLine(res Result, offerFeedback ...bool) string {
+	suffix := ""
+	includeOffer := feedbackOfferEnabled()
+	if len(offerFeedback) > 0 {
+		includeOffer = offerFeedback[0]
+	}
+	if includeOffer {
+		suffix = " Want feedback on this run?"
+	}
 	switch {
 	case res.Owed > 0 && res.Pending > 0:
-		return fmt.Sprintf("rdd-plus: %d layer(s) assigned and never invoked, %d ranked target(s) still pending. Want feedback on this run?", res.Owed, res.Pending)
+		return fmt.Sprintf("rdd-plus: %d layer(s) assigned and never invoked, %d ranked target(s) still pending.%s", res.Owed, res.Pending, suffix)
 	case res.Owed > 0:
-		return fmt.Sprintf("rdd-plus: %d layer(s) assigned and never invoked. Want feedback on this run?", res.Owed)
+		return fmt.Sprintf("rdd-plus: %d layer(s) assigned and never invoked.%s", res.Owed, suffix)
 	case res.Pending > 0:
-		return fmt.Sprintf("rdd-plus: %d ranked target(s) still pending. Want feedback on this run?", res.Pending)
+		return fmt.Sprintf("rdd-plus: %d ranked target(s) still pending.%s", res.Pending, suffix)
 	case res.Unreadable > 0:
-		return fmt.Sprintf("rdd-plus: %d breadth table(s) could not be read to the end, so the rows under it were never counted. Want feedback on this run?", res.Unreadable)
+		return fmt.Sprintf("rdd-plus: %d breadth table(s) could not be read to the end, so the rows under it were never counted.%s", res.Unreadable, suffix)
 	case res.Unplanned:
-		return "rdd-plus: the plan has no layer matrix, so the breadth sweep was never planned. Want feedback on this run?"
+		return "rdd-plus: the plan has no layer matrix, so the breadth sweep was never planned." + suffix
 	default:
-		return "rdd-plus: the testing plan owes nothing. Want feedback on this run?"
+		return "rdd-plus: the testing plan owes nothing." + suffix
 	}
 }

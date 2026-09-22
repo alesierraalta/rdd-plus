@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/alesierraalta/rdd-plus/internal/feature"
 	"github.com/alesierraalta/rdd-plus/internal/sanitize"
 )
 
@@ -120,7 +121,52 @@ func TestTemplateFillsTheIdentityAndNamesTheSubmitCommand(t *testing.T) {
 }
 
 // Record is append-only: the header is written once and a second report never rewrites the first.
+func enableFeedbackForTest(t *testing.T) {
+	t.Helper()
+	t.Setenv("RDD_PLUS_HOME", t.TempDir())
+	if _, err := feature.Set("feedback", true); err != nil {
+		t.Fatalf("enable feedback: %v", err)
+	}
+}
+
+func TestRecordRefusesWhileFeedbackIsDisabled(t *testing.T) {
+	t.Setenv("RDD_PLUS_HOME", t.TempDir())
+	dir := t.TempDir()
+	r := Report{TS: "t", Repo: "/repo", Plan: NotGiven, Skill: "skill", Build: "build",
+		Paid: "paid", Cost: "one hour", Reason: "reason", Verdict: VerdictPaid}
+
+	err := Record(dir, r)
+	const want = "feedback is disabled; enable it with: rdd-plus feature enable feedback"
+	if err == nil || err.Error() != want {
+		t.Fatalf("Record error = %v, want %q", err, want)
+	}
+	for _, path := range []string{LedgerPath(dir), MarkdownPath(dir)} {
+		if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+			t.Fatalf("refused report left %s behind: %v", path, statErr)
+		}
+	}
+}
+
+func TestRecordProceedsOnceFeedbackIsEnabled(t *testing.T) {
+	enableFeedbackForTest(t)
+	dir := t.TempDir()
+	r := Report{TS: "t", Repo: "/repo", Plan: NotGiven, Skill: "skill", Build: "build",
+		Paid: "paid", Cost: "one hour", Reason: "reason", Verdict: VerdictPaid}
+
+	if err := Record(dir, r); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	raw, err := os.ReadFile(LedgerPath(dir))
+	if err != nil {
+		t.Fatalf("ledger: %v", err)
+	}
+	if rows := strings.Count(strings.TrimRight(string(raw), "\n"), "\n") + 1; rows != 1 {
+		t.Fatalf("ledger rows = %d, want 1", rows)
+	}
+}
+
 func TestRecordAppendsJSONAndMarkdownWithoutRewriting(t *testing.T) {
+	enableFeedbackForTest(t)
 	dir := t.TempDir()
 	first := Report{TS: "2026-09-10T12:00:00Z", Repo: "/repo", Plan: "p", Skill: "0.3.6",
 		Build: "b", Paid: "paid words", Cost: "one hour", Reason: "reason one",
@@ -181,6 +227,7 @@ func TestRecordAppendsJSONAndMarkdownWithoutRewriting(t *testing.T) {
 }
 
 func TestRecordRefusesASecretRatherThanPersistingIt(t *testing.T) {
+	enableFeedbackForTest(t)
 	dir := t.TempDir()
 	r := Report{TS: "t", Repo: "/repo", Plan: NotGiven, Skill: "skill", Build: "build",
 		Paid: "paid", Cost: "one hour", Reason: "contains ghp_1234567890abcdef1234", Verdict: VerdictPaid}
@@ -197,6 +244,7 @@ func TestRecordRefusesASecretRatherThanPersistingIt(t *testing.T) {
 }
 
 func TestRecordAnonymisesTheRepositoryAndThePlan(t *testing.T) {
+	enableFeedbackForTest(t)
 	dir := t.TempDir()
 	r := Report{TS: "t", Repo: "/home/someone/acme-billing", Plan: "internal/secret-plans/plan.md",
 		Skill: "skill", Build: "build", Paid: "paid", Cost: "one hour", Reason: "reason", Verdict: VerdictPaid}
@@ -219,6 +267,7 @@ func TestRecordAnonymisesTheRepositoryAndThePlan(t *testing.T) {
 }
 
 func TestRecordRedactsASecretInAnOptionalField(t *testing.T) {
+	enableFeedbackForTest(t)
 	dir := t.TempDir()
 	token := "ghp_1234567890abcdef1234"
 	r := Report{TS: "t", Repo: "/repo", Plan: NotGiven, Skill: "skill", Build: "build",
@@ -242,6 +291,7 @@ func TestRecordRedactsASecretInAnOptionalField(t *testing.T) {
 }
 
 func TestRecordWritesTheLocalResolutionMap(t *testing.T) {
+	enableFeedbackForTest(t)
 	dir := t.TempDir()
 	r := Report{TS: "t", Repo: "/home/someone/acme-billing", Plan: NotGiven, Skill: "skill", Build: "build",
 		Paid: "paid", Cost: "one hour", Reason: "reason", Verdict: VerdictPaid}
@@ -277,6 +327,7 @@ func TestRecordWritesTheLocalResolutionMap(t *testing.T) {
 }
 
 func TestRecordRefusesToWriteWhenTheLocalMapCannotBeWritten(t *testing.T) {
+	enableFeedbackForTest(t)
 	dir := t.TempDir()
 	telemetryDir := sanitize.TelemetryDir(dir)
 	if err := os.MkdirAll(telemetryDir, 0o700); err != nil {
@@ -296,6 +347,7 @@ func TestRecordRefusesToWriteWhenTheLocalMapCannotBeWritten(t *testing.T) {
 }
 
 func TestRecordRefusesASecretWithoutTouchingTheLocalMap(t *testing.T) {
+	enableFeedbackForTest(t)
 	dir := t.TempDir()
 	accepted := Report{TS: "t", Repo: "/home/someone/acme-billing", Plan: NotGiven, Skill: "skill", Build: "build",
 		Paid: "paid", Cost: "one hour", Reason: "reason", Verdict: VerdictPaid}
@@ -336,6 +388,7 @@ func TestRecordRefusesASecretWithoutTouchingTheLocalMap(t *testing.T) {
 }
 
 func TestRecordKeepsTheMarkdownInStepWithTheJSONL(t *testing.T) {
+	enableFeedbackForTest(t)
 	dir := t.TempDir()
 	r := Report{TS: "t", Repo: "/home/someone/acme-billing", Plan: NotGiven, Skill: "skill", Build: "build",
 		Paid: "paid", Cost: "one hour", Reason: "reason", Verdict: VerdictPaid}
@@ -420,6 +473,7 @@ func TestReadMissingLedgerIsEmptyNotAnError(t *testing.T) {
 }
 
 func TestSummaryCountsVerdictsAndSkillVersions(t *testing.T) {
+	enableFeedbackForTest(t)
 	dir := t.TempDir()
 	records := []Report{
 		{TS: "2026-09-08T00:00:00Z", Repo: "/r", Plan: "p", Skill: "0.3.5", Build: "b",
@@ -451,6 +505,7 @@ func TestSummaryCountsVerdictsAndSkillVersions(t *testing.T) {
 }
 
 func TestSummaryListsRecentGuessesNewestFirst(t *testing.T) {
+	enableFeedbackForTest(t)
 	dir := t.TempDir()
 	for i, guess := range []string{"g1", "g2", "g3", "g4", "g5", "g6"} {
 		r := Report{TS: "t", Repo: "/r", Plan: "p", Skill: "0.3.6", Build: "b",

@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/alesierraalta/rdd-plus/internal/assets"
+	"github.com/alesierraalta/rdd-plus/internal/feature"
 	"github.com/alesierraalta/rdd-plus/internal/sanitize"
 )
 
@@ -163,6 +164,14 @@ const markdownHeader = "# Run feedback\n\nOne section per `rdd-plus feedback` re
 // Record appends one report to the ledger and one section to the markdown file. Both files are
 // append-only.
 func Record(configDir string, r Report) error {
+	enabled, err := feature.Enabled("feedback")
+	if err != nil || !enabled {
+		if err != nil {
+			return fmt.Errorf("feedback is disabled; enable it with: rdd-plus feature enable feedback: %w", err)
+		}
+		return fmt.Errorf("feedback is disabled; enable it with: rdd-plus feature enable feedback")
+	}
+
 	telemetryDir := sanitize.TelemetryDir(configDir)
 	key, err := sanitize.LoadKeyIn(telemetryDir)
 	if err != nil {

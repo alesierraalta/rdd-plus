@@ -22,10 +22,12 @@ import (
 	"github.com/alesierraalta/rdd-plus/internal/check"
 	"github.com/alesierraalta/rdd-plus/internal/doctor"
 	"github.com/alesierraalta/rdd-plus/internal/evidence"
+	"github.com/alesierraalta/rdd-plus/internal/feature"
 	"github.com/alesierraalta/rdd-plus/internal/feedback"
 	"github.com/alesierraalta/rdd-plus/internal/gate"
 	"github.com/alesierraalta/rdd-plus/internal/plan"
 	"github.com/alesierraalta/rdd-plus/internal/sanitize"
+	"github.com/alesierraalta/rdd-plus/internal/state"
 	"github.com/alesierraalta/rdd-plus/internal/sync"
 )
 
@@ -46,6 +48,8 @@ commands:
            Findings row from flags, and admit every Evidence row (init | check | gaps | upgrade | add-finding | admit)
   check    say what this repository still owes, from git and the plan alone: no hook payload,
            no transcript, no host. Exit 1 when there is something to do.
+  status   report the local installation state and optional features
+  feature  list, enable, or disable an optional feature
   feedback record an honest process report on the method itself, or read the reports back
            (--template | --file <path> | --summary)
   version  print the version
@@ -83,6 +87,8 @@ plan admit [--path <path>] [--execute] [--sandbox] [--sandbox-image <image>] [--
             --execute, because a dry run makes no observation to pin; exit 1 when any row is
             refused or a digest cannot be written)
 check [--cwd .] [--path <path>]
+status [--json]
+feature list|enable|disable <id> [--preview]
 --path: relative values resolve against the worktree root; absolute values are taken as given except in check, which refuses them. Without --path, use the plan declared in .rdd-plus.json when there is one, else docs/testing/test-plan.md
 --run: a lowercase slug identifying the active run; plan gaps uses the declaration when omitted, while --all forces whole-document counts
 feedback [--config-dir <dir>] [--template] [--file <path>] [--plan <path>] [--summary]
@@ -114,6 +120,10 @@ func main() {
 		os.Exit(runPlan(os.Args[2:]))
 	case "check":
 		os.Exit(runCheck(os.Args[2:]))
+	case "status":
+		os.Exit(runStatus(os.Args[2:]))
+	case "feature":
+		os.Exit(runFeature(os.Args[2:]))
 	case "feedback":
 		os.Exit(runFeedback(os.Args[2:]))
 	case "version":
@@ -132,6 +142,182 @@ func runGate(args []string) int {
 		return 0 // a hook must never break the turn, even on a bad flag
 	}
 	return gate.Run(os.Stdin, os.Stdout, gate.DefaultLogPath(*configDir), time.Now())
+}
+
+type statusFeature struct {
+	ID      string `json:"id"`
+	Title   string `json:"title"`
+	Enabled bool   `json:"enabled"`
+}
+
+type statusReport struct {
+	StateRoot        string          `json:"stateRoot"`
+	StateExists      bool            `json:"stateExists"`
+	InstalledVersion string          `json:"installedVersion"`
+	AvailableVersion string          `json:"availableVersion"`
+	Features         []statusFeature `json:"features"`
+}
+
+const unknownAvailableVersion = "unknown (no update check yet)"
+
+func runStatus(args []string) int {
+	jsonOutput := false
+	for _, arg := range args {
+		if arg == "--json" {
+			jsonOutput = true
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "status: unknown argument %q\n", arg)
+		return 2
+	}
+
+	path, err := state.Path()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "status:", err)
+		return 1
+	}
+	stateExists := true
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		stateExists = false
+	} else if err != nil {
+		fmt.Fprintln(os.Stderr, "status:", err)
+		return 1
+	}
+	features, err := currentFeatureStates()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "status:", err)
+		return 1
+	}
+	report := statusReport{
+		StateRoot:        filepath.Dir(path),
+		StateExists:      stateExists,
+		InstalledVersion: buildinfo.Version,
+		AvailableVersion: unknownAvailableVersion,
+		Features:         features,
+	}
+	if jsonOutput {
+		encoded, err := json.Marshal(report)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "status:", err)
+			return 1
+		}
+		fmt.Println(string(encoded))
+		return 0
+	}
+	fmt.Printf("State root: %s\nState exists: %s\nInstalled version: %s\nAvailable version: %s\n\nFeatures:\n", report.StateRoot, yesNo(report.StateExists), report.InstalledVersion, report.AvailableVersion)
+	fmt.Println("ID\tTitle\tState")
+	for _, item := range report.Features {
+		fmt.Printf("%s\t%s\t%s\n", item.ID, item.Title, enabledState(item.Enabled))
+	}
+	return 0
+}
+
+func runFeature(args []string) int {
+	if len(args) == 0 {
+		return featureUsage("missing subcommand")
+	}
+	subcommand := args[0]
+	switch subcommand {
+	case "list":
+		if len(args) != 1 {
+			return featureUsage("list does not take an id or --preview")
+		}
+		features, err := currentFeatureStates()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "feature:", err)
+			return 1
+		}
+		fmt.Println("ID\tTitle\tState")
+		for _, item := range features {
+			fmt.Printf("%s\t%s\t%s\n", item.ID, item.Title, enabledState(item.Enabled))
+		}
+		return 0
+	case "enable", "disable":
+		id, preview, ok := parseFeatureArgs(args[1:])
+		if !ok || id == "" {
+			return featureUsage("enable and disable require one feature id")
+		}
+		declaration, known := feature.Get(id)
+		if !known {
+			return unknownFeatureCLI(id)
+		}
+		if preview {
+			text, err := feature.Preview(id)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "feature:", err)
+				return 1
+			}
+			fmt.Println(text)
+			return 0
+		}
+		enabled := subcommand == "enable"
+		if _, err := feature.Set(id, enabled); err != nil {
+			fmt.Fprintln(os.Stderr, "feature:", err)
+			return 1
+		}
+		fmt.Printf("%s: %s\n", declaration.ID, enabledState(enabled))
+		return 0
+	default:
+		return featureUsage(fmt.Sprintf("unknown subcommand %q", subcommand))
+	}
+}
+
+func currentFeatureStates() ([]statusFeature, error) {
+	declarations := feature.All()
+	states := make([]statusFeature, 0, len(declarations))
+	for _, declaration := range declarations {
+		enabled, err := feature.Enabled(declaration.ID)
+		if err != nil {
+			return nil, err
+		}
+		states = append(states, statusFeature{ID: declaration.ID, Title: declaration.Title, Enabled: enabled})
+	}
+	return states, nil
+}
+
+func parseFeatureArgs(args []string) (string, bool, bool) {
+	id := ""
+	preview := false
+	for _, arg := range args {
+		switch arg {
+		case "--preview":
+			preview = true
+		default:
+			if strings.HasPrefix(arg, "-") || id != "" {
+				return "", false, false
+			}
+			id = arg
+		}
+	}
+	return id, preview, true
+}
+
+func featureUsage(reason string) int {
+	fmt.Fprintf(os.Stderr, "feature: %s\nusage: rdd-plus feature list|enable|disable <id> [--preview]\n", reason)
+	return 2
+}
+
+func unknownFeatureCLI(id string) int {
+	ids := make([]string, 0, len(feature.All()))
+	for _, declaration := range feature.All() {
+		ids = append(ids, declaration.ID)
+	}
+	fmt.Fprintf(os.Stderr, "feature: unknown id %q; known ids: %s\n", id, strings.Join(ids, ", "))
+	return 2
+}
+
+func enabledState(enabled bool) string {
+	if enabled {
+		return "enabled"
+	}
+	return "disabled"
+}
+
+func yesNo(value bool) string {
+	if value {
+		return "yes"
+	}
+	return "no"
 }
 
 func runSync(args []string) int {
