@@ -9,8 +9,8 @@ import (
 // BuildAuditReason is what the Stop says when the discipline ran. Covering a diff and reporting
 // as though the surface were covered is the failure this catches: the run looks complete because
 // every step it did take succeeded.
-func BuildAuditReason(planPath, gaps string) string {
-	return strings.Join([]string{
+func BuildAuditReason(planPath, gaps string, offerFeedback ...bool) string {
+	return joinReason([]string{
 		"This session ran the testing discipline and left breadth owed. " + planPath + " says:",
 		"",
 		strings.TrimRight(gaps, "\n"),
@@ -18,20 +18,16 @@ func BuildAuditReason(planPath, gaps string) string {
 		"A layer assigned and never invoked is an open gap, not a silence. Before reporting this",
 		"done, either invoke the owners above, or say plainly in one line which surfaces went",
 		"unexamined, so nobody reads depth on a diff as coverage of the whole.",
-		"",
-		feedbackOffer,
-	}, "\n")
+	}, offerFeedback)
 }
 
 // BuildCompleteReason is what the Stop says when the plan owes nothing. A run with no gaps is
 // still worth grading: the question is what it would have missed, not whether it finished.
-func BuildCompleteReason(planPath string) string {
-	return strings.Join([]string{
+func BuildCompleteReason(planPath string, offerFeedback ...bool) string {
+	return joinReason([]string{
 		"This session ran the testing discipline and " + planPath + " owes nothing: every layer",
 		"the plan assigned was swept and every ranked target is done.",
-		"",
-		feedbackOffer,
-	}, "\n")
+	}, offerFeedback)
 }
 
 // BuildDeclarationProblem is what the Stop says when the plan declaration cannot be read. It replaces
@@ -45,6 +41,17 @@ func BuildDeclarationProblem(err error) string {
 		"",
 		"Fix " + plan.ConfigName + " at the worktree root, or remove it to fall back to " + plan.DefaultPath + ".",
 	}, "\n")
+}
+
+func joinReason(lines []string, offerFeedback []bool) string {
+	includeOffer := feedbackOfferEnabled()
+	if len(offerFeedback) > 0 {
+		includeOffer = offerFeedback[0]
+	}
+	if includeOffer {
+		lines = append(lines, "", feedbackOffer)
+	}
+	return strings.Join(lines, "\n")
 }
 
 const feedbackOffer = "Want the run graded? Offer the operator feedback on the testing itself with " +

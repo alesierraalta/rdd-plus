@@ -417,6 +417,51 @@ func asExit(err error, target *exec.ExitError) bool {
 	return ok
 }
 
+func TestFeedbackCLIRequiresOptInThenRecords(t *testing.T) {
+	bin := buildCLI(t)
+	home := t.TempDir()
+	configDir := t.TempDir()
+	report := filepath.Join(t.TempDir(), "report.md")
+	body := "ts: 2026-09-10T12:00:00Z\n" +
+		"repo: " + configDir + "\n" +
+		"plan: docs/testing/test-plan.md\n" +
+		"skill: test-strategy 0.3.6\n" +
+		"build: test\n" +
+		"paid: it found the defect\n" +
+		"cost: one hour\n" +
+		"reason: it earned its keep\n" +
+		"verdict: paid\n"
+	if err := os.WriteFile(report, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, code := runCLIWithHomeEnv(t, home, bin, "feedback", "--config-dir", configDir, "--file", report)
+	wantRefusal := "feedback is disabled; enable it with: rdd-plus feature enable feedback"
+	if code == 0 || !strings.Contains(out, wantRefusal) {
+		t.Fatalf("disabled feedback = %d %q", code, out)
+	}
+	if _, err := os.Stat(filepath.Join(sanitize.TelemetryDir(configDir), "run-feedback.jsonl")); !os.IsNotExist(err) {
+		t.Fatalf("disabled feedback wrote ledger: %v", err)
+	}
+
+	if out, code = runCLIWithHomeEnv(t, home, bin, "feature", "enable", "feedback"); code != 0 {
+		t.Fatalf("enable feedback = %d %q", code, out)
+	}
+	out, code = runCLIWithHomeEnv(t, home, bin, "feedback", "--config-dir", configDir, "--file", report)
+	if code != 0 {
+		t.Fatalf("enabled feedback = %d %q", code, out)
+	}
+	raw, err := os.ReadFile(filepath.Join(sanitize.TelemetryDir(configDir), "run-feedback.jsonl"))
+	if err != nil {
+		t.Fatalf("ledger: %v", err)
+	}
+	if rows := len(strings.Split(strings.TrimSpace(string(raw)), "\n")); rows != 1 {
+		t.Fatalf("ledger rows = %d, want 1", rows)
+	}
+}
+
+// The feedback command is the destination the gate's offer always lacked: --template prints a
+// skeleton, --file records it, and no flags reads the reports back.
+
 func TestDefaultConfigDirUsesRunnerEnvironment(t *testing.T) {
 	home := t.TempDir()
 	tests := []struct {
@@ -509,7 +554,11 @@ func TestFeedbackCLI(t *testing.T) {
 	if err := os.WriteFile(report, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	out, code = runCLI(t, bin, "feedback", "--config-dir", dir, "--file", report)
+	stateHome := t.TempDir()
+	if out, code := runCLIWithHomeEnv(t, stateHome, bin, "feature", "enable", "feedback"); code != 0 {
+		t.Fatalf("enable feedback exit = %d\n%s", code, out)
+	}
+	out, code = runCLIWithHomeEnv(t, stateHome, bin, "feedback", "--config-dir", dir, "--file", report)
 	if code != 0 {
 		t.Fatalf("submit exit = %d\n%s", code, out)
 	}
@@ -576,7 +625,11 @@ func TestFeedbackCLISanitizesPersistedSecretsAndFailsClosed(t *testing.T) {
 	if err := os.WriteFile(report, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if out, code := runCLI(t, bin, "feedback", "--config-dir", configDir, "--file", report); code != 0 {
+	stateHome := t.TempDir()
+	if out, code := runCLIWithHomeEnv(t, stateHome, bin, "feature", "enable", "feedback"); code != 0 {
+		t.Fatalf("enable feedback exit = %d\n%s", code, out)
+	}
+	if out, code := runCLIWithHomeEnv(t, stateHome, bin, "feedback", "--config-dir", configDir, "--file", report); code != 0 {
 		t.Fatalf("submit exit = %d\n%s", code, out)
 	}
 
@@ -662,6 +715,22 @@ func TestFeedbackCLISanitizesPersistedSecretsAndFailsClosed(t *testing.T) {
 	if got := len(strings.Split(strings.TrimSpace(string(unchanged)), "\n")); got != 1 {
 		t.Fatalf("fail-closed submission changed ledger row count to %d:\n%s", got, unchanged)
 	}
+}
+
+func runCLIWithHomeEnv(t *testing.T, home, bin string, args ...string) (string, int) {
+	t.Helper()
+	cmd := exec.Command(bin, args...)
+	cmd.Env = append(os.Environ(), "RDD_PLUS_HOME="+home)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		return string(out), 0
+	}
+	var ee exec.ExitError
+	if asExit(err, &ee) {
+		return string(out), ee.ExitCode()
+	}
+	t.Fatalf("run %v: %v", args, err)
+	return "", -1
 }
 
 func runCLI(t *testing.T, bin string, args ...string) (string, int) {
@@ -1317,6 +1386,103 @@ func TestSyncDryRunNamesEveryHost(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(home, dir, "settings.json")); !os.IsNotExist(err) {
 			t.Fatalf("dry-run wrote settings.json under %s: %v", dir, err)
 		}
+	}
+}
+
+func TestSyncForceReplacesAModifiedFileWithABackup(t *testing.T) {
+	t.Setenv("RDD_PLUS_HOME", t.TempDir())
+	home := os.Getenv("RDD_PLUS_HOME")
+	bin := buildCLI(t)
+	configDir := t.TempDir()
+	skillPath := filepath.Join(configDir, "skills", "test-strategy", "SKILL.md")
+
+	out, code := runCLI(t, bin, "sync", "--config-dir", configDir)
+	if code != 0 {
+		t.Fatalf("initial sync exit = %d\n%s", code, out)
+	}
+	original, err := os.ReadFile(skillPath)
+	if err != nil {
+		t.Fatalf("read installed skill: %v", err)
+	}
+	info, err := os.Stat(skillPath)
+	if err != nil {
+		t.Fatalf("stat installed skill: %v", err)
+	}
+	originalMode := uint32(info.Mode().Perm())
+	edited := append(append([]byte(nil), original...), []byte("\nuser edit\n")...)
+	if err := os.WriteFile(skillPath, edited, info.Mode().Perm()); err != nil {
+		t.Fatalf("append user edit: %v", err)
+	}
+
+	out, code = runCLI(t, bin, "sync", "--config-dir", configDir)
+	if code != 0 {
+		t.Fatalf("sync without --force exit = %d\n%s", code, out)
+	}
+	got, err := os.ReadFile(skillPath)
+	if err != nil {
+		t.Fatalf("read preserved skill: %v", err)
+	}
+	if !bytes.Equal(got, edited) {
+		t.Fatalf("sync without --force replaced the user edit")
+	}
+
+	out, code = runCLI(t, bin, "sync", "--config-dir", configDir, "--force")
+	if code != 0 {
+		t.Fatalf("sync --force exit = %d\n%s", code, out)
+	}
+	got, err = os.ReadFile(skillPath)
+	if err != nil {
+		t.Fatalf("read replaced skill: %v", err)
+	}
+	if !bytes.Equal(got, original) {
+		t.Fatalf("sync --force did not replace the edited skill")
+	}
+
+	backupEntries, err := os.ReadDir(filepath.Join(home, "backups"))
+	if err != nil {
+		t.Fatalf("read backup directory: %v", err)
+	}
+	var backupDir string
+	for _, entry := range backupEntries {
+		if !entry.IsDir() {
+			continue
+		}
+		if backupDir != "" {
+			t.Fatalf("expected one backup directory, found more than one")
+		}
+		backupDir = filepath.Join(home, "backups", entry.Name())
+	}
+	if backupDir == "" {
+		t.Fatal("sync --force did not create a backup directory")
+	}
+
+	var manifest struct {
+		Entries []struct {
+			OriginalPath string `json:"original_path"`
+			SnapshotPath string `json:"snapshot_path"`
+			Mode         uint32 `json:"mode"`
+		} `json:"entries"`
+	}
+	manifestData, err := os.ReadFile(filepath.Join(backupDir, "manifest.json"))
+	if err != nil {
+		t.Fatalf("read backup manifest: %v", err)
+	}
+	if err := json.Unmarshal(manifestData, &manifest); err != nil {
+		t.Fatalf("parse backup manifest: %v", err)
+	}
+	if len(manifest.Entries) != 1 {
+		t.Fatalf("backup manifest entries = %d, want 1", len(manifest.Entries))
+	}
+	entry := manifest.Entries[0]
+	if entry.OriginalPath != skillPath || entry.Mode != originalMode {
+		t.Fatalf("backup manifest entry = %+v, want original path %q and mode %o", entry, skillPath, originalMode)
+	}
+	snapshot, err := os.ReadFile(filepath.Join(backupDir, filepath.FromSlash(entry.SnapshotPath)))
+	if err != nil {
+		t.Fatalf("read backup snapshot: %v", err)
+	}
+	if !bytes.Equal(snapshot, edited) {
+		t.Fatalf("backup snapshot does not contain the edited skill")
 	}
 }
 

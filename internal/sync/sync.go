@@ -14,12 +14,16 @@ import (
 	"time"
 
 	"github.com/alesierraalta/rdd-plus/internal/assets"
+	"github.com/alesierraalta/rdd-plus/internal/buildinfo"
+	"github.com/alesierraalta/rdd-plus/internal/manifest"
 	"github.com/alesierraalta/rdd-plus/internal/skilltree"
+	"github.com/alesierraalta/rdd-plus/internal/state"
 )
 
 // Options controls a sync run.
 type Options struct {
 	DryRun bool
+	Force  bool
 }
 
 // HostReport says what sync did, or would do, for one host.
@@ -32,6 +36,14 @@ type HostReport struct {
 	SettingsPath    string
 	SettingsRead    bool
 	SettingsChanged bool
+	Counts          map[ActionClass]int
+	Actions         []Action
+	Modified        []string
+	Orphans         []string
+	Foreign         []string
+	Warnings        []string
+
+	stateChanged bool
 }
 
 // Report says what a sync did, or would do under DryRun. The fields copied from the Claude
@@ -49,6 +61,11 @@ type Report struct {
 	// is `already wired` would be a sentence about a file nobody looked at.
 	SettingsRead    bool
 	SettingsChanged bool
+	Counts          map[ActionClass]int
+	Modified        []string
+	Orphans         []string
+	Foreign         []string
+	StateWritten    bool
 
 	Hosts           []HostReport
 	LookedFor       []string
@@ -77,15 +94,41 @@ func (r Report) String() string {
 		for _, host := range r.Hosts {
 			fmt.Fprintf(&b, "%shost: %s\n", prefix, host.Host.Name)
 			fmt.Fprintf(&b, "%sconfig dir: %s\n", prefix, host.Host.ConfigDir)
-			for _, s := range host.Written {
-				if dir, ok := host.BackedUp[s]; ok {
-					fmt.Fprintf(&b, "%sskill %-32s replaced (previous copy at %s)\n", prefix, s, dir)
-				} else {
-					fmt.Fprintf(&b, "%sskill %-32s written\n", prefix, s)
+			if len(host.Counts) > 0 {
+				fmt.Fprintf(&b, "%splan: %s\n", prefix, formatCounts(host.Counts))
+			}
+			if r.DryRun {
+				for _, action := range host.Actions {
+					path := action.Path
+					if path == "" {
+						path = action.Component
+					}
+					fmt.Fprintf(&b, "%s[%s] %s: %s\n", prefix, action.Class, path, action.Reason)
+				}
+			} else {
+				for _, s := range host.Written {
+					if dir, ok := host.BackedUp[s]; ok {
+						fmt.Fprintf(&b, "%sskill %-32s replaced (snapshot at %s)\n", prefix, s, dir)
+					} else {
+						fmt.Fprintf(&b, "%sskill %-32s written\n", prefix, s)
+					}
+				}
+				for _, s := range host.Unchanged {
+					fmt.Fprintf(&b, "%sskill %-32s unchanged\n", prefix, s)
 				}
 			}
-			for _, s := range host.Unchanged {
-				fmt.Fprintf(&b, "%sskill %-32s unchanged\n", prefix, s)
+			for _, path := range host.Modified {
+				if optsForceHint(host.Warnings, path) {
+					fmt.Fprintf(&b, "%smodified: %s (warning: skipped; use --force to replace)\n", prefix, path)
+				} else {
+					fmt.Fprintf(&b, "%smodified: %s\n", prefix, path)
+				}
+			}
+			for _, path := range host.Orphans {
+				fmt.Fprintf(&b, "%sorphan: %s (not removed)\n", prefix, path)
+			}
+			for _, path := range host.Foreign {
+				fmt.Fprintf(&b, "%sskip-user: %s (left untouched)\n", prefix, path)
 			}
 			for _, h := range host.RemovedHooks {
 				fmt.Fprintf(&b, "%sremoved previous gate hook: %s\n", prefix, h)
@@ -141,14 +184,34 @@ func Sync(cfgDir, binPath string, opts Options) (Report, error) {
 // SyncHosts installs every embedded skill into each supplied host. Only the host named
 // claude receives settings.json hook wiring; all other hosts receive skills only.
 func SyncHosts(hosts []Host, binPath string, opts Options) (Report, error) {
-	report := Report{DryRun: opts.DryRun, BackedUp: map[string]string{}}
+	report := Report{DryRun: opts.DryRun, BackedUp: map[string]string{}, Counts: map[ActionClass]int{}}
+	installationState, err := state.Load()
+	if err != nil {
+		return report, err
+	}
+	components := manifest.Components()
+	files, err := manifest.Files()
+	if err != nil {
+		return report, err
+	}
+	var backups *backupStore
+	if !opts.DryRun {
+		backups, err = newBackupStore()
+		if err != nil {
+			return report, err
+		}
+	}
+	stateDirty := false
+
 	for _, host := range hosts {
 		if host.Name == "claude" {
 			report.ConfigDir = host.ConfigDir
 			report.ClaudeConfigDir = host.ConfigDir
 		}
-		hostReport, err := syncHost(host, binPath, opts)
+		hostReport, syncErr := syncHost(host, binPath, opts, installationState, components, files, backups)
 		report.Hosts = append(report.Hosts, hostReport)
+		mergeReport(&report, hostReport)
+		stateDirty = stateDirty || hostReport.stateChanged
 		if host.Name == "claude" {
 			report.ConfigDir = host.ConfigDir
 			report.Written = hostReport.Written
@@ -159,6 +222,14 @@ func SyncHosts(hosts []Host, binPath string, opts Options) (Report, error) {
 			report.SettingsRead = hostReport.SettingsRead
 			report.SettingsChanged = hostReport.SettingsChanged
 		}
+		if syncErr != nil {
+			return report, syncErr
+		}
+	}
+	if !opts.DryRun && len(report.Hosts) > 0 && stateDirty {
+		installationState.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		installationState.InstalledVersion = buildinfo.Version
+		report.StateWritten, err = installationState.Save()
 		if err != nil {
 			return report, err
 		}
@@ -166,8 +237,8 @@ func SyncHosts(hosts []Host, binPath string, opts Options) (Report, error) {
 	return report, nil
 }
 
-func syncHost(host Host, binPath string, opts Options) (HostReport, error) {
-	report := HostReport{Host: host, BackedUp: map[string]string{}}
+func syncHost(host Host, binPath string, opts Options, installationState *state.State, components []manifest.Component, files map[string][]manifest.File, backups *backupStore) (HostReport, error) {
+	report := HostReport{Host: host, BackedUp: map[string]string{}, Counts: map[ActionClass]int{}}
 	var settings map[string]any
 	var raw []byte
 	var err error
@@ -179,96 +250,263 @@ func syncHost(host Host, binPath string, opts Options) (HostReport, error) {
 		}
 		report.SettingsRead = true
 	}
-	if err := installSkills(host, opts, &report); err != nil {
+	deps := PlanDeps{
+		ListDir: func(path string) ([]string, error) {
+			entries, err := os.ReadDir(path)
+			if err != nil {
+				return nil, err
+			}
+			names := make([]string, 0, len(entries))
+			for _, entry := range entries {
+				names = append(names, entry.Name())
+			}
+			return names, nil
+		},
+		ReadFile: os.ReadFile,
+	}
+	if installationState.Hosts != nil {
+		if current, ok := installationState.Hosts[host.Name]; ok && current.ConfigDir != host.ConfigDir {
+			installationState.Hosts[host.Name] = state.HostState{}
+			if !opts.DryRun {
+				report.stateChanged = true
+			}
+		}
+	}
+	actions, err := BuildPlan(PlanInput{Components: components, Files: files, State: installationState, Hosts: []Host{host}}, deps)
+	if err != nil {
 		return report, err
 	}
-	if err := applyHook(host, binPath, opts, settings, raw, &report); err != nil {
-		return report, err
+	payloads := payloadsForHost(host, files)
+	if !opts.DryRun {
+		report.stateChanged = adoptHost(installationState, host, components)
+		if installationState.InstalledVersion != buildinfo.Version {
+			installationState.InstalledVersion = buildinfo.Version
+			report.stateChanged = true
+		}
+	}
+	for _, action := range actions {
+		report.Actions = append(report.Actions, action)
+		report.Counts[action.Class]++
+		if err := executeAction(action, host, binPath, opts, settings, raw, payloads, installationState, backups, &report); err != nil {
+			return report, err
+		}
 	}
 	return report, nil
 }
 
-// installSkills writes every embedded skill under the host's skills directory, one skill at a time.
-func installSkills(host Host, opts Options, report *HostReport) error {
-	skills := assets.Skills()
-	for _, name := range assets.SkillNames() {
-		if err := installSkill(skills, host, name, opts, report); err != nil {
+func executeAction(action Action, host Host, binPath string, opts Options, settings map[string]any, raw []byte, payloads map[string]manifest.File, installationState *state.State, backups *backupStore, report *HostReport) error {
+	switch action.Class {
+	case ActionCreate, ActionUpdate:
+		return applyAsset(action, host, opts, payloads, installationState, backups, report)
+	case ActionModified:
+		appendUniqueString(&report.Modified, action.Path)
+		if !opts.Force {
+			report.Warnings = append(report.Warnings, action.Path)
+			return nil
+		}
+		return applyAsset(action, host, opts, payloads, installationState, backups, report)
+	case ActionOK:
+		appendUniqueString(&report.Unchanged, action.Component)
+		if !opts.DryRun {
+			changed, err := recordAsset(installationState, host.Name, action, payloads[action.Path])
+			report.stateChanged = report.stateChanged || changed
+			return err
+		}
+	case ActionOrphan:
+		appendUniqueString(&report.Orphans, action.Path)
+	case ActionForeign:
+		appendUniqueString(&report.Foreign, action.Path)
+	case ActionHook:
+		if err := applyHook(host, binPath, opts, settings, raw, report); err != nil {
+			return err
+		}
+		if !opts.DryRun {
+			changed, err := recordHook(installationState, host.Name, HookCommand(binPath))
+			report.stateChanged = report.stateChanged || changed
 			return err
 		}
 	}
 	return nil
 }
 
-// installSkill writes one skill into the host, moving the installed copy aside first when there is one to move: a
-// differing skill is replaced rather than merged, and the copy it replaced is kept where the operator can find it.
-// A dry run records what it would do and writes nothing.
-func installSkill(skills fs.FS, host Host, name string, opts Options, report *HostReport) error {
-	target := filepath.Join(host.SkillsDir, name)
-	same, err := identical(skills, name, target)
-	if err != nil {
-		return err
+func applyAsset(action Action, host Host, opts Options, payloads map[string]manifest.File, installationState *state.State, backups *backupStore, report *HostReport) error {
+	payload, ok := payloads[action.Path]
+	if !ok {
+		return fmt.Errorf("no manifest payload for %s", action.Path)
 	}
-	if same {
-		report.Unchanged = append(report.Unchanged, name)
-		return nil
-	}
-	if _, err := os.Stat(target); err == nil {
-		backup := nextBackupPath(host.SkillsDir, name)
-		report.BackedUp[name] = backup
-		if !opts.DryRun {
-			if err := os.MkdirAll(filepath.Dir(backup), 0o755); err != nil {
-				return err
-			}
-			if err := os.Rename(target, backup); err != nil {
-				return err
-			}
+	if !opts.DryRun && (action.Class == ActionUpdate || action.Class == ActionModified) {
+		if backups == nil {
+			return fmt.Errorf("backup store is unavailable for %s", action.Path)
 		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
+		if err := backups.Snapshot(action.Path); err != nil {
+			return err
+		}
+		report.BackedUp[action.Component] = backups.Dir()
 	}
 	if !opts.DryRun {
-		if err := writeSkill(skills, name, target); err != nil {
+		if err := writeSkillFile(assets.Skills(), strings.TrimPrefix(payload.Source, "skills/"), action.Path); err != nil {
 			return err
 		}
+		changed, err := recordAssetValue(installationState, host.Name, action.Path, payload)
+		if err != nil {
+			return err
+		}
+		report.stateChanged = report.stateChanged || changed
 	}
-	report.Written = append(report.Written, name)
+	if !opts.DryRun {
+		report.stateChanged = true
+	}
+	appendUniqueString(&report.Written, action.Component)
 	return nil
 }
 
-// applyHook wires the Stop hook into the settings this run read, and writes the file back when that changed
-// anything: a settings file that was absent counts as a change, because the hook has to be written into one. Only
-// the claude host has settings to wire; every other host receives skills only. A dry run reports the change and
-// writes nothing.
+func payloadsForHost(host Host, files map[string][]manifest.File) map[string]manifest.File {
+	payloads := make(map[string]manifest.File)
+	for component, entries := range files {
+		for _, payload := range entries {
+			path := filepath.Join(host.SkillsDir, component, filepath.FromSlash(payload.Rel))
+			payloads[path] = payload
+		}
+	}
+	return payloads
+}
+
+func adoptHost(value *state.State, host Host, components []manifest.Component) bool {
+	if value.Hosts == nil {
+		value.Hosts = make(map[string]state.HostState)
+	}
+	current := value.Hosts[host.Name]
+	applicable := applicableComponents(host.Name, components)
+	changed := current.ConfigDir != host.ConfigDir || !sameStrings(current.Components, applicable)
+	current.ConfigDir = host.ConfigDir
+	current.Components = applicable
+	if current.Assets == nil {
+		current.Assets = make(map[string]state.AssetRecord)
+		changed = true
+	}
+	value.Hosts[host.Name] = current
+	return changed
+}
+
+func applicableComponents(host string, components []manifest.Component) []string {
+	var ids []string
+	for _, component := range components {
+		if manifest.AppliesTo(host, component) {
+			ids = append(ids, component.ID)
+		}
+	}
+	return ids
+}
+
+func recordAsset(value *state.State, host string, action Action, payload manifest.File) (bool, error) {
+	return recordAssetValue(value, host, action.Path, payload)
+}
+
+func recordAssetValue(value *state.State, host, path string, payload manifest.File) (bool, error) {
+	hostState := value.Hosts[host]
+	if hostState.Assets == nil {
+		hostState.Assets = make(map[string]state.AssetRecord)
+	}
+	mode := uint32(payloadMode(payload.Source).Perm())
+	if info, err := os.Stat(path); err == nil {
+		mode = uint32(info.Mode().Perm())
+	}
+	desired := state.AssetRecord{SHA256: payload.SHA256, Mode: mode, FromVersion: buildinfo.Version}
+	if existing, ok := hostState.Assets[path]; ok && existing == desired {
+		return false, nil
+	}
+	hostState.Assets[path] = desired
+	value.Hosts[host] = hostState
+	return true, nil
+}
+
+func recordHook(value *state.State, host, command string) (bool, error) {
+	hostState := value.Hosts[host]
+	desired := &state.HookState{Command: command, Wired: true}
+	if hostState.Hook != nil && *hostState.Hook == *desired {
+		return false, nil
+	}
+	hostState.Hook = desired
+	value.Hosts[host] = hostState
+	return true, nil
+}
+
+func mergeReport(report *Report, host HostReport) {
+	for class, count := range host.Counts {
+		report.Counts[class] += count
+	}
+	report.Modified = appendUniqueValues(report.Modified, host.Modified)
+	report.Orphans = appendUniqueValues(report.Orphans, host.Orphans)
+	report.Foreign = appendUniqueValues(report.Foreign, host.Foreign)
+}
+
+func appendUniqueString(values *[]string, value string) {
+	for _, existing := range *values {
+		if existing == value {
+			return
+		}
+	}
+	*values = append(*values, value)
+}
+
+func appendUniqueValues(values []string, additions []string) []string {
+	for _, value := range additions {
+		appendUniqueString(&values, value)
+	}
+	return values
+}
+
+func sameStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func formatCounts(counts map[ActionClass]int) string {
+	ordered := []ActionClass{ActionCreate, ActionUpdate, ActionModified, ActionOK, ActionOrphan, ActionForeign, ActionHook}
+	parts := make([]string, 0, len(ordered))
+	for _, class := range ordered {
+		if count := counts[class]; count > 0 {
+			parts = append(parts, fmt.Sprintf("%s=%d", class, count))
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
+func optsForceHint(warnings []string, path string) bool {
+	for _, warning := range warnings {
+		if warning == path {
+			return true
+		}
+	}
+	return false
+}
+
+// applyHook wires the Stop hook into the settings this run read and writes it only when the serialized bytes differ.
 func applyHook(host Host, binPath string, opts Options, settings map[string]any, raw []byte, report *HostReport) error {
 	if host.Name != "claude" {
 		return nil
 	}
-	changed, removed := wireHook(settings, HookCommand(binPath))
+	_, removed := wireHook(settings, HookCommand(binPath))
 	report.RemovedHooks = removed
-	report.SettingsChanged = changed || raw == nil
+	out, err := marshalSettings(settings)
+	if err != nil {
+		return err
+	}
+	report.SettingsChanged = raw == nil || !bytes.Equal(raw, out)
 	if !report.SettingsChanged || opts.DryRun {
 		return nil
 	}
 	if err := os.MkdirAll(host.ConfigDir, 0o755); err != nil {
 		return err
 	}
-	out, err := marshalSettings(settings)
-	if err != nil {
-		return err
-	}
 	return os.WriteFile(report.SettingsPath, out, 0o644)
-}
-
-func nextBackupPath(skillsDir, name string) string {
-	stamp := time.Now().UTC().Format("20060102T150405Z")
-	base := filepath.Join(skillsDir, ".rdd-plus-backup", name+"-"+stamp)
-	candidate := base
-	for i := 1; ; i++ {
-		if _, err := os.Stat(candidate); errors.Is(err, os.ErrNotExist) || err != nil {
-			return candidate
-		}
-		candidate = fmt.Sprintf("%s-%d", base, i)
-	}
 }
 
 // loadSettings returns the parsed settings, the raw bytes (nil when the file is absent),
@@ -319,16 +557,26 @@ func writeSkill(skills fs.FS, name, target string) error {
 		if d.IsDir() {
 			return os.MkdirAll(dst, 0o755)
 		}
-		data, err := fs.ReadFile(skills, p)
-		if err != nil {
-			return err
-		}
-		mode := os.FileMode(0o644)
-		if strings.HasSuffix(p, ".sh") || strings.HasSuffix(p, ".py") {
-			mode = 0o755
-		}
-		return os.WriteFile(dst, data, mode)
+		return writeSkillFile(skills, p, dst)
 	})
+}
+
+func writeSkillFile(skills fs.FS, source, target string) error {
+	data, err := fs.ReadFile(skills, source)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(target, data, payloadMode(source))
+}
+
+func payloadMode(source string) os.FileMode {
+	if strings.HasSuffix(source, ".sh") || strings.HasSuffix(source, ".py") {
+		return 0o755
+	}
+	return 0o644
 }
 
 // wireHook makes settings carry exactly one gate hook: previous gate entries (the Node hook,

@@ -39,7 +39,17 @@ func stopCommands(t *testing.T, s map[string]any) []string {
 	return out
 }
 
+func mustAbs(t *testing.T, path string) string {
+	t.Helper()
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return absolute
+}
+
 func TestSyncFreshConfigDir(t *testing.T) {
+	t.Setenv("RDD_PLUS_HOME", t.TempDir())
 	cfg := t.TempDir()
 	report, err := Sync(cfg, bin, Options{})
 	if err != nil {
@@ -63,6 +73,7 @@ func TestSyncFreshConfigDir(t *testing.T) {
 }
 
 func TestSyncPreservesExistingHooksAndSettings(t *testing.T) {
+	t.Setenv("RDD_PLUS_HOME", t.TempDir())
 	cfg := t.TempDir()
 	existing := `{
   "model": "opus",
@@ -92,6 +103,7 @@ func TestSyncPreservesExistingHooksAndSettings(t *testing.T) {
 }
 
 func TestSyncIsIdempotent(t *testing.T) {
+	t.Setenv("RDD_PLUS_HOME", t.TempDir())
 	cfg := t.TempDir()
 	if _, err := Sync(cfg, bin, Options{}); err != nil {
 		t.Fatal(err)
@@ -117,16 +129,20 @@ func TestSyncIsIdempotent(t *testing.T) {
 }
 
 func TestSyncBacksUpADifferingSkill(t *testing.T) {
+	t.Setenv("RDD_PLUS_HOME", t.TempDir())
 	cfg := t.TempDir()
 	if _, err := Sync(cfg, bin, Options{}); err != nil {
 		t.Fatal(err)
 	}
 	name := assets.SkillNames()[0]
 	skillMD := filepath.Join(cfg, "skills", name, "SKILL.md")
-	if err := os.WriteFile(skillMD, []byte("local edit\n"), 0o644); err != nil {
+	if err := os.WriteFile(skillMD, []byte("local edit\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	report, err := Sync(cfg, bin, Options{})
+	if err := os.Chmod(skillMD, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	report, err := Sync(cfg, bin, Options{Force: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +150,19 @@ func TestSyncBacksUpADifferingSkill(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected %s to be backed up; report %+v", name, report)
 	}
-	saved, err := os.ReadFile(filepath.Join(backup, "SKILL.md"))
+	var manifest backupManifest
+	data, err := os.ReadFile(filepath.Join(backup, "manifest.json"))
+	if err != nil || json.Unmarshal(data, &manifest) != nil {
+		t.Fatalf("backup manifest: %v", err)
+	}
+	if manifest.FileCount != 1 || len(manifest.Entries) != 1 {
+		t.Fatalf("manifest entries = %+v", manifest.Entries)
+	}
+	entry := manifest.Entries[0]
+	if entry.OriginalPath != mustAbs(t, skillMD) || entry.Mode != 0o600 {
+		t.Fatalf("manifest entry = %+v", entry)
+	}
+	saved, err := os.ReadFile(filepath.Join(backup, filepath.FromSlash(entry.SnapshotPath)))
 	if err != nil || string(saved) != "local edit\n" {
 		t.Fatalf("backup does not hold the local edit: %v %q", err, saved)
 	}
@@ -142,12 +170,13 @@ func TestSyncBacksUpADifferingSkill(t *testing.T) {
 	if string(restored) == "local edit\n" {
 		t.Fatal("skill was not replaced with the embedded version")
 	}
-	if !strings.Contains(backup, ".rdd-plus-backup") {
-		t.Fatalf("backup dir %s is not under .rdd-plus-backup", backup)
+	if strings.Contains(backup, filepath.Join("skills", ".rdd-plus-backup")) {
+		t.Fatalf("backup dir %s still uses the retired per-host layout", backup)
 	}
 }
 
 func TestSyncRefusesInvalidSettingsAndWritesNothing(t *testing.T) {
+	t.Setenv("RDD_PLUS_HOME", t.TempDir())
 	cfg := t.TempDir()
 	broken := []byte("{not json")
 	if err := os.WriteFile(filepath.Join(cfg, "settings.json"), broken, 0o644); err != nil {
@@ -170,6 +199,7 @@ func TestSyncRefusesInvalidSettingsAndWritesNothing(t *testing.T) {
 // telling a reader the gate hook is `already wired` in a file the tool could not parse is a sentence about a
 // file nobody looked at, and it sits one line above the refusal that says otherwise.
 func TestSyncSaysNothingAboutTheHookInSettingsItCouldNotRead(t *testing.T) {
+	t.Setenv("RDD_PLUS_HOME", t.TempDir())
 	cfg := t.TempDir()
 	if err := os.WriteFile(filepath.Join(cfg, "settings.json"), []byte("{not json"), 0o644); err != nil {
 		t.Fatal(err)
@@ -184,6 +214,7 @@ func TestSyncSaysNothingAboutTheHookInSettingsItCouldNotRead(t *testing.T) {
 }
 
 func TestSyncDryRunWritesNothing(t *testing.T) {
+	t.Setenv("RDD_PLUS_HOME", t.TempDir())
 	cfg := t.TempDir()
 	report, err := Sync(cfg, bin, Options{DryRun: true})
 	if err != nil {
@@ -204,6 +235,7 @@ func TestSyncDryRunWritesNothing(t *testing.T) {
 }
 
 func TestSyncRemovesPreviousGateHooks(t *testing.T) {
+	t.Setenv("RDD_PLUS_HOME", t.TempDir())
 	cfg := t.TempDir()
 	existing := `{"hooks":{"Stop":[
   {"matcher":"","hooks":[{"type":"command","command":"gentle-ai review stop-hook --agent claude-code","timeout":60}]},
@@ -250,6 +282,7 @@ func TestIsPreviousGate(t *testing.T) {
 
 func testAllHosts(t *testing.T) []Host {
 	t.Helper()
+	t.Setenv("RDD_PLUS_HOME", t.TempDir())
 	home := t.TempDir()
 	for _, dir := range []string{".claude", filepath.Join(".config", "opencode"), ".gemini", ".codex"} {
 		if err := os.MkdirAll(filepath.Join(home, dir), 0o755); err != nil {
@@ -296,7 +329,7 @@ func TestSyncBacksUpADifferingCopyPerHost(t *testing.T) {
 		if err := os.MkdirAll(target, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(target, "SKILL.md"), []byte("local edit\\n"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(target, "SKILL.md"), []byte("local edit\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -305,15 +338,25 @@ func TestSyncBacksUpADifferingCopyPerHost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var backup string
 	for _, host := range hosts {
-		backup, ok := hostReport(t, report, host.Name).BackedUp[name]
-		if !ok || !strings.Contains(backup, filepath.Join(host.SkillsDir, ".rdd-plus-backup")) {
-			t.Fatalf("%s backup = %q, want a backup under its skills dir", host.Name, backup)
+		current, ok := hostReport(t, report, host.Name).BackedUp[name]
+		if !ok {
+			t.Fatalf("%s has no central backup: %+v", host.Name, hostReport(t, report, host.Name))
 		}
-		saved, err := os.ReadFile(filepath.Join(backup, "SKILL.md"))
-		if err != nil || string(saved) != "local edit\\n" {
-			t.Fatalf("%s backup does not hold its local edit: %v %q", host.Name, err, saved)
+		if backup == "" {
+			backup = current
+		} else if current != backup {
+			t.Fatalf("backup stores differ: %q and %q", backup, current)
 		}
+	}
+	var manifest backupManifest
+	data, err := os.ReadFile(filepath.Join(backup, "manifest.json"))
+	if err != nil || json.Unmarshal(data, &manifest) != nil {
+		t.Fatalf("backup manifest: %v", err)
+	}
+	if manifest.FileCount != len(hosts) {
+		t.Fatalf("manifest file count = %d, want %d", manifest.FileCount, len(hosts))
 	}
 }
 
@@ -361,4 +404,187 @@ func TestSyncWritesNoHookOutsideClaude(t *testing.T) {
 			t.Fatalf("%s settings.json changed: %v %q", host.Name, err, got)
 		}
 	}
+}
+
+func backupDirs(t *testing.T, root string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(filepath.Join(root, "backups"))
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	var dirs []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			dirs = append(dirs, entry.Name())
+		}
+	}
+	return dirs
+}
+
+func TestSyncTwiceIsByteIdentical(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("RDD_PLUS_HOME", root)
+	cfg := t.TempDir()
+	if _, err := Sync(cfg, bin, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	stateBefore, err := os.ReadFile(filepath.Join(root, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	settingsBefore, err := os.ReadFile(filepath.Join(cfg, "settings.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	backupsBefore := backupDirs(t, root)
+	report, err := Sync(cfg, bin, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateAfter, _ := os.ReadFile(filepath.Join(root, "state.json"))
+	settingsAfter, _ := os.ReadFile(filepath.Join(cfg, "settings.json"))
+	if string(stateBefore) != string(stateAfter) || string(settingsBefore) != string(settingsAfter) {
+		t.Fatal("second sync changed state.json or settings.json bytes")
+	}
+	if report.StateWritten {
+		t.Fatal("second sync unexpectedly wrote state")
+	}
+	backupsAfter := backupDirs(t, root)
+	if strings.Join(backupsBefore, "\n") != strings.Join(backupsAfter, "\n") {
+		t.Fatalf("backup directories changed: before=%v after=%v", backupsBefore, backupsAfter)
+	}
+}
+
+func TestSyncRefusesAModifiedFileWithoutForce(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("RDD_PLUS_HOME", root)
+	cfg := t.TempDir()
+	if _, err := Sync(cfg, bin, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	name := assets.SkillNames()[0]
+	path := filepath.Join(cfg, "skills", name, "SKILL.md")
+	if err := os.WriteFile(path, []byte("user edit\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	withoutForce, err := Sync(cfg, bin, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(path)
+	if string(got) != "user edit\n" {
+		t.Fatal("sync without --force replaced the user edit")
+	}
+	if !contains(withoutForce.Modified, path) || !strings.Contains(withoutForce.String(), "warning: skipped") {
+		t.Fatalf("modified file was not reported honestly: %+v\n%s", withoutForce.Modified, withoutForce.String())
+	}
+	if dirs := backupDirs(t, root); len(dirs) != 0 {
+		t.Fatalf("refusal created backups: %v", dirs)
+	}
+	withForce, err := Sync(cfg, bin, Options{Force: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ = os.ReadFile(path)
+	if string(got) == "user edit\n" {
+		t.Fatal("--force did not replace the user edit")
+	}
+	backup := withForce.BackedUp[name]
+	if backup == "" {
+		t.Fatal("--force did not report a central backup")
+	}
+	var manifest backupManifest
+	data, _ := os.ReadFile(filepath.Join(backup, "manifest.json"))
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if len(manifest.Entries) != 1 {
+		t.Fatalf("manifest entries = %d, want 1", len(manifest.Entries))
+	}
+	snapshot, err := os.ReadFile(filepath.Join(backup, filepath.FromSlash(manifest.Entries[0].SnapshotPath)))
+	if err != nil || string(snapshot) != "user edit\n" {
+		t.Fatalf("snapshot = %q, err=%v", snapshot, err)
+	}
+}
+
+func TestSyncLeavesForeignSkillsAlone(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("RDD_PLUS_HOME", root)
+	cfg := t.TempDir()
+	foreign := filepath.Join(cfg, "skills", "unrelated", "README.md")
+	if err := os.MkdirAll(filepath.Dir(foreign), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(foreign, []byte("keep me\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	report, err := Sync(cfg, bin, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(foreign)
+	if err != nil || string(got) != "keep me\n" {
+		t.Fatalf("foreign skill changed: %v %q", err, got)
+	}
+	if !contains(report.Foreign, foreign) {
+		t.Fatalf("foreign path was not reported: %v", report.Foreign)
+	}
+}
+
+func TestSyncWritesSettingsOnlyWhenTheyDiffer(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("RDD_PLUS_HOME", root)
+	cfg := t.TempDir()
+	if _, err := Sync(cfg, bin, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(cfg, "settings.json")
+	before, _ := os.ReadFile(path)
+	infoBefore, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Sync(cfg, bin, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := os.ReadFile(path)
+	infoAfter, _ := os.Stat(path)
+	if string(before) != string(after) || !infoBefore.ModTime().Equal(infoAfter.ModTime()) {
+		t.Fatal("second sync rewrote settings.json")
+	}
+}
+
+func TestSyncCreatesNoStateOnADryRun(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("RDD_PLUS_HOME", root)
+	cfg := t.TempDir()
+	report, err := Sync(cfg, bin, Options{DryRun: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(report.String(), "[create]") {
+		t.Fatalf("dry-run did not print plan classes:\n%s", report.String())
+	}
+	for _, path := range []string{
+		filepath.Join(root, "state.json"),
+		filepath.Join(cfg, "settings.json"),
+		filepath.Join(cfg, "skills"),
+		filepath.Join(root, "backups"),
+	} {
+		if _, err := os.Stat(path); err == nil {
+			t.Fatalf("dry-run created %s", path)
+		}
+	}
+}
+
+func contains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
