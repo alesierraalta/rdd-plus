@@ -1,6 +1,6 @@
-// Package feedback records one honest process report about the testing discipline itself and
-// reads those reports back over time. The gate offers feedback at every Stop; this is where the
-// answer lands.
+// Package feedback records one honest process report about the testing discipline itself, sanitizes
+// it before it persists, and reads those reports back over time. The gate offers feedback at every
+// Stop; this is where the answer lands.
 package feedback
 
 import (
@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/alesierraalta/rdd-plus/internal/assets"
+	"github.com/alesierraalta/rdd-plus/internal/sanitize"
 )
 
 // Verdicts are the three honest answers to "did the method earn its keep".
@@ -44,16 +45,28 @@ type Report struct {
 	Verdict  string `json:"verdict"`
 	Guess    string `json:"guess,omitempty"`
 	Freeform string `json:"freeform,omitempty"`
+	// Sanitized is the marker of a row written through the sanitization stage. It is output-only:
+	// it is deliberately absent from knownKeys and from Template, so a submitted report cannot
+	// claim it. Rows written before the stage existed lack it.
+	Sanitized bool `json:"sanitized,omitempty"`
+}
+
+func ledgerPathIn(telemetryDir string) string {
+	return filepath.Join(telemetryDir, "run-feedback.jsonl")
 }
 
 // LedgerPath is the append-only JSONL ledger of reports under configDir.
 func LedgerPath(configDir string) string {
-	return filepath.Join(configDir, "telemetry", "run-feedback.jsonl")
+	return ledgerPathIn(sanitize.TelemetryDir(configDir))
+}
+
+func markdownPathIn(telemetryDir string) string {
+	return filepath.Join(telemetryDir, "run-feedback.md")
 }
 
 // MarkdownPath is the readable rendering of the same reports under configDir.
 func MarkdownPath(configDir string) string {
-	return filepath.Join(configDir, "telemetry", "run-feedback.md")
+	return markdownPathIn(sanitize.TelemetryDir(configDir))
 }
 
 // requiredFields are the fields a report cannot be recorded without.
@@ -156,23 +169,86 @@ const markdownHeader = "# Run feedback\n\nOne section per `rdd-plus feedback` re
 // Record appends one report to the ledger and one section to the markdown file. Both files are
 // append-only.
 func Record(configDir string, r Report) error {
-	if err := os.MkdirAll(filepath.Dir(LedgerPath(configDir)), 0o755); err != nil {
+	telemetryDir := sanitize.TelemetryDir(configDir)
+	key, err := sanitize.LoadKeyIn(telemetryDir)
+	if err != nil {
+		return fmt.Errorf("load telemetry key: %w", err)
+	}
+
+	type mapping struct {
+		name, pseudonym, original string
+	}
+	var mappings []mapping
+	if r.Repo != "" {
+		original := r.Repo
+		r.Repo = key.ID("repo", original)
+		mappings = append(mappings, mapping{name: "repo", pseudonym: r.Repo, original: original})
+	}
+	if r.Plan != "" && r.Plan != NotGiven {
+		original := r.Plan
+		r.Plan = key.ID("plan", original)
+		mappings = append(mappings, mapping{name: "plan", pseudonym: r.Plan, original: original})
+	}
+
+	for _, field := range []struct {
+		name     string
+		value    *string
+		required bool
+	}{
+		{name: "paid", value: &r.Paid, required: true},
+		{name: "cost", value: &r.Cost, required: true},
+		{name: "reason", value: &r.Reason, required: true},
+		{name: "guess", value: &r.Guess},
+		{name: "freeform", value: &r.Freeform},
+	} {
+		*field.value, err = sanitize.Field(*field.value, field.required)
+		if err != nil {
+			return fmt.Errorf("%s: %w", field.name, err)
+		}
+	}
+
+	for _, field := range []struct {
+		name, value string
+	}{
+		{name: "repo", value: r.Repo}, {name: "plan", value: r.Plan},
+		{name: "paid", value: r.Paid}, {name: "cost", value: r.Cost},
+		{name: "reason", value: r.Reason}, {name: "guess", value: r.Guess},
+		{name: "freeform", value: r.Freeform},
+	} {
+		if err := sanitize.Verify(field.value); err != nil {
+			return fmt.Errorf("%s: %w", field.name, err)
+		}
+	}
+	r.Sanitized = true
+
+	// Every decision above is made in memory, so a refused report leaves no trace: the map is
+	// written only for a row that will land. It is still written before the ledger, because
+	// recording the row anyway would leave the operator unable to resolve the pseudonym with no
+	// signal that it happened, so a map failure stays hard.
+	for _, entry := range mappings {
+		if err := key.Remember(telemetryDir, entry.pseudonym, entry.original); err != nil {
+			return fmt.Errorf("remember %s pseudonym: %w", entry.name, err)
+		}
+	}
+
+	ledgerPath := ledgerPathIn(telemetryDir)
+	markdownPath := markdownPathIn(telemetryDir)
+	if err := os.MkdirAll(filepath.Dir(ledgerPath), 0o700); err != nil {
 		return err
 	}
 	line, err := json.Marshal(r)
 	if err != nil {
 		return err
 	}
-	if err := appendFile(LedgerPath(configDir), append(line, '\n')); err != nil {
+	if err := appendFile(ledgerPath, append(line, '\n')); err != nil {
 		return err
 	}
-	md := MarkdownPath(configDir)
-	if _, err := os.Stat(md); os.IsNotExist(err) {
-		if err := appendFile(md, []byte(markdownHeader)); err != nil {
+	if _, err := os.Stat(markdownPath); os.IsNotExist(err) {
+		if err := appendFile(markdownPath, []byte(markdownHeader)); err != nil {
 			return err
 		}
 	}
-	return appendFile(md, []byte(renderSection(r)))
+	return appendFile(markdownPath, []byte(renderSection(r)))
 }
 
 // renderSection is the readable rendering of one report.
@@ -204,6 +280,9 @@ func appendFile(path string, data []byte) error {
 }
 
 // Read returns every report in the ledger, oldest first. A missing ledger is empty, not an error.
+// Read reads the ledger back for local use. A row written after sanitization carries pseudonyms, so
+// the local map resolves them here: the bytes on disk keep no identity, and the operator still reads
+// their own project names. A row that predates sanitization is returned exactly as it was written.
 func Read(configDir string) ([]Report, error) {
 	raw, err := os.ReadFile(LedgerPath(configDir))
 	if os.IsNotExist(err) {
@@ -212,6 +291,7 @@ func Read(configDir string) ([]Report, error) {
 	if err != nil {
 		return nil, err
 	}
+	telemetryDir := sanitize.TelemetryDir(configDir)
 	var out []Report
 	for i, line := range strings.Split(strings.TrimRight(string(raw), "\n"), "\n") {
 		if strings.TrimSpace(line) == "" {
@@ -220,6 +300,14 @@ func Read(configDir string) ([]Report, error) {
 		var r Report
 		if err := json.Unmarshal([]byte(line), &r); err != nil {
 			return nil, fmt.Errorf("ledger line %d: %w", i+1, err)
+		}
+		if r.Sanitized {
+			if original, ok := sanitize.Resolve(telemetryDir, r.Repo); ok {
+				r.Repo = original
+			}
+			if original, ok := sanitize.Resolve(telemetryDir, r.Plan); ok {
+				r.Plan = original
+			}
 		}
 		out = append(out, r)
 	}
@@ -236,7 +324,17 @@ func Summary(configDir string) (string, error) {
 		return "no reports yet: run `rdd-plus feedback --template` after a run to start the ledger\n", nil
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "run feedback: %d report(s)\n\n", len(reports))
+	fmt.Fprintf(&b, "run feedback: %d report(s)\n", len(reports))
+	legacy := 0
+	for _, r := range reports {
+		if !r.Sanitized {
+			legacy++
+		}
+	}
+	if legacy > 0 {
+		fmt.Fprintf(&b, "%d of %d report(s) predate sanitization and may carry raw identity\n", legacy, len(reports))
+	}
+	b.WriteString("\n")
 
 	counts := map[string]int{}
 	for _, r := range reports {

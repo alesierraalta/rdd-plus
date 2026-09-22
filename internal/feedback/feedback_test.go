@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/alesierraalta/rdd-plus/internal/sanitize"
 )
 
 // validText is the shape --template prints, filled in: one key per line, the run's identity in
@@ -175,7 +177,19 @@ func TestRecordAppendsJSONAndMarkdownWithoutRewriting(t *testing.T) {
 	if len(lines) != 2 {
 		t.Fatalf("ledger has %d lines, want 2:\n%s", len(lines), raw)
 	}
-	for i, want := range []Report{first, second} {
+	key, err := sanitize.LoadKey(dir)
+	if err != nil {
+		t.Fatalf("LoadKey: %v", err)
+	}
+	wantReports := []Report{first, second}
+	for i := range wantReports {
+		wantReports[i].Repo = key.ID("repo", wantReports[i].Repo)
+		if wantReports[i].Plan != "" && wantReports[i].Plan != NotGiven {
+			wantReports[i].Plan = key.ID("plan", wantReports[i].Plan)
+		}
+		wantReports[i].Sanitized = true
+	}
+	for i, want := range wantReports {
 		var got Report
 		if err := json.Unmarshal([]byte(lines[i]), &got); err != nil {
 			t.Fatalf("line %d not JSON: %v", i, err)
@@ -200,11 +214,241 @@ func TestRecordAppendsJSONAndMarkdownWithoutRewriting(t *testing.T) {
 	}
 }
 
+func TestRecordRefusesASecretRatherThanPersistingIt(t *testing.T) {
+	dir := t.TempDir()
+	r := Report{TS: "t", Repo: "/repo", Plan: NotGiven, Skill: "skill", Build: "build",
+		Paid: "paid", Cost: "one hour", Reason: "contains ghp_1234567890abcdef1234", Verdict: VerdictPaid}
+	recordErr := Record(dir, r)
+	if recordErr == nil || !strings.Contains(recordErr.Error(), "reason: detected github_token") {
+		t.Fatalf("Record error = %v, want a reason field github_token refusal", recordErr)
+	}
+	for _, path := range []string{LedgerPath(dir), MarkdownPath(dir)} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("refused report left %s behind: %v", path, err)
+		}
+	}
+	t.Logf("observed error %q; ledger absent; markdown absent", recordErr)
+}
+
+func TestRecordAnonymisesTheRepositoryAndThePlan(t *testing.T) {
+	dir := t.TempDir()
+	r := Report{TS: "t", Repo: "/home/someone/acme-billing", Plan: "internal/secret-plans/plan.md",
+		Skill: "skill", Build: "build", Paid: "paid", Cost: "one hour", Reason: "reason", Verdict: VerdictPaid}
+	if err := Record(dir, r); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	raw, err := os.ReadFile(LedgerPath(dir))
+	if err != nil {
+		t.Fatalf("ledger: %v", err)
+	}
+	line := string(raw)
+	for _, unwanted := range []string{"acme-billing", "secret-plans", "/home/someone"} {
+		if strings.Contains(line, unwanted) {
+			t.Fatalf("ledger contains raw identity %q: %s", unwanted, line)
+		}
+	}
+	if !strings.Contains(line, `"repo-`) || !strings.Contains(line, `"sanitized":true`) {
+		t.Fatalf("ledger lacks the sanitized repository marker: %s", line)
+	}
+}
+
+func TestRecordRedactsASecretInAnOptionalField(t *testing.T) {
+	dir := t.TempDir()
+	token := "ghp_1234567890abcdef1234"
+	r := Report{TS: "t", Repo: "/repo", Plan: NotGiven, Skill: "skill", Build: "build",
+		Paid: "paid", Cost: "one hour", Reason: "reason", Freeform: "notes: " + token, Verdict: VerdictPaid}
+	if err := Record(dir, r); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	ledger, err := os.ReadFile(LedgerPath(dir))
+	if err != nil {
+		t.Fatalf("ledger: %v", err)
+	}
+	markdown, err := os.ReadFile(MarkdownPath(dir))
+	if err != nil {
+		t.Fatalf("markdown: %v", err)
+	}
+	for _, artifact := range []string{string(ledger), string(markdown)} {
+		if strings.Contains(artifact, token) || !strings.Contains(artifact, sanitize.Redacted) {
+			t.Fatalf("optional secret handling = %q, want redaction without the token", artifact)
+		}
+	}
+}
+
+func TestRecordWritesTheLocalResolutionMap(t *testing.T) {
+	dir := t.TempDir()
+	r := Report{TS: "t", Repo: "/home/someone/acme-billing", Plan: NotGiven, Skill: "skill", Build: "build",
+		Paid: "paid", Cost: "one hour", Reason: "reason", Verdict: VerdictPaid}
+	if err := Record(dir, r); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	telemetryInfo, err := os.Stat(sanitize.TelemetryDir(dir))
+	if err != nil {
+		t.Fatalf("telemetry directory: %v", err)
+	}
+	if got := telemetryInfo.Mode().Perm(); got != 0o700 {
+		t.Fatalf("telemetry mode = %o, want 700", got)
+	}
+	mapPath := filepath.Join(sanitize.TelemetryDir(dir), ".pseudonyms.jsonl")
+	mapInfo, err := os.Stat(mapPath)
+	if err != nil {
+		t.Fatalf("pseudonym map: %v", err)
+	}
+	if got := mapInfo.Mode().Perm(); got != 0o600 {
+		t.Fatalf("pseudonym map mode = %o, want 600", got)
+	}
+	line, err := os.ReadFile(LedgerPath(dir))
+	if err != nil {
+		t.Fatalf("ledger: %v", err)
+	}
+	var recorded Report
+	if err := json.Unmarshal([]byte(strings.TrimSpace(string(line))), &recorded); err != nil {
+		t.Fatalf("recorded line: %v", err)
+	}
+	if got, ok := sanitize.Resolve(sanitize.TelemetryDir(dir), recorded.Repo); !ok || got != r.Repo {
+		t.Fatalf("Resolve(%q) = %q, %v; want %q, true", recorded.Repo, got, ok, r.Repo)
+	}
+}
+
+func TestRecordRefusesToWriteWhenTheLocalMapCannotBeWritten(t *testing.T) {
+	dir := t.TempDir()
+	telemetryDir := sanitize.TelemetryDir(dir)
+	if err := os.MkdirAll(telemetryDir, 0o700); err != nil {
+		t.Fatalf("telemetry directory: %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(telemetryDir, ".pseudonyms.jsonl"), 0o700); err != nil {
+		t.Fatalf("map directory: %v", err)
+	}
+	r := Report{TS: "t", Repo: "/repo", Plan: NotGiven, Skill: "skill", Build: "build",
+		Paid: "paid", Cost: "one hour", Reason: "reason", Verdict: VerdictPaid}
+	if err := Record(dir, r); err == nil {
+		t.Fatal("Record succeeded with an unwritable local map")
+	}
+	if _, err := os.Stat(LedgerPath(dir)); !os.IsNotExist(err) {
+		t.Fatalf("map refusal appended a ledger row: %v", err)
+	}
+}
+
+func TestRecordRefusesASecretWithoutTouchingTheLocalMap(t *testing.T) {
+	dir := t.TempDir()
+	accepted := Report{TS: "t", Repo: "/home/someone/acme-billing", Plan: NotGiven, Skill: "skill", Build: "build",
+		Paid: "paid", Cost: "one hour", Reason: "reason", Verdict: VerdictPaid}
+	if err := Record(dir, accepted); err != nil {
+		t.Fatalf("Record accepted report: %v", err)
+	}
+	mapPath := filepath.Join(sanitize.TelemetryDir(dir), ".pseudonyms.jsonl")
+	before, err := os.ReadFile(mapPath)
+	if err != nil {
+		t.Fatalf("pseudonym map: %v", err)
+	}
+	refused := accepted
+	refused.Reason = "the leaked token was ghp_1234567890abcdef1234"
+	if err := Record(dir, refused); err == nil {
+		t.Fatal("Record accepted a report whose required field held a secret")
+	}
+	after, err := os.ReadFile(mapPath)
+	if err != nil {
+		t.Fatalf("pseudonym map after refusal: %v", err)
+	}
+	if string(before) != string(after) {
+		t.Fatalf("refusal changed the local map:\n before %q\n after  %q", before, after)
+	}
+	rows, err := os.ReadFile(LedgerPath(dir))
+	if err != nil {
+		t.Fatalf("ledger: %v", err)
+	}
+	if got := strings.Count(string(rows), "\n"); got != 1 {
+		t.Fatalf("ledger rows = %d, want 1", got)
+	}
+	empty := t.TempDir()
+	if err := Record(empty, refused); err == nil {
+		t.Fatal("Record accepted a report whose required field held a secret")
+	}
+	if _, err := os.Stat(filepath.Join(sanitize.TelemetryDir(empty), ".pseudonyms.jsonl")); !os.IsNotExist(err) {
+		t.Fatalf("a refusal created a local map: %v", err)
+	}
+}
+
+func TestRecordKeepsTheMarkdownInStepWithTheJSONL(t *testing.T) {
+	dir := t.TempDir()
+	r := Report{TS: "t", Repo: "/home/someone/acme-billing", Plan: NotGiven, Skill: "skill", Build: "build",
+		Paid: "paid", Cost: "one hour", Reason: "reason", Verdict: VerdictPaid}
+	if err := Record(dir, r); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	line, err := os.ReadFile(LedgerPath(dir))
+	if err != nil {
+		t.Fatalf("ledger: %v", err)
+	}
+	var recorded Report
+	if err := json.Unmarshal([]byte(strings.TrimSpace(string(line))), &recorded); err != nil {
+		t.Fatalf("recorded line: %v", err)
+	}
+	markdown, err := os.ReadFile(MarkdownPath(dir))
+	if err != nil {
+		t.Fatalf("markdown: %v", err)
+	}
+	if !strings.Contains(string(markdown), "- repo: "+recorded.Repo) || strings.Contains(string(markdown), r.Repo) {
+		t.Fatalf("markdown identity is out of step with JSONL: %s", markdown)
+	}
+}
+
+func TestSummarySaysHowManyRowsPredateSanitization(t *testing.T) {
+	write := func(t *testing.T, dir string, reports ...Report) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(LedgerPath(dir)), 0o700); err != nil {
+			t.Fatalf("telemetry directory: %v", err)
+		}
+		var lines []string
+		for _, r := range reports {
+			line, err := json.Marshal(r)
+			if err != nil {
+				t.Fatalf("marshal report: %v", err)
+			}
+			lines = append(lines, string(line))
+		}
+		if err := os.WriteFile(LedgerPath(dir), []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+			t.Fatalf("write ledger: %v", err)
+		}
+	}
+	legacy := Report{TS: "t", Repo: "repo-legacy", Plan: NotGiven, Skill: "skill", Build: "build",
+		Paid: "paid", Cost: "one hour", Reason: "reason", Verdict: VerdictPaid}
+	marked := legacy
+	marked.Sanitized = true
+	mixedDir := t.TempDir()
+	write(t, mixedDir, legacy, marked)
+	got, err := Summary(mixedDir)
+	if err != nil {
+		t.Fatalf("Summary mixed: %v", err)
+	}
+	if !strings.Contains(got, "1 of 2 report(s) predate sanitization and may carry raw identity") {
+		t.Fatalf("summary missing legacy warning:\n%s", got)
+	}
+
+	markedDir := t.TempDir()
+	write(t, markedDir, marked, marked)
+	got, err = Summary(markedDir)
+	if err != nil {
+		t.Fatalf("Summary marked: %v", err)
+	}
+	if strings.Contains(got, "predate sanitization") {
+		t.Fatalf("summary warns when every row is marked:\n%s", got)
+	}
+}
+
+func TestParseRefusesTheSanitizedMarkerAsAnInputKey(t *testing.T) {
+	_, err := Parse(validText() + "sanitized: true\n")
+	if err == nil || !strings.Contains(err.Error(), "sanitized") {
+		t.Fatalf("Parse accepted the output-only marker: %v", err)
+	}
+}
+
 func TestReadLoadsLegacySkillUnchangedAfterRecord(t *testing.T) {
 	dir := t.TempDir()
 	want := Report{
 		TS: "2026-09-10T12:00:00Z", Repo: "/repo", Plan: "p", Skill: "0.3.6", Build: "b",
 		Paid: "paid words", Cost: "one hour", Reason: "reason", Verdict: VerdictPaid,
+		Sanitized: true, // Record marks what it wrote; Read resolves the pseudonyms back to these values
 	}
 	if err := Record(dir, want); err != nil {
 		t.Fatalf("Record: %v", err)

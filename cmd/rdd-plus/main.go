@@ -25,6 +25,7 @@ import (
 	"github.com/alesierraalta/rdd-plus/internal/feedback"
 	"github.com/alesierraalta/rdd-plus/internal/gate"
 	"github.com/alesierraalta/rdd-plus/internal/plan"
+	"github.com/alesierraalta/rdd-plus/internal/sanitize"
 	"github.com/alesierraalta/rdd-plus/internal/sync"
 )
 
@@ -335,7 +336,19 @@ func runFeedback(args []string) int {
 			fmt.Fprintln(os.Stderr, "feedback:", err)
 			return 1
 		}
-		fmt.Printf("recorded %s feedback for %s\n", r.Verdict, r.Repo)
+		recordedRepo := r.Repo
+		if r.Repo != "" {
+			recordedRepo = "repo-unsealed"
+			if key, err := sanitize.LoadKey(*configDir); err == nil {
+				recordedRepo = key.ID("repo", r.Repo)
+			}
+			if resolved, ok := sanitize.Resolve(sanitize.TelemetryDir(*configDir), recordedRepo); ok {
+				recordedRepo = resolved
+			} else {
+				recordedRepo += " (local map unavailable)"
+			}
+		}
+		fmt.Printf("recorded %s feedback for %s\n", r.Verdict, recordedRepo)
 		return 0
 	default:
 		_ = *summary // --summary and no flags are the same cheapest path to the answer
