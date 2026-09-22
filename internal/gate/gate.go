@@ -327,6 +327,8 @@ func Decide(in Input, d Deps) Result {
 	if judged && ran {
 		return audit(d, root, rel, cfgErr, res, entry)
 	}
+	// Nothing was judged, so there is nothing to fire and nothing to audit; the entry still records
+	// the stop.
 	return res
 }
 

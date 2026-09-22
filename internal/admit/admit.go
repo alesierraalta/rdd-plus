@@ -51,16 +51,11 @@ type planLockResult struct {
 	err  error
 }
 
-// Run admits the requested Evidence rows and returns the process exit code: 0 when no row was refused, 1 when
-// a row was refused or the plan could not be read or written, and 2 when a flag precondition or a named id is
-// wrong. It writes the row lines and the summary to deps.Out and every refusal to deps.Err.
-// Run admits the requested Evidence rows and returns the process exit code: 0 when no row was refused, 1 when
-// a row was refused or the plan could not be read or written, and 2 when a flag precondition or a named id is
-// wrong. It writes the row lines and the summary to deps.Out and every refusal to deps.Err.
-//
-// It is the pipeline the subcommand is: check the request, read the document it names, admit the rows, report
-// them, and write what was recorded back. Each of those is a function, because each has an outcome a reader can
-// hold — this one only decides what the run's exit code is.
+// Run admits the requested Evidence rows and returns the process exit code; it reports rows to deps.Out, refusals to
+// deps.Err, and records admitted observations only when requested. A valid dry run reads and validates the plan,
+// reports WOULD RUN rows, reaches no command runner or plan write, and rejects --record or --sandbox before reading it.
+// The pipeline checks the request, reads the document, admits the rows, reports them, and writes what was
+// recorded; each is its own function with an outcome a reader can hold, while Run decides the exit code.
 func Run(req Request, deps Deps) int {
 	onlyIDs := admitIDs(req.Only)
 	recordIDs := admitIDs(req.Record)
