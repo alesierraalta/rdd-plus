@@ -581,10 +581,5 @@ func TestSyncCreatesNoStateOnADryRun(t *testing.T) {
 }
 
 func contains(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
+	return containsString(values, want)
 }

@@ -139,8 +139,9 @@ Classify paths as managed (installed by rdd-plus), modified-by-the-user (never o
 
 Opt into feedback with `rdd-plus feature enable feedback`. Use `--preview` to see one anonymized
 record and the two local-only files never publishable. While feedback is off, `feedback --file`
-refuses and the Stop hook stops offering it. The interactive TUI now exists as `rdd-plus tui`;
-update, repair, uninstall, and restore remain for Phase 3.
+refuses and the Stop hook stops offering it. The interactive TUI now exists as `rdd-plus tui`,
+and the lifecycle commands `update`, `uninstall`, `restore`, and `repair` are documented in the
+Commands table below.
 
 ## Commands
 
@@ -149,9 +150,13 @@ update, repair, uninstall, and restore remain for Phase 3.
 | `rdd-plus gate` | The Stop hook. Reads the hook payload on stdin, decides, logs one line, and emits Stop feedback when a session changed production source without loading the adversarial testing discipline. Always exits 0. |
 | `rdd-plus sync [--dry-run] [--force]` | Installs the embedded skills into discovered hosts and wires Claude's Stop hook. `--dry-run` prints the plan and writes nothing; `--force` replaces modified managed files after snapshotting them. Idempotent. |
 | `rdd-plus doctor` | Reports installed skills (and whether they drift from the embedded version), whether the hook is wired, and which optional tools are on PATH with what degrades without each. `--json` for machines. Exit 1 when git, a skill, or the hook is missing. |
-| `rdd-plus status [--json]` | Reports local installation state, features, and available version (`unknown (no update check yet)`). |
+| `rdd-plus status [--json]` | Reports local installation state, features, and available version — the cached result after `update` has checked, or `unknown (no update check yet)` before the first check. |
 | `rdd-plus feature list\|enable\|disable <id> [--preview]` | Lists or toggles optional features; preview without changing state. |
 | `rdd-plus tui` | Interactive menu over the status report, feature toggles (list, enable/disable, preview), and the sync dry-run plan. Needs an interactive terminal on Linux or macOS; elsewhere it refuses and points at `status`, `feature`, and `sync --dry-run`. |
+| `rdd-plus update [--check]` | Checks the Go module proxy for a newer release and installs it with `go install github.com/alesierraalta/rdd-plus/cmd/rdd-plus@<tag>` (prints the command when `go` is absent); `--check` only refreshes the offline cache. |
+| `rdd-plus uninstall [--dry-run] [--orphans] [--force] [--config-dir <dir>]` | Removes managed assets and unwires the Stop hook; never touches foreign files. Modified content needs `--force` (snapshot first); `--orphans` also removes assets the manifest no longer ships; `--dry-run` writes nothing. |
+| `rdd-plus restore [--id <backup-id>] [--dry-run]` | Copies a backup store entry back onto its original paths (default: the latest backup). |
+| `rdd-plus repair [--config-dir <dir>] [--dry-run] [--force]` | Brings a broken install back to what `doctor` reports healthy (missing/drifted managed skills and Stop hook re-wire); a healthy install is a no-op. |
 | `rdd-plus plan` | Writes the plan skeleton, checks the contract, names the breadth still owed, and records one Findings row from flags. `add-finding` writes that row only: it refuses a row the checker would reject and never writes an evidence row. |
 | `rdd-plus plan admit` | Reads the plan's Evidence ledger and decides every row. A dry run by default: `--execute` runs each admitted row's one command through `sh -c` twice, so a pin is only recorded over an output that held still, `--sandbox` observes it in a container with the tree mounted read-only and no network (it needs docker, and the default image is pulled on first use) and replays a declared `Mutate` edit against a writable copy of the tree, where the command must go red under the edit and green once the file is put back, `--only <ids>` narrows the run, `--timeout` bounds one command, and `--record <ids>` writes the observed digest into the plan together with the mode it was observed in. Exit 1 when a row is refused. |
 | `rdd-plus feedback` | Records one honest process report about the testing method itself, or reads the reports back. `--template` prints a fillable skeleton, `--file <path>` records it, `--summary` (the default) answers whether the method is earning its keep. |

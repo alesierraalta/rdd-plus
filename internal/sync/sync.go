@@ -1,5 +1,8 @@
 // Package sync installs the embedded skills into every discovered host and wires the gate
 // as a Claude Stop hook, merging into settings.json without touching anything it does not own.
+// Restore is the deliberate exception about existing content: it overwrites a destination with
+// the snapshot bytes and takes no pre-restore backup of the current file, because the backup
+// being applied is already the authority the operator chose.
 package sync
 
 import (
@@ -493,20 +496,41 @@ func applyHook(host Host, binPath string, opts Options, settings map[string]any,
 	if host.Name != "claude" {
 		return nil
 	}
-	_, removed := wireHook(settings, HookCommand(binPath))
+	changed, removed, err := persistWiredHook(report.SettingsPath, settings, raw, HookCommand(binPath), opts.DryRun)
 	report.RemovedHooks = removed
+	report.SettingsChanged = changed
+	return err
+}
+
+// RewireStopHook makes settings.json carry exactly the gate command for binPath: previous gate
+// entries are dropped, the desired command is added when absent, and the file is written only
+// when the serialized bytes differ. It exists for repair, which must fix a hook the planner
+// cannot see because state still records it as wired; dryRun stops before the write.
+func RewireStopHook(configDir, binPath string, dryRun bool) (changed bool, removed []string, err error) {
+	settingsPath := filepath.Join(configDir, "settings.json")
+	settings, raw, err := loadSettings(settingsPath)
+	if err != nil {
+		return false, nil, err
+	}
+	return persistWiredHook(settingsPath, settings, raw, HookCommand(binPath), dryRun)
+}
+
+// persistWiredHook wires command into settings and writes settingsPath only when the serialized
+// bytes differ; dryRun stops before the write.
+func persistWiredHook(settingsPath string, settings map[string]any, raw []byte, command string, dryRun bool) (changed bool, removed []string, err error) {
+	_, removed = wireHook(settings, command)
 	out, err := marshalSettings(settings)
 	if err != nil {
-		return err
+		return false, removed, err
 	}
-	report.SettingsChanged = raw == nil || !bytes.Equal(raw, out)
-	if !report.SettingsChanged || opts.DryRun {
-		return nil
+	changed = raw == nil || !bytes.Equal(raw, out)
+	if !changed || dryRun {
+		return changed, removed, nil
 	}
-	if err := os.MkdirAll(host.ConfigDir, 0o755); err != nil {
-		return err
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		return changed, removed, err
 	}
-	return os.WriteFile(report.SettingsPath, out, 0o644)
+	return changed, removed, os.WriteFile(settingsPath, out, 0o644)
 }
 
 // loadSettings returns the parsed settings, the raw bytes (nil when the file is absent),
@@ -588,10 +612,41 @@ func wireHook(settings map[string]any, command string) (bool, []string) {
 		hooks = map[string]any{}
 		settings["hooks"] = hooks
 	}
+	changed, removed, present := filterStopGates(settings, func(cmd string) bool { return cmd == command })
+	if present {
+		return changed, removed
+	}
 	stop, _ := hooks["Stop"].([]any)
-	changed := false
-	var removed []string
-	present := false
+	stop = append(stop, map[string]any{
+		"matcher": "",
+		"hooks": []any{map[string]any{
+			"type":          "command",
+			"command":       command,
+			"timeout":       30,
+			"statusMessage": "Checking testing discipline...",
+		}},
+	})
+	hooks["Stop"] = stop
+	return true, removed
+}
+
+// unwireHook drops every rdd-plus gate command from Stop and leaves every other hook alone; it
+// answers whether settings changed and which commands it removed.
+func unwireHook(settings map[string]any) (bool, []string) {
+	changed, removed, _ := filterStopGates(settings, func(string) bool { return false })
+	return changed, removed
+}
+
+// filterStopGates rewrites settings.hooks.Stop so that every gate command keep does not accept is
+// dropped, every other hook is preserved, and an entry emptied by the drop goes away with it.
+// keep decides which gate commands stay wired (the one being wired, or none for an unwire);
+// present reports whether keep matched a command already there.
+func filterStopGates(settings map[string]any, keep func(cmd string) bool) (changed bool, removed []string, present bool) {
+	hooks, _ := settings["hooks"].(map[string]any)
+	if hooks == nil {
+		return false, nil, false
+	}
+	stop, _ := hooks["Stop"].([]any)
 	kept := make([]any, 0, len(stop))
 	for _, e := range stop {
 		entry, _ := e.(map[string]any)
@@ -605,7 +660,7 @@ func wireHook(settings map[string]any, command string) (bool, []string) {
 			hook, _ := h.(map[string]any)
 			cmd, _ := hook["command"].(string)
 			switch {
-			case cmd == command:
+			case keep(cmd):
 				present = true
 				keptHooks = append(keptHooks, h)
 			case isPreviousGate(cmd):
@@ -616,25 +671,15 @@ func wireHook(settings map[string]any, command string) (bool, []string) {
 			}
 		}
 		if len(keptHooks) == 0 && len(list) > 0 {
-			continue // an entry that only carried a previous gate goes away with it
+			continue // an entry that only carried a gate we dropped goes away with it
 		}
 		entry["hooks"] = keptHooks
 		kept = append(kept, entry)
 	}
-	if !present {
-		kept = append(kept, map[string]any{
-			"matcher": "",
-			"hooks": []any{map[string]any{
-				"type":          "command",
-				"command":       command,
-				"timeout":       30,
-				"statusMessage": "Checking testing discipline...",
-			}},
-		})
-		changed = true
+	if changed {
+		hooks["Stop"] = kept
 	}
-	hooks["Stop"] = kept
-	return changed, removed
+	return changed, removed, present
 }
 
 // isPreviousGate recognizes every earlier way the gate was wired.

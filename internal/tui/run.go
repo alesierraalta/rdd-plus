@@ -24,7 +24,7 @@ type StatusView struct {
 	StateRoot        string
 	StateExists      bool
 	InstalledVersion string
-	AvailableVersion string // "unknown (no update check yet)" until Phase 3
+	AvailableVersion string // from the update cache; "unknown (no update check yet)" until a check runs
 	Features         []FeatureRow
 }
 

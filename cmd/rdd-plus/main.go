@@ -27,10 +27,12 @@ import (
 	"github.com/alesierraalta/rdd-plus/internal/feedback"
 	"github.com/alesierraalta/rdd-plus/internal/gate"
 	"github.com/alesierraalta/rdd-plus/internal/plan"
+	"github.com/alesierraalta/rdd-plus/internal/repair"
 	"github.com/alesierraalta/rdd-plus/internal/sanitize"
 	"github.com/alesierraalta/rdd-plus/internal/state"
 	"github.com/alesierraalta/rdd-plus/internal/sync"
 	"github.com/alesierraalta/rdd-plus/internal/tui"
+	"github.com/alesierraalta/rdd-plus/internal/update"
 )
 
 // exitArtifact is what the CLI returns when its machine-readable output could not be written: the run
@@ -44,6 +46,14 @@ const usage = `usage: rdd-plus <command> [flags]
 commands:
   gate     Stop hook: read the hook payload on stdin, decide, log, emit feedback
   sync     install the embedded skills into discovered hosts and wire Claude's Stop hook
+  uninstall remove the installed skills and unwire the Stop hook (--dry-run writes nothing,
+           --orphans also removes recorded paths the manifest no longer ships, --force
+           snapshots modified files to the central backup store, then removes them)
+  restore  copy a backup store entry back onto its original paths (--dry-run writes nothing,
+            --id <backup-id> selects one; default is the latest backup)
+  repair   bring a broken install back to what doctor reports healthy: re-sync drifted or
+           missing managed skills and re-wire the Stop hook (--dry-run writes nothing,
+           --force replaces modified managed files after backing them up)
   doctor   report installed skills, the hook wiring, and optional capabilities
   bench    run the testing skill against sealed-key fixtures and score it (run | score | history |
            compare | rescore | adjudicate)
@@ -52,13 +62,15 @@ commands:
   check    say what this repository still owes, from git and the plan alone: no hook payload,
            no transcript, no host. Exit 1 when there is something to do.
   status   report the local installation state and optional features
+  update   check the Go module proxy for a newer release and install it through go install,
+           printing the exact command when go is absent
   feature  list, enable, or disable an optional feature
   tui      interactive menu over status, feature toggles, and the sync dry-run plan
   feedback record an honest process report on the method itself, or read the reports back
            (--template | --file <path> | --summary)
   version  print the version
 
-flags shared by gate, sync, doctor, feedback:
+flags shared by gate, sync, doctor, uninstall, feedback, repair:
   --config-dir <dir>   Claude config directory (default: ~/.claude)
 
 flags for sync:
@@ -100,6 +112,9 @@ plan admit [--path <path>] [--execute] [--sandbox] [--sandbox-image <image>] [--
             refused or a digest cannot be written)
 check [--cwd .] [--path <path>]
 status [--json]
+update [--check]  --check only checks and refreshes the cache; it never installs
+restore [--id <backup-id>] [--dry-run]   (default: the latest backup)
+repair [--config-dir <dir>] [--dry-run] [--force]
 feature list|enable|disable <id> [--preview]
 --path: relative values resolve against the worktree root; absolute values are taken as given except in check, which refuses them. Without --path, use the plan declared in .rdd-plus.json when there is one, else docs/testing/test-plan.md
 --run: a lowercase slug identifying the active run; plan gaps uses the declaration when omitted, while --all forces whole-document counts
@@ -129,6 +144,12 @@ func main() {
 		os.Exit(runGate(os.Args[2:]))
 	case "sync":
 		os.Exit(runSync(os.Args[2:]))
+	case "uninstall":
+		os.Exit(runUninstall(os.Args[2:]))
+	case "restore":
+		os.Exit(runRestore(os.Args[2:]))
+	case "repair":
+		os.Exit(runRepair(os.Args[2:]))
 	case "doctor":
 		os.Exit(runDoctor(os.Args[2:]))
 	case "bench":
@@ -139,6 +160,8 @@ func main() {
 		os.Exit(runCheck(os.Args[2:]))
 	case "status":
 		os.Exit(runStatus(os.Args[2:]))
+	case "update":
+		os.Exit(runUpdate(os.Args[2:]))
 	case "feature":
 		os.Exit(runFeature(os.Args[2:]))
 	case "tui":
@@ -195,13 +218,75 @@ func statusView() (tui.StatusView, error) {
 	if err != nil {
 		return tui.StatusView{}, err
 	}
+	// The available version is the last check's cached answer, never a live probe: status and
+	// the TUI must work offline, so an unreadable or failed check falls back to the unknown string.
+	available := unknownAvailableVersion
+	if cache, err := update.LoadCache(); err == nil && cache.AvailableVersion != "" {
+		available = cache.AvailableVersion
+	}
 	return tui.StatusView{
 		StateRoot:        filepath.Dir(path),
 		StateExists:      stateExists,
 		InstalledVersion: buildinfo.Version,
-		AvailableVersion: unknownAvailableVersion,
+		AvailableVersion: available,
 		Features:         features,
 	}, nil
+}
+
+// runUpdate checks the module proxy for the latest tag, refreshes the cache `status` reads, and
+// installs through `go install` when this build is behind. The binary a fresh install lands on
+// only runs after a restart, so success points at a new shell instead of claiming this process
+// became the new version. RDD_PLUS_UPDATE_BASE_URL points the check at another proxy (tests use
+// a local one); an empty value means the public Go module proxy.
+func runUpdate(args []string) int {
+	fs := flag.NewFlagSet("update", flag.ContinueOnError)
+	checkOnly := fs.Bool("check", false, "only check and refresh the cache; never install")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() > 0 {
+		fmt.Fprintf(os.Stderr, "update: unexpected argument %q\n", fs.Arg(0))
+		return 2
+	}
+	checker := update.Checker{BaseURL: os.Getenv("RDD_PLUS_UPDATE_BASE_URL")}
+	result, err := checker.Check(context.Background())
+	if err != nil {
+		// A failed check still lands in the cache so the record shows a check was attempted;
+		// status keeps reporting the unknown string because no version was learned.
+		_, _ = update.SaveCache(update.Cache{CheckedAt: time.Now().UTC().Format(time.RFC3339), Error: err.Error()})
+		fmt.Fprintln(os.Stderr, "update:", err)
+		return 1
+	}
+	if _, err := update.SaveCache(update.Cache{
+		AvailableVersion: result.Latest,
+		CheckedAt:        time.Now().UTC().Format(time.RFC3339),
+	}); err != nil {
+		fmt.Fprintln(os.Stderr, "update: cache:", err)
+	}
+	if result.Relation != update.Behind {
+		fmt.Printf("already up to date (installed %s, latest %s)\n", buildinfo.Version, result.Latest)
+		return 0
+	}
+	if *checkOnly {
+		fmt.Printf("update available (installed %s, latest %s)\n", buildinfo.Version, result.Latest)
+		return 0
+	}
+	err = update.RunInstall(result.Latest, exec.LookPath, func(name string, argv ...string) error {
+		fmt.Printf("go found; running: %s\n", strings.Join(append([]string{name}, argv...), " "))
+		cmd := exec.Command(name, argv...)
+		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+		return cmd.Run()
+	})
+	switch {
+	case errors.Is(err, update.ErrGoMissing):
+		fmt.Printf("go is not on PATH; run this from a shell with Go installed:\n%s\n", update.InstallCommand(result.Latest))
+		return 0
+	case err != nil:
+		fmt.Fprintln(os.Stderr, "update:", err)
+		return 1
+	}
+	fmt.Printf("installed %s; restart your shell and run `rdd-plus version` there to confirm\n", result.Latest)
+	return 0
 }
 
 func runStatus(args []string) int {
@@ -481,6 +566,102 @@ func filterSyncHosts(hosts []sync.Host, selected map[string]bool) []sync.Host {
 		}
 	}
 	return filtered
+}
+
+// runUninstall takes the installation off the machine: state decides what was installed, so no
+// discovery runs here. An explicit --config-dir only redirects the hook unwire; without it the
+// recorded host directory wins, because that is where the gate was wired. A modified file stops
+// the whole run before anything is deleted (exit 1 naming --force), so a refusal never leaves a
+// half-uninstalled tree.
+func runUninstall(args []string) int {
+	fs := flag.NewFlagSet("uninstall", flag.ContinueOnError)
+	configDir := fs.String("config-dir", defaultConfigDir(), "Claude config directory")
+	dryRun := fs.Bool("dry-run", false, "print the plan and write nothing")
+	orphans := fs.Bool("orphans", false, "also remove recorded assets the manifest no longer ships")
+	force := fs.Bool("force", false, "snapshot modified files to the central backup store, then remove them")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() > 0 {
+		fmt.Fprintf(os.Stderr, "uninstall: unexpected argument %q\n", fs.Arg(0))
+		return 2
+	}
+	// The flag carries a default for --help, but only an explicit value may override what state
+	// recorded: the default would unwire ~/.claude while the gate lives wherever sync installed it.
+	explicitConfigDir := ""
+	if flagSet(fs, "config-dir") {
+		explicitConfigDir = *configDir
+	}
+	report, err := sync.Uninstall(sync.UninstallOptions{
+		DryRun:    *dryRun,
+		Orphans:   *orphans,
+		Force:     *force,
+		ConfigDir: explicitConfigDir,
+	})
+	fmt.Print(report.String())
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "uninstall:", err)
+		return 1
+	}
+	return 0
+}
+
+// runRestore puts a backup store entry back on disk. There is no --config-dir: the manifest
+// records absolute original paths, so the store alone decides where the bytes land. Exit 1 is
+// operational (no backup, unknown id, a refused path, a failed write), 2 is a usage mistake.
+func runRestore(args []string) int {
+	fs := flag.NewFlagSet("restore", flag.ContinueOnError)
+	id := fs.String("id", "", "backup id to restore (default: the latest backup)")
+	dryRun := fs.Bool("dry-run", false, "print the plan and write nothing")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() > 0 {
+		fmt.Fprintf(os.Stderr, "restore: unexpected argument %q\n", fs.Arg(0))
+		return 2
+	}
+	report, err := sync.Restore(*id, *dryRun)
+	// A report from a run that failed before it planned anything says nothing worth printing;
+	// a partial apply still shows the files that did land, beside the error naming the one that
+	// did not.
+	if err == nil || len(report.Restored) > 0 {
+		fmt.Print(report.String())
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "restore:", err)
+		return 1
+	}
+	return 0
+}
+
+// runRepair takes a broken install back to what doctor reports healthy. Exit 1 is operational
+// (the running binary cannot be resolved, settings cannot be read, the sync fails), 2 is a
+// usage mistake; a dry run and an already-healthy install both exit 0.
+func runRepair(args []string) int {
+	fs := flag.NewFlagSet("repair", flag.ContinueOnError)
+	configDir := fs.String("config-dir", defaultConfigDir(), "Claude config directory")
+	dryRun := fs.Bool("dry-run", false, "print the plan and write nothing")
+	force := fs.Bool("force", false, "replace files this tool installed that were modified afterwards, after backing them up")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() > 0 {
+		fmt.Fprintf(os.Stderr, "repair: unexpected argument %q\n", fs.Arg(0))
+		return 2
+	}
+	report, err := repair.Run(repair.Options{
+		DryRun:    *dryRun,
+		Force:     *force,
+		ConfigDir: *configDir,
+	})
+	if text := report.String(); text != "" {
+		fmt.Print(text)
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "repair:", err)
+		return 1
+	}
+	return 0
 }
 
 func runDoctor(args []string) int {
