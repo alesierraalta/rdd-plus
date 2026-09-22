@@ -31,6 +31,7 @@ import (
 	"github.com/alesierraalta/rdd-plus/internal/state"
 	"github.com/alesierraalta/rdd-plus/internal/sync"
 	"github.com/alesierraalta/rdd-plus/internal/tui"
+	"github.com/alesierraalta/rdd-plus/internal/update"
 )
 
 // exitArtifact is what the CLI returns when its machine-readable output could not be written: the run
@@ -52,6 +53,8 @@ commands:
   check    say what this repository still owes, from git and the plan alone: no hook payload,
            no transcript, no host. Exit 1 when there is something to do.
   status   report the local installation state and optional features
+  update   check the Go module proxy for a newer release and install it through go install,
+           printing the exact command when go is absent
   feature  list, enable, or disable an optional feature
   tui      interactive menu over status, feature toggles, and the sync dry-run plan
   feedback record an honest process report on the method itself, or read the reports back
@@ -100,6 +103,7 @@ plan admit [--path <path>] [--execute] [--sandbox] [--sandbox-image <image>] [--
             refused or a digest cannot be written)
 check [--cwd .] [--path <path>]
 status [--json]
+update [--check]  --check only checks and refreshes the cache; it never installs
 feature list|enable|disable <id> [--preview]
 --path: relative values resolve against the worktree root; absolute values are taken as given except in check, which refuses them. Without --path, use the plan declared in .rdd-plus.json when there is one, else docs/testing/test-plan.md
 --run: a lowercase slug identifying the active run; plan gaps uses the declaration when omitted, while --all forces whole-document counts
@@ -139,6 +143,8 @@ func main() {
 		os.Exit(runCheck(os.Args[2:]))
 	case "status":
 		os.Exit(runStatus(os.Args[2:]))
+	case "update":
+		os.Exit(runUpdate(os.Args[2:]))
 	case "feature":
 		os.Exit(runFeature(os.Args[2:]))
 	case "tui":
@@ -195,13 +201,75 @@ func statusView() (tui.StatusView, error) {
 	if err != nil {
 		return tui.StatusView{}, err
 	}
+	// The available version is the last check's cached answer, never a live probe: status and
+	// the TUI must work offline, so an unreadable or failed check falls back to the unknown string.
+	available := unknownAvailableVersion
+	if cache, err := update.LoadCache(); err == nil && cache.AvailableVersion != "" {
+		available = cache.AvailableVersion
+	}
 	return tui.StatusView{
 		StateRoot:        filepath.Dir(path),
 		StateExists:      stateExists,
 		InstalledVersion: buildinfo.Version,
-		AvailableVersion: unknownAvailableVersion,
+		AvailableVersion: available,
 		Features:         features,
 	}, nil
+}
+
+// runUpdate checks the module proxy for the latest tag, refreshes the cache `status` reads, and
+// installs through `go install` when this build is behind. The binary a fresh install lands on
+// only runs after a restart, so success points at a new shell instead of claiming this process
+// became the new version. RDD_PLUS_UPDATE_BASE_URL points the check at another proxy (tests use
+// a local one); an empty value means the public Go module proxy.
+func runUpdate(args []string) int {
+	fs := flag.NewFlagSet("update", flag.ContinueOnError)
+	checkOnly := fs.Bool("check", false, "only check and refresh the cache; never install")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() > 0 {
+		fmt.Fprintf(os.Stderr, "update: unexpected argument %q\n", fs.Arg(0))
+		return 2
+	}
+	checker := update.Checker{BaseURL: os.Getenv("RDD_PLUS_UPDATE_BASE_URL")}
+	result, err := checker.Check(context.Background())
+	if err != nil {
+		// A failed check still lands in the cache so the record shows a check was attempted;
+		// status keeps reporting the unknown string because no version was learned.
+		_, _ = update.SaveCache(update.Cache{CheckedAt: time.Now().UTC().Format(time.RFC3339), Error: err.Error()})
+		fmt.Fprintln(os.Stderr, "update:", err)
+		return 1
+	}
+	if _, err := update.SaveCache(update.Cache{
+		AvailableVersion: result.Latest,
+		CheckedAt:        time.Now().UTC().Format(time.RFC3339),
+	}); err != nil {
+		fmt.Fprintln(os.Stderr, "update: cache:", err)
+	}
+	if result.Relation != update.Behind {
+		fmt.Printf("already up to date (installed %s, latest %s)\n", buildinfo.Version, result.Latest)
+		return 0
+	}
+	if *checkOnly {
+		fmt.Printf("update available (installed %s, latest %s)\n", buildinfo.Version, result.Latest)
+		return 0
+	}
+	err = update.RunInstall(result.Latest, exec.LookPath, func(name string, argv ...string) error {
+		fmt.Printf("go found; running: %s\n", strings.Join(append([]string{name}, argv...), " "))
+		cmd := exec.Command(name, argv...)
+		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+		return cmd.Run()
+	})
+	switch {
+	case errors.Is(err, update.ErrGoMissing):
+		fmt.Printf("go is not on PATH; run this from a shell with Go installed:\n%s\n", update.InstallCommand(result.Latest))
+		return 0
+	case err != nil:
+		fmt.Fprintln(os.Stderr, "update:", err)
+		return 1
+	}
+	fmt.Printf("installed %s; restart your shell and run `rdd-plus version` there to confirm\n", result.Latest)
+	return 0
 }
 
 func runStatus(args []string) int {

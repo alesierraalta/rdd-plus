@@ -781,8 +781,15 @@ func TestFeedbackCLISanitizesPersistedSecretsAndFailsClosed(t *testing.T) {
 
 func runCLIWithHomeEnv(t *testing.T, home, bin string, args ...string) (string, int) {
 	t.Helper()
+	return runCLIEnv(t, bin, []string{"RDD_PLUS_HOME=" + home}, args...)
+}
+
+// runCLIEnv runs the binary with extra environment entries; the last entry for a key wins, so a
+// test can override PATH or point the update check at a local proxy.
+func runCLIEnv(t *testing.T, bin string, env []string, args ...string) (string, int) {
+	t.Helper()
 	cmd := exec.Command(bin, args...)
-	cmd.Env = append(os.Environ(), "RDD_PLUS_HOME="+home)
+	cmd.Env = append(os.Environ(), env...)
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		return string(out), 0
@@ -866,7 +873,7 @@ func TestUsageListsEveryBenchSubcommand(t *testing.T) {
 			t.Errorf("usage does not document %q", sub)
 		}
 	}
-	for _, cmd := range []string{"gate", "sync", "doctor", "bench", "plan", "feedback", "version", "tui"} {
+	for _, cmd := range []string{"gate", "sync", "doctor", "bench", "plan", "feedback", "version", "tui", "update"} {
 		if !strings.Contains(usage, "  "+cmd+" ") {
 			t.Errorf("usage does not document the %q command", cmd)
 		}
