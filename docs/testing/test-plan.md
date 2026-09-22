@@ -53,7 +53,7 @@ Rows are never removed by budget; budget changes order and status only.
 |---|---|---|---|---|
 | Security (input handling) | `appsec-adversarial-auditor` | stdin and settings.json are untrusted shapes; git via argument arrays; embedded assets are read-only | done |  |
 | Runtime and faults | `runtime-reliability-testing` | git timeout, entry flood, huge transcript (gate suite) | done |  |
-| Persistence | `database-persistence-testing` | settings.json rewrite is atomic in content (refuses before writing on invalid JSON); skill backups timestamped under `.rdd-plus-backup/`; evidence E1 and E2 recorded | done |  |
+| Persistence | `database-persistence-testing` | settings.json rewrite is atomic in content (refuses before writing on invalid JSON); skill backups timestamped in the central store; evidence E1 and E2 recorded | done |  |
 | Architecture conformance | `clean-architecture-audit` | swept on 2026-09-15 by running the skill (E53): package direction is acyclic and `internal/` never imports `cmd/`, and no unearned interface exists; the layer is NOT complete by construction — F39 and F40 for discarded errors, F41 for what `cmd/` carries, F42 for 22 functions over the threshold, F43 for live duplicates, F44 for stale comments | done |  |
 | Critical e2e journeys | `real-run-validation` | the install-into-a-fresh-config, gate and benchmark journeys were driven with the real binary on 2026-09-15 (E50, E51, E52), which also produced F37 and F38; the install journey from a clean machine (`go install …@latest`) still needs publication, so the layer is not swept | blocked |  |
 | Sandbox | `docker-test-containers` | not needed | n/a |  |
