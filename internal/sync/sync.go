@@ -496,20 +496,41 @@ func applyHook(host Host, binPath string, opts Options, settings map[string]any,
 	if host.Name != "claude" {
 		return nil
 	}
-	_, removed := wireHook(settings, HookCommand(binPath))
+	changed, removed, err := persistWiredHook(report.SettingsPath, settings, raw, HookCommand(binPath), opts.DryRun)
 	report.RemovedHooks = removed
+	report.SettingsChanged = changed
+	return err
+}
+
+// RewireStopHook makes settings.json carry exactly the gate command for binPath: previous gate
+// entries are dropped, the desired command is added when absent, and the file is written only
+// when the serialized bytes differ. It exists for repair, which must fix a hook the planner
+// cannot see because state still records it as wired; dryRun stops before the write.
+func RewireStopHook(configDir, binPath string, dryRun bool) (changed bool, removed []string, err error) {
+	settingsPath := filepath.Join(configDir, "settings.json")
+	settings, raw, err := loadSettings(settingsPath)
+	if err != nil {
+		return false, nil, err
+	}
+	return persistWiredHook(settingsPath, settings, raw, HookCommand(binPath), dryRun)
+}
+
+// persistWiredHook wires command into settings and writes settingsPath only when the serialized
+// bytes differ; dryRun stops before the write.
+func persistWiredHook(settingsPath string, settings map[string]any, raw []byte, command string, dryRun bool) (changed bool, removed []string, err error) {
+	_, removed = wireHook(settings, command)
 	out, err := marshalSettings(settings)
 	if err != nil {
-		return err
+		return false, removed, err
 	}
-	report.SettingsChanged = raw == nil || !bytes.Equal(raw, out)
-	if !report.SettingsChanged || opts.DryRun {
-		return nil
+	changed = raw == nil || !bytes.Equal(raw, out)
+	if !changed || dryRun {
+		return changed, removed, nil
 	}
-	if err := os.MkdirAll(host.ConfigDir, 0o755); err != nil {
-		return err
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		return changed, removed, err
 	}
-	return os.WriteFile(report.SettingsPath, out, 0o644)
+	return changed, removed, os.WriteFile(settingsPath, out, 0o644)
 }
 
 // loadSettings returns the parsed settings, the raw bytes (nil when the file is absent),

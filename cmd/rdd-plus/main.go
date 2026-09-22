@@ -27,6 +27,7 @@ import (
 	"github.com/alesierraalta/rdd-plus/internal/feedback"
 	"github.com/alesierraalta/rdd-plus/internal/gate"
 	"github.com/alesierraalta/rdd-plus/internal/plan"
+	"github.com/alesierraalta/rdd-plus/internal/repair"
 	"github.com/alesierraalta/rdd-plus/internal/sanitize"
 	"github.com/alesierraalta/rdd-plus/internal/state"
 	"github.com/alesierraalta/rdd-plus/internal/sync"
@@ -49,7 +50,10 @@ commands:
            --orphans also removes recorded paths the manifest no longer ships, --force
            snapshots modified files to the central backup store, then removes them)
   restore  copy a backup store entry back onto its original paths (--dry-run writes nothing,
-           --id <backup-id> selects one; default is the latest backup)
+            --id <backup-id> selects one; default is the latest backup)
+  repair   bring a broken install back to what doctor reports healthy: re-sync drifted or
+           missing managed skills and re-wire the Stop hook (--dry-run writes nothing,
+           --force replaces modified managed files after backing them up)
   doctor   report installed skills, the hook wiring, and optional capabilities
   bench    run the testing skill against sealed-key fixtures and score it (run | score | history |
            compare | rescore | adjudicate)
@@ -66,7 +70,7 @@ commands:
            (--template | --file <path> | --summary)
   version  print the version
 
-flags shared by gate, sync, doctor, uninstall, feedback:
+flags shared by gate, sync, doctor, uninstall, feedback, repair:
   --config-dir <dir>   Claude config directory (default: ~/.claude)
 
 flags for sync:
@@ -110,6 +114,7 @@ check [--cwd .] [--path <path>]
 status [--json]
 update [--check]  --check only checks and refreshes the cache; it never installs
 restore [--id <backup-id>] [--dry-run]   (default: the latest backup)
+repair [--config-dir <dir>] [--dry-run] [--force]
 feature list|enable|disable <id> [--preview]
 --path: relative values resolve against the worktree root; absolute values are taken as given except in check, which refuses them. Without --path, use the plan declared in .rdd-plus.json when there is one, else docs/testing/test-plan.md
 --run: a lowercase slug identifying the active run; plan gaps uses the declaration when omitted, while --all forces whole-document counts
@@ -143,6 +148,8 @@ func main() {
 		os.Exit(runUninstall(os.Args[2:]))
 	case "restore":
 		os.Exit(runRestore(os.Args[2:]))
+	case "repair":
+		os.Exit(runRepair(os.Args[2:]))
 	case "doctor":
 		os.Exit(runDoctor(os.Args[2:]))
 	case "bench":
@@ -622,6 +629,36 @@ func runRestore(args []string) int {
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "restore:", err)
+		return 1
+	}
+	return 0
+}
+
+// runRepair takes a broken install back to what doctor reports healthy. Exit 1 is operational
+// (the running binary cannot be resolved, settings cannot be read, the sync fails), 2 is a
+// usage mistake; a dry run and an already-healthy install both exit 0.
+func runRepair(args []string) int {
+	fs := flag.NewFlagSet("repair", flag.ContinueOnError)
+	configDir := fs.String("config-dir", defaultConfigDir(), "Claude config directory")
+	dryRun := fs.Bool("dry-run", false, "print the plan and write nothing")
+	force := fs.Bool("force", false, "replace files this tool installed that were modified afterwards, after backing them up")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() > 0 {
+		fmt.Fprintf(os.Stderr, "repair: unexpected argument %q\n", fs.Arg(0))
+		return 2
+	}
+	report, err := repair.Run(repair.Options{
+		DryRun:    *dryRun,
+		Force:     *force,
+		ConfigDir: *configDir,
+	})
+	if text := report.String(); text != "" {
+		fmt.Print(text)
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "repair:", err)
 		return 1
 	}
 	return 0
