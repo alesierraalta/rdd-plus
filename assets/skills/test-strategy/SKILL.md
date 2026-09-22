@@ -4,7 +4,7 @@ description: "Trigger: haz el testing, testea esto, prueba esto, test this, test
 license: Apache-2.0
 metadata:
   author: "alesierraalta"
-  version: "0.3.10"
+  version: "0.3.11"
   requires_rdd_plus: "0.3.8"
   scope: [common]
   auto_invoke: "Any request to test something: infer scope and mode from repo state, build or resume the persisted plan, execute it through specialized testing skills"
@@ -28,10 +28,16 @@ Install it from the repository with `make build`, which writes `bin/rdd-plus`; p
 or use `go install github.com/alesierraalta/rdd-plus/cmd/rdd-plus@latest` once the module is
 published. Without the binary the run continues on documented fallbacks: `plan init` is replaced
 by copying [assets/test-plan-template.md](assets/test-plan-template.md) (rule 12); `plan check` by
-applying its four checks by hand — findings that are not rows, cells that cite no `path:line`,
-evidence ids that do not exist, rows that settle without a pinning test — plus the template's
-table shape, saying in the report that the gate was applied by hand; and `doctor` by deciding
-CodeGraph availability from `codegraph` and `git ls-files` instead of the capability probe.
+applying its checks by hand, as aligned with test-strategy 0.3.11 — the Findings section exists and is a
+table, and a finding is a row carrying `path:line` and an evidence id that exists, with no finding or
+evidence id repeated and no `razonado` row inside the ledger; settled rows name a pinning test;
+statuses stay inside the closed vocabulary; a prose line closes a table, a fenced block is
+documentation and an unclosed fence fails closed, while a row's cells must match its header; the
+`Run` column exists and its cells hold valid run slugs; a `Light:` declaration validates, is
+corroborated by a ranked target or a `path:line` citation, and gives every layer it leaves out a reason — and saying in the report that the gate was
+applied by hand, which is a weaker claim than the binary's; and `doctor` by deciding CodeGraph
+availability from `codegraph` and `git ls-files`
+instead of the capability probe.
 The run's process feedback — what paid off, what was ceremony, where a rule had to be
 reverse-engineered, and whether the method earned its keep — is recorded at the end of the run
 under Hard Rule 14 with `rdd-plus feedback --template`.

@@ -2,10 +2,14 @@ package plan
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/alesierraalta/rdd-plus/internal/assets"
 )
 
 func write(t *testing.T, dir, name, content string) string {
@@ -18,6 +22,50 @@ func write(t *testing.T, dir, name, content string) string {
 		t.Fatal(err)
 	}
 	return p
+}
+
+func TestFindingsStatusVocabularyMatchesShippedTemplate(t *testing.T) {
+	data, err := fs.ReadFile(assets.Skills(), TemplatePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var statusLine string
+	inFindings := false
+	for _, line := range strings.Split(string(data), "\n") {
+		switch {
+		case line == "## Findings":
+			inFindings = true
+		case inFindings && strings.HasPrefix(line, "## "):
+			inFindings = false
+		case inFindings && strings.HasPrefix(line, "Statuses:"):
+			statusLine = strings.TrimSuffix(strings.TrimSpace(strings.TrimPrefix(line, "Statuses:")), ".")
+		}
+	}
+	if statusLine == "" {
+		t.Fatal("the Findings section has no Statuses line")
+	}
+
+	documented := make(map[string]bool)
+	for _, status := range strings.Split(statusLine, " · ") {
+		documented[strings.TrimSpace(status)] = true
+	}
+	accepted := make(map[string]bool)
+	for _, status := range strings.Split(FindingsStatusList, ", ") {
+		accepted[strings.TrimSpace(status)] = true
+	}
+	// FindingsStatusList is the human-facing list; findingsStatuses is what Check enforces. A status
+	// added to one and not the other is the same drift one door along.
+	enforced := map[string]bool{}
+	for status := range findingsStatuses {
+		enforced[status] = true
+	}
+	if !reflect.DeepEqual(accepted, enforced) {
+		t.Fatalf("the check enforces %v, but FindingsStatusList documents %q", enforced, FindingsStatusList)
+	}
+	if !reflect.DeepEqual(documented, accepted) {
+		t.Fatalf("template statuses %q do not match FindingsStatusList %q", statusLine, FindingsStatusList)
+	}
 }
 
 // Init writes the shipped skeleton so the flow fills tables instead of inventing a structure.
