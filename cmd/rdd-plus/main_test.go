@@ -499,7 +499,7 @@ func TestFeedbackCLI(t *testing.T) {
 	body := "ts: 2026-09-10T12:00:00Z\n" +
 		"repo: " + dir + "\n" +
 		"plan: docs/testing/test-plan.md\n" +
-		"skill: test-strategy 0.3.10\n" +
+		"skill: test-strategy 0.3.11\n" +
 		"build: test\n" +
 		"paid: it found the defect\n" +
 		"cost: one hour\n" +

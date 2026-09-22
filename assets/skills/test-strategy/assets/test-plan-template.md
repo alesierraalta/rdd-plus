@@ -3,6 +3,10 @@
 Created: <date> · Last updated: <date> · Plan path: `docs/testing/test-plan.md` · Sandbox: <worktree / container / scratchpad> · Findings precision: <confirmed+fixed> / <rows with a verdict>
 Baseline: `<git rev>` · untracked files: <count> · fingerprint: `<assets/fingerprint.sh output>` (a change is anything that differs from this fingerprint, not raw `git status`)
 
+Tables are the format: prose never replaces a row.
+A finding is a row whose cell opens with `path:line` and one line of finding.
+A finding that lives only in prose does not exist for the scorer.
+
 ## Inventory
 
 | Surface | Entry points | Owner module | Notes |
