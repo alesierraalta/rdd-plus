@@ -176,14 +176,10 @@ func GapsIn(doc string) (Gaps, error) {
 	return GapsForRun(doc, "")
 }
 
-// GapsForRun reports only the breadth rows owned by run. Blank Run cells are disclosed as unscoped, rows
-// carrying another valid slug are ignored, and malformed cells fail closed without being counted.
-// GapsForRun reports only the breadth rows owned by run. Blank Run cells are disclosed as unscoped, rows
-// carrying another valid slug are ignored, and malformed cells fail closed without being counted.
-//
-// It reads the two tables the counters come from and hands each to its own pass, because the two passes look
-// alike and answer different questions: what a layer owes versus what a ranked target owes, with their own
-// sentences for the same state.
+// GapsForRun reports only the breadth rows owned by run. It reads the Layer matrix and Ranked targets tables and
+// hands each to its own pass; those passes own their scoping rules and answer what each table still owes. They
+// look alike and answer different questions: what a layer owes versus what a ranked target owes, each with its
+// own sentence for the same state.
 func GapsForRun(doc, run string) (Gaps, error) {
 	if run != "" {
 		if err := ValidateRun("--run", run); err != nil {
