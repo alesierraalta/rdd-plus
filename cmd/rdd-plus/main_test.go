@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -498,6 +499,114 @@ func TestFeedbackCLI(t *testing.T) {
 	}
 	if rows := strings.Count(strings.TrimRight(string(raw), "\n"), "\n") + 1; rows != 1 {
 		t.Fatalf("a refusal must write nothing, ledger has %d rows:\n%s", rows, raw)
+	}
+}
+
+func TestFeedbackCLISanitizesPersistedSecretsAndFailsClosed(t *testing.T) {
+	bin := buildCLI(t)
+	configDir := t.TempDir()
+	rawRepo := "/home/someone/acme-billing-repo"
+	projectName := "acme-billing-repo"
+	token := "ghp_1234567890abcdef1234"
+	report := filepath.Join(t.TempDir(), "report.md")
+	body := "ts: 2026-09-10T12:00:00Z\n" +
+		"repo: " + rawRepo + "\n" +
+		"plan: docs/testing/test-plan.md\n" +
+		"skill: 0.3.6\n" +
+		"build: test\n" +
+		"paid: it found the defect\n" +
+		"cost: one hour\n" +
+		"reason: GET /api/invoices returned 500\n" +
+		"verdict: paid\n" +
+		"freeform: credential observed: " + token + "\n"
+	if err := os.WriteFile(report, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, code := runCLI(t, bin, "feedback", "--config-dir", configDir, "--file", report); code != 0 {
+		t.Fatalf("submit exit = %d\n%s", code, out)
+	}
+
+	telemetryDir := sanitize.TelemetryDir(configDir)
+	jsonlPath := filepath.Join(telemetryDir, "run-feedback.jsonl")
+	markdownPath := filepath.Join(telemetryDir, "run-feedback.md")
+	jsonl, err := os.ReadFile(jsonlPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	markdown, err := os.ReadFile(markdownPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, artifact := range []string{string(jsonl), string(markdown)} {
+		for _, forbidden := range []string{rawRepo, projectName, token} {
+			if strings.Contains(artifact, forbidden) {
+				t.Fatalf("persisted feedback contains raw %q: %s", forbidden, artifact)
+			}
+		}
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(jsonl)), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("accepted submission wrote %d JSONL rows, want 1:\n%s", len(lines), jsonl)
+	}
+	var recorded struct {
+		Repo      string `json:"repo"`
+		Freeform  string `json:"freeform"`
+		Sanitized bool   `json:"sanitized"`
+	}
+	if err := json.Unmarshal([]byte(lines[0]), &recorded); err != nil {
+		t.Fatalf("JSONL row: %v", err)
+	}
+	if !strings.HasPrefix(recorded.Repo, "repo-") || !recorded.Sanitized {
+		t.Fatalf("recorded identity = %+v, want repo pseudonym and sanitized marker", recorded)
+	}
+	if !strings.Contains(recorded.Freeform, sanitize.Redacted) || strings.Contains(recorded.Freeform, token) {
+		t.Fatalf("recorded freeform = %q, want redaction without token", recorded.Freeform)
+	}
+
+	entries, err := os.ReadDir(telemetryDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saltCount, mapCount := 0, 0
+	for _, entry := range entries {
+		switch entry.Name() {
+		case ".salt":
+			saltCount++
+			if entry.IsDir() {
+				t.Fatal(".salt is a directory")
+			}
+		case ".pseudonyms.jsonl":
+			mapCount++
+			if entry.IsDir() {
+				t.Fatal(".pseudonyms.jsonl is a directory")
+			}
+		}
+	}
+	if saltCount != 1 || mapCount != 1 {
+		t.Fatalf("telemetry entries have %d .salt and %d .pseudonyms.jsonl; want exactly one of each", saltCount, mapCount)
+	}
+	if _, err := os.Stat(filepath.Join(telemetryDir, "telemetry")); !os.IsNotExist(err) {
+		t.Fatalf("nested telemetry directory = %v, want absent", err)
+	}
+	if got, ok := sanitize.Resolve(telemetryDir, recorded.Repo); !ok || got != rawRepo {
+		t.Fatalf("Resolve(%q) = %q, %t; want original repository path", recorded.Repo, got, ok)
+	}
+
+	badReport := filepath.Join(t.TempDir(), "bad-report.md")
+	badBody := strings.Replace(body, "reason: GET /api/invoices returned 500", "reason: leaked "+token, 1)
+	if err := os.WriteFile(badReport, []byte(badBody), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, code := runCLI(t, bin, "feedback", "--config-dir", configDir, "--file", badReport); code == 0 {
+		t.Fatalf("token in required reason was accepted: %s", out)
+	}
+	unchanged, err := os.ReadFile(jsonlPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(strings.Split(strings.TrimSpace(string(unchanged)), "\n")); got != 1 {
+		t.Fatalf("fail-closed submission changed ledger row count to %d:\n%s", got, unchanged)
 	}
 }
 
