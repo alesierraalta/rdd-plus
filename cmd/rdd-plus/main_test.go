@@ -1420,3 +1420,100 @@ func TestSyncDryRunNamesEveryHost(t *testing.T) {
 		}
 	}
 }
+
+func TestSyncForceReplacesAModifiedFileWithABackup(t *testing.T) {
+	t.Setenv("RDD_PLUS_HOME", t.TempDir())
+	home := os.Getenv("RDD_PLUS_HOME")
+	bin := buildCLI(t)
+	configDir := t.TempDir()
+	skillPath := filepath.Join(configDir, "skills", "test-strategy", "SKILL.md")
+
+	out, code := runCLI(t, bin, "sync", "--config-dir", configDir)
+	if code != 0 {
+		t.Fatalf("initial sync exit = %d\n%s", code, out)
+	}
+	original, err := os.ReadFile(skillPath)
+	if err != nil {
+		t.Fatalf("read installed skill: %v", err)
+	}
+	info, err := os.Stat(skillPath)
+	if err != nil {
+		t.Fatalf("stat installed skill: %v", err)
+	}
+	originalMode := uint32(info.Mode().Perm())
+	edited := append(append([]byte(nil), original...), []byte("\nuser edit\n")...)
+	if err := os.WriteFile(skillPath, edited, info.Mode().Perm()); err != nil {
+		t.Fatalf("append user edit: %v", err)
+	}
+
+	out, code = runCLI(t, bin, "sync", "--config-dir", configDir)
+	if code != 0 {
+		t.Fatalf("sync without --force exit = %d\n%s", code, out)
+	}
+	got, err := os.ReadFile(skillPath)
+	if err != nil {
+		t.Fatalf("read preserved skill: %v", err)
+	}
+	if !bytes.Equal(got, edited) {
+		t.Fatalf("sync without --force replaced the user edit")
+	}
+
+	out, code = runCLI(t, bin, "sync", "--config-dir", configDir, "--force")
+	if code != 0 {
+		t.Fatalf("sync --force exit = %d\n%s", code, out)
+	}
+	got, err = os.ReadFile(skillPath)
+	if err != nil {
+		t.Fatalf("read replaced skill: %v", err)
+	}
+	if !bytes.Equal(got, original) {
+		t.Fatalf("sync --force did not replace the edited skill")
+	}
+
+	backupEntries, err := os.ReadDir(filepath.Join(home, "backups"))
+	if err != nil {
+		t.Fatalf("read backup directory: %v", err)
+	}
+	var backupDir string
+	for _, entry := range backupEntries {
+		if !entry.IsDir() {
+			continue
+		}
+		if backupDir != "" {
+			t.Fatalf("expected one backup directory, found more than one")
+		}
+		backupDir = filepath.Join(home, "backups", entry.Name())
+	}
+	if backupDir == "" {
+		t.Fatal("sync --force did not create a backup directory")
+	}
+
+	var manifest struct {
+		Entries []struct {
+			OriginalPath string `json:"original_path"`
+			SnapshotPath string `json:"snapshot_path"`
+			Mode         uint32 `json:"mode"`
+		} `json:"entries"`
+	}
+	manifestData, err := os.ReadFile(filepath.Join(backupDir, "manifest.json"))
+	if err != nil {
+		t.Fatalf("read backup manifest: %v", err)
+	}
+	if err := json.Unmarshal(manifestData, &manifest); err != nil {
+		t.Fatalf("parse backup manifest: %v", err)
+	}
+	if len(manifest.Entries) != 1 {
+		t.Fatalf("backup manifest entries = %d, want 1", len(manifest.Entries))
+	}
+	entry := manifest.Entries[0]
+	if entry.OriginalPath != skillPath || entry.Mode != originalMode {
+		t.Fatalf("backup manifest entry = %+v, want original path %q and mode %o", entry, skillPath, originalMode)
+	}
+	snapshot, err := os.ReadFile(filepath.Join(backupDir, filepath.FromSlash(entry.SnapshotPath)))
+	if err != nil {
+		t.Fatalf("read backup snapshot: %v", err)
+	}
+	if !bytes.Equal(snapshot, edited) {
+		t.Fatalf("backup snapshot does not contain the edited skill")
+	}
+}

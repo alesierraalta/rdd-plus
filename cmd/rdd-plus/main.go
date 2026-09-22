@@ -325,6 +325,7 @@ func runSync(args []string) int {
 	configDir := fs.String("config-dir", defaultConfigDir(), "Claude config directory")
 	hostsFlag := fs.String("hosts", "", "comma-separated hosts to install into")
 	dryRun := fs.Bool("dry-run", false, "print the plan and write nothing")
+	force := fs.Bool("force", false, "replace files this tool installed that were modified afterwards, after backing them up")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -358,7 +359,7 @@ func runSync(args []string) int {
 	if err == nil {
 		bin, _ = filepath.Abs(bin)
 	}
-	report, err := sync.SyncHosts(discovery.Hosts, bin, sync.Options{DryRun: *dryRun})
+	report, err := sync.SyncHosts(discovery.Hosts, bin, sync.Options{DryRun: *dryRun, Force: *force})
 	report.LookedFor = discovery.LookedFor
 	report.DiscoveryErrors = discovery.Problems
 	report.ClaudeConfigDir = discovery.ClaudeConfigDir
