@@ -3,6 +3,7 @@ package admit
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -172,5 +173,166 @@ func TestRecordWaitsForThePlanLock(t *testing.T) {
 	}
 	if !strings.Contains(string(after), "sha256:") {
 		t.Fatalf("the digest the run observed must be recorded once the lock is free:\n%s", after)
+	}
+}
+
+func TestWriteRecordedLeavesPlanUnchangedWhenRenameFails(t *testing.T) {
+	before := "before\n"
+	path := writeTestPlan(t, before)
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalRename := renameRecorded
+	renameRecorded = func(string, string) error { return errors.New("injected rename failure") }
+	defer func() { renameRecorded = originalRename }()
+
+	if err := writeRecorded(path, raw, "after\n"); err == nil || !strings.Contains(err.Error(), "injected rename failure") {
+		t.Fatalf("writeRecorded error = %v, want the injected rename failure", err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != before {
+		t.Fatalf("rename failure changed the target: %q", after)
+	}
+	matches, err := filepath.Glob(filepath.Join(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("rename failure left temporary files: %v", matches)
+	}
+}
+
+func TestWriteRecordedSyncsPlanDirectoryAfterRename(t *testing.T) {
+	path := writeTestPlan(t, "before\n")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var events []string
+	renameWasSuccessful := false
+	originalRename := renameRecorded
+	originalSync := syncRecordedDirectory
+	renameRecorded = func(from, to string) error {
+		events = append(events, "rename")
+		if err := os.Rename(from, to); err != nil {
+			return err
+		}
+		renameWasSuccessful = true
+		return nil
+	}
+	syncRecordedDirectory = func(dir string) error {
+		if !renameWasSuccessful {
+			t.Errorf("directory sync ran before the plan rename")
+		}
+		events = append(events, "sync:"+dir)
+		return nil
+	}
+	defer func() {
+		renameRecorded = originalRename
+		syncRecordedDirectory = originalSync
+	}()
+
+	if err := writeRecorded(path, raw, "after\n"); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Join(events, ","), "rename,sync:"+filepath.Dir(path); got != want {
+		t.Fatalf("replacement events = %q, want %q", got, want)
+	}
+}
+
+func TestWriteRecordedPropagatesDirectorySyncFailure(t *testing.T) {
+	path := writeTestPlan(t, "before\n")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalSync := syncRecordedDirectory
+	syncRecordedDirectory = func(string) error { return errors.New("injected directory sync failure") }
+	defer func() { syncRecordedDirectory = originalSync }()
+
+	err = writeRecorded(path, raw, "after\n")
+	if err == nil || !strings.Contains(err.Error(), "injected directory sync failure") {
+		t.Fatalf("writeRecorded error = %v, want the injected directory sync failure", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "after\n" {
+		t.Fatalf("directory sync failure changed the renamed plan: %q", got)
+	}
+}
+
+func TestWriteRecordedWritesExactBytesAndPreservesMode(t *testing.T) {
+	before := "before\n"
+	path := writeTestPlan(t, before)
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const after = "after\nwith exact bytes\n"
+	if err := writeRecorded(path, raw, after); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != after {
+		t.Fatalf("written bytes = %q, want %q", got, after)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("mode = %04o, want 0600", got)
+	}
+}
+
+func TestRecordRefusesAfterPlanLockWaitBound(t *testing.T) {
+	path := writeTestPlan(t, "## Evidence ledger\n\n"+testLedgerHeader+testRow("E1", "`printf 'one\\n'`"))
+	out, errOut := &bytes.Buffer{}, &bytes.Buffer{}
+	lock, err := plan.LockPlan(path)
+	if err != nil {
+		t.Fatalf("taking the plan lock: %v", err)
+	}
+	defer plan.UnlockPlan(lock)
+
+	done := make(chan int, 1)
+	go func() {
+		done <- Run(Request{
+			Path:    path,
+			Execute: true,
+			Record:  []string{"E1"},
+			Dir:     t.TempDir(),
+		}, Deps{
+			Run: func(context.Context, string, string) (string, error) { return "one\n", nil },
+			Out: out,
+			Err: errOut,
+		})
+	}()
+
+	select {
+	case code := <-done:
+		if code != 1 {
+			t.Fatalf("code = %d, want 1 after the plan lock wait bound\nstdout: %s\nstderr: %s", code, out, errOut)
+		}
+		if !strings.Contains(errOut.String(), "timed out waiting for the plan lock") || !strings.Contains(errOut.String(), "after 1s") {
+			t.Fatalf("refusal must name the plan lock and its bound:\n%s", errOut)
+		}
+	case <-time.After(1500 * time.Millisecond):
+		t.Fatalf("the run waited past its plan lock bound\nstdout: %s\nstderr: %s", out, errOut)
 	}
 }

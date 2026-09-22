@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/alesierraalta/rdd-plus/internal/buildinfo"
 )
 
 // The runs column was added to the aggregate after readings had already been recorded, so an older
@@ -40,6 +42,94 @@ func TestRescoreCarriesTheRunCountItWasGiven(t *testing.T) {
 	}
 	if agg.Runs != 0 {
 		t.Fatalf("rescored runs = %d, want 0 rather than a guessed 1: the aggregate never recorded one", agg.Runs)
+	}
+}
+
+func TestRescoreRebuildsCurrentProvenanceFromTheOriginal(t *testing.T) {
+	results := t.TempDir()
+	original := Provenance{
+		MetricsVersion: 1, Scorer: "old-scorer", Model: "model", Runner: RunnerPi,
+		SkillVersion: "skill", Corpus: "sha256:corpus", Cases: 2, Runs: 3,
+		AgentConfig: ConfigBench, Environment: "linux/amd64",
+	}
+	if err := writeJSON(filepath.Join(results, "aggregate.json"), Aggregate{
+		TS: "t0", Model: original.Model, SkillVersion: original.SkillVersion, Corpus: original.Corpus,
+		Runs: original.Runs, Provenance: original,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	agg, err := Rescore(results, func(name string) (string, error) {
+		return "", fmt.Errorf("unexpected case lookup: %s", name)
+	}, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := agg.Provenance
+	if p.Model != original.Model || p.Runner != original.Runner || p.SkillVersion != original.SkillVersion || p.Corpus != original.Corpus || p.Cases != original.Cases || p.Runs != original.Runs {
+		t.Fatalf("rescore changed original provenance fields: %+v", p)
+	}
+	if p.Scorer != buildinfo.Revision() || p.MetricsVersion != MetricsVersion {
+		t.Fatalf("rescore current provenance = %+v", p)
+	}
+	modern := agg
+	modern.TS = "t1"
+	modern.Out = filepath.Join(t.TempDir(), "modern")
+	if _, err := Compare(
+		writeAggregate(t, filepath.Join(t.TempDir(), "rescored"), agg),
+		writeAggregate(t, filepath.Join(t.TempDir(), "modern"), modern),
+	); err != nil {
+		t.Fatalf("a version 1 aggregate rescored under current rules must compare with version 2: %v", err)
+	}
+}
+
+func TestRescoreFinalizesTheSameUniqueAndAdjudicationMetrics(t *testing.T) {
+	if testing.Short() {
+		t.Skip("runs sh")
+	}
+	caseDir, key := shellCase(t)
+	caseName := filepath.Base(caseDir)
+	key.Language = "node"
+	key.Defects[0].Keywords = []string{"D1"}
+	key.Defects[1].Keywords = []string{"D2"}
+	if err := writeJSON(filepath.Join(caseDir, KeyFile), key); err != nil {
+		t.Fatal(err)
+	}
+	results := t.TempDir()
+	findings := "| F1 | src.txt:1 D1 | M | yes | E1 | open | me | - | - |\n"
+	ledger := "| E1 | c | cmd | i | o | m | r | observado |\n"
+	for run := 1; run <= 2; run++ {
+		dir := filepath.Join(results, caseName, fmt.Sprint(run))
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "test-plan.md"), []byte(plan(findings, ledger)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	catch := CatchResult{Checked: true, Caught: map[string]bool{"D1": true, "D2": false}}
+	cases := []Result{
+		{Case: caseName, Run: 1, Total: len(key.Defects), Found: 1, Caught: 1, Defects: []DefectResult{{ID: "D1", Found: true}, {ID: "D2"}}, FindingRows: 1, PendingAdjudication: 1, Catch: catch, CostUSD: 0.1},
+		{Case: caseName, Run: 2, Total: len(key.Defects), Found: 1, Caught: 1, Defects: []DefectResult{{ID: "D1", Found: true}, {ID: "D2"}}, FindingRows: 1, PendingAdjudication: 1, Catch: catch, CostUSD: 0.2},
+	}
+	want := Aggregate{Cases: cases, Runs: 2}
+	finalizeAggregate(&want)
+	if err := writeJSON(filepath.Join(results, "aggregate.json"), want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Rescore(results, func(name string) (string, error) {
+		if name != caseName {
+			t.Fatalf("lookup case = %q, want %q", name, caseName)
+		}
+		return caseDir, nil
+	}, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.UniqueDefects != want.UniqueDefects || got.UniqueFound != want.UniqueFound || got.UniqueConfirmed != want.UniqueConfirmed || got.UniqueCaught != want.UniqueCaught || got.DefectRuns != want.DefectRuns || got.PendingAdjudication != want.PendingAdjudication {
+		t.Fatalf("rescored unique metrics = %+v, want %+v", got, want)
+	}
+	if got.Precision != nil || want.Precision != nil || got.AdjudicationComplete != want.AdjudicationComplete || got.Inconclusive != want.Inconclusive {
+		t.Fatalf("rescored adjudication metrics = precision %v/%v complete %v/%v pending %d/%d inconclusive %d/%d", got.Precision, want.Precision, got.AdjudicationComplete, want.AdjudicationComplete, got.PendingAdjudication, want.PendingAdjudication, got.Inconclusive, want.Inconclusive)
 	}
 }
 
@@ -120,5 +210,93 @@ func TestRescoreReportsTheRecordItCouldNotWrite(t *testing.T) {
 	noLookup := func(name string) (string, error) { return "", fmt.Errorf("unexpected case lookup: %s", name) }
 	if _, err := Rescore(results, noLookup, time.Minute); err == nil {
 		t.Fatal("Rescore returned as if it had recorded the rescored aggregate")
+	}
+}
+
+// A kept plan is re-read with the decisions recorded beside it: that is the whole point of keeping
+// the plan, and a rescore that ignored the sidecar would silently re-open every finding it decided.
+func TestRescoreAppliesTheSiblingAdjudication(t *testing.T) {
+	caseDir, key := shellCase(t)
+	caseName := filepath.Base(caseDir)
+	key.Language = "node"
+	key.Defects[0].Keywords = []string{"unused"}
+	key.Defects[1].Keywords = []string{"unused"}
+	if err := writeJSON(filepath.Join(caseDir, KeyFile), key); err != nil {
+		t.Fatal(err)
+	}
+	results := t.TempDir()
+	runDir := filepath.Join(results, caseName, "1")
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	planText := plan("| F1 | src/elsewhere.txt:9 a claim about nothing in the key | M | yes | | open | me | - | - |\n", "")
+	if err := os.WriteFile(filepath.Join(runDir, "test-plan.md"), []byte(planText), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fingerprint, err := FindingRowFingerprint(planText, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := Adjudication{Case: key.ID, Run: 1, Decisions: []Decision{{
+		Row: 1, RowFingerprint: fingerprint, Verdict: VerdictFalsePositive, By: "reviewer", TS: "2025-01-01T00:00:00Z", Reason: "not a defect",
+	}}}
+	if err := writeJSON(filepath.Join(runDir, AdjudicationFile), record); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSON(filepath.Join(results, "aggregate.json"), Aggregate{TS: "t0", Model: "m", Runs: 1,
+		Cases: []Result{{Case: caseName, Run: 1, Total: len(key.Defects), FindingRows: 1, PendingAdjudication: 1}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := Rescore(results, func(name string) (string, error) { return caseDir, nil }, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.FalsePositives != 1 || got.PendingAdjudication != 0 || got.AdjudicatedFalse != 1 || !got.AdjudicationComplete {
+		t.Fatalf("rescored aggregate = %+v, want the recorded false positive and nothing pending", got)
+	}
+	if got.Precision == nil || *got.Precision != 0 {
+		t.Fatalf("rescored precision = %v, want 0", got.Precision)
+	}
+}
+
+// A record decides one run. Applying it to another run of the same case is the misattribution the
+// record exists to prevent, so the run number is checked rather than trusted.
+func TestRescoreRefusesARecordFromAnotherRun(t *testing.T) {
+	caseDir, key := shellCase(t)
+	caseName := filepath.Base(caseDir)
+	key.Language = "node"
+	key.Defects[0].Keywords = []string{"unused"}
+	key.Defects[1].Keywords = []string{"unused"}
+	if err := writeJSON(filepath.Join(caseDir, KeyFile), key); err != nil {
+		t.Fatal(err)
+	}
+	results := t.TempDir()
+	runDir := filepath.Join(results, caseName, "1")
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	planText := plan("| F1 | src/elsewhere.txt:9 a claim | M | yes | | open | me | - | - |\n", "")
+	if err := os.WriteFile(filepath.Join(runDir, "test-plan.md"), []byte(planText), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fingerprint, err := FindingRowFingerprint(planText, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := Adjudication{Case: key.ID, Run: 2, Decisions: []Decision{{
+		Row: 1, RowFingerprint: fingerprint, Verdict: VerdictFalsePositive, By: "reviewer", TS: "2025-01-01T00:00:00Z", Reason: "not a defect",
+	}}}
+	if err := writeJSON(filepath.Join(runDir, AdjudicationFile), record); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSON(filepath.Join(results, "aggregate.json"), Aggregate{TS: "t0", Model: "m", Runs: 1,
+		Cases: []Result{{Case: caseName, Run: 1, Total: len(key.Defects), FindingRows: 1}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = Rescore(results, func(name string) (string, error) { return caseDir, nil }, time.Minute)
+	if err == nil || !strings.Contains(err.Error(), "run 2") || !strings.Contains(err.Error(), "run 1") {
+		t.Fatalf("error = %v, want a refusal naming both run numbers", err)
 	}
 }

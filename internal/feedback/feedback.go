@@ -81,6 +81,9 @@ var knownKeys = map[string]bool{
 // keyLine matches `key: value`; a line that does not match continues the previous value.
 var keyLine = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_-]*):[ \t]?(.*)$`)
 
+// skillShape accepts a lowercase skill name with an optional dotted numeric version.
+var skillShape = regexp.MustCompile(`^[a-z][a-z0-9-]*(?: [0-9]+(?:\.[0-9]+)+)?$`)
+
 // Parse reads the `key: value` template shape: a value runs to the next key, blank lines and
 // comment lines are ignored, and an unknown key or an empty required field is a refusal.
 func Parse(text string) (Report, error) {
@@ -124,6 +127,9 @@ func Parse(text string) (Report, error) {
 		if val(req) == "" {
 			return Report{}, fmt.Errorf("missing required field: %s", req)
 		}
+	}
+	if !skillShape.MatchString(r.Skill) {
+		return Report{}, fmt.Errorf("skill %q must match <name> or <name> <version> (lowercase name, optional dotted numeric version)", r.Skill)
 	}
 	if !isVerdict(r.Verdict) {
 		return Report{}, fmt.Errorf("verdict %q must be one of: %s", r.Verdict, strings.Join(Verdicts, ", "))
@@ -274,6 +280,9 @@ func appendFile(path string, data []byte) error {
 }
 
 // Read returns every report in the ledger, oldest first. A missing ledger is empty, not an error.
+// Read reads the ledger back for local use. A row written after sanitization carries pseudonyms, so
+// the local map resolves them here: the bytes on disk keep no identity, and the operator still reads
+// their own project names. A row that predates sanitization is returned exactly as it was written.
 func Read(configDir string) ([]Report, error) {
 	raw, err := os.ReadFile(LedgerPath(configDir))
 	if os.IsNotExist(err) {
@@ -282,6 +291,7 @@ func Read(configDir string) ([]Report, error) {
 	if err != nil {
 		return nil, err
 	}
+	telemetryDir := sanitize.TelemetryDir(configDir)
 	var out []Report
 	for i, line := range strings.Split(strings.TrimRight(string(raw), "\n"), "\n") {
 		if strings.TrimSpace(line) == "" {
@@ -290,6 +300,14 @@ func Read(configDir string) ([]Report, error) {
 		var r Report
 		if err := json.Unmarshal([]byte(line), &r); err != nil {
 			return nil, fmt.Errorf("ledger line %d: %w", i+1, err)
+		}
+		if r.Sanitized {
+			if original, ok := sanitize.Resolve(telemetryDir, r.Repo); ok {
+				r.Repo = original
+			}
+			if original, ok := sanitize.Resolve(telemetryDir, r.Plan); ok {
+				r.Plan = original
+			}
 		}
 		out = append(out, r)
 	}
@@ -327,9 +345,11 @@ func Summary(configDir string) (string, error) {
 		fmt.Fprintf(&b, "  %s: %d\n", v, counts[v])
 	}
 
-	type split struct{ paid, partly, ceremony int }
+	type split struct{ paid, partly, ceremony, unknown int }
 	perSkill := map[string]*split{}
-	var skills []string
+	perProject := map[string]*split{}
+	var skills, projects []string
+	unknown := 0
 	for _, r := range reports {
 		s, ok := perSkill[r.Skill]
 		if !ok {
@@ -337,21 +357,51 @@ func Summary(configDir string) (string, error) {
 			perSkill[r.Skill] = s
 			skills = append(skills, r.Skill)
 		}
+		p, ok := perProject[r.Repo]
+		if !ok {
+			p = &split{}
+			perProject[r.Repo] = p
+			projects = append(projects, r.Repo)
+		}
 		switch r.Verdict {
 		case VerdictPaid:
 			s.paid++
+			p.paid++
 		case VerdictPartly:
 			s.partly++
+			p.partly++
 		case VerdictCeremony:
 			s.ceremony++
+			p.ceremony++
+		default:
+			s.unknown++
+			p.unknown++
+			unknown++
 		}
 	}
+	if unknown > 0 {
+		fmt.Fprintf(&b, "  unknown: %d\n", unknown)
+	}
+
+	writeSplit := func(name string, s *split) {
+		fmt.Fprintf(&b, "  %s: %d (paid %d, partly %d, ceremony %d",
+			name, s.paid+s.partly+s.ceremony+s.unknown, s.paid, s.partly, s.ceremony)
+		if s.unknown > 0 {
+			fmt.Fprintf(&b, ", unknown %d", s.unknown)
+		}
+		b.WriteString(")\n")
+	}
+
 	sort.Sort(sort.Reverse(sort.StringSlice(skills)))
 	b.WriteString("\nby skill version:\n")
 	for _, sk := range skills {
-		s := perSkill[sk]
-		fmt.Fprintf(&b, "  %s: %d (paid %d, partly %d, ceremony %d)\n",
-			sk, s.paid+s.partly+s.ceremony, s.paid, s.partly, s.ceremony)
+		writeSplit(sk, perSkill[sk])
+	}
+
+	sort.Sort(sort.Reverse(sort.StringSlice(projects)))
+	b.WriteString("\nby project:\n")
+	for _, project := range projects {
+		writeSplit(project, perProject[project])
 	}
 
 	b.WriteString("\nrecent guesses (newest first):\n")
@@ -391,19 +441,27 @@ func gitAt(dir string, args ...string) (string, error) {
 	return string(out), err
 }
 
+var skillName = regexp.MustCompile(`(?m)^\s*name:\s*"?([^"\n]+?)"?\s*$`)
 var skillVersion = regexp.MustCompile(`(?m)^\s*version:\s*"?([^"\n]+?)"?\s*$`)
 
-// EmbeddedSkillVersion reads the version of the embedded test-strategy skill, so a report records
+// EmbeddedSkillIdentity reads the identity of the embedded test-strategy skill, so a report records
 // the skill that produced it and not merely the binary that wrote the row.
-func EmbeddedSkillVersion() string {
+func EmbeddedSkillIdentity() string {
 	data, err := fs.ReadFile(assets.Skills(), "test-strategy/SKILL.md")
 	if err != nil {
 		return "unknown"
 	}
-	if m := skillVersion.FindSubmatch(data); m != nil {
-		return strings.TrimSpace(string(m[1]))
+	nameMatch := skillName.FindSubmatch(data)
+	versionMatch := skillVersion.FindSubmatch(data)
+	if nameMatch == nil || versionMatch == nil {
+		return "unknown"
 	}
-	return "unknown"
+	name := strings.TrimSpace(string(nameMatch[1]))
+	version := strings.TrimSpace(string(versionMatch[1]))
+	if name == "" || version == "" {
+		return "unknown"
+	}
+	return name + " " + version
 }
 
 func isVerdict(v string) bool {

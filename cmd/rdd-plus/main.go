@@ -41,7 +41,8 @@ commands:
   gate     Stop hook: read the hook payload on stdin, decide, log, emit feedback
   sync     install the embedded skills into discovered hosts and wire Claude's Stop hook
   doctor   report installed skills, the hook wiring, and optional capabilities
-  bench    run the testing skill against sealed-key fixtures and score it (run | score | history)
+  bench    run the testing skill against sealed-key fixtures and score it (run | score | history |
+           compare | rescore | adjudicate)
   plan     write the skeleton, check the contract, name what breadth is still owed, record a
            Findings row from flags, and admit every Evidence row (init | check | gaps | upgrade | add-finding | admit)
   check    say what this repository still owes, from git and the plan alone: no hook payload,
@@ -64,9 +65,17 @@ bench run [--cases <glob>] [--runner pi|claude] [--model <m>] [--runs N] [--max-
           (--model is a name for claude and <provider>/<model>[:<thinking>] for pi; --runner pi
            builds a throwaway agent dir under --out unless --agent-config names one)
 bench score --case <dir> --workspace <ws>
+bench score --case <dir> --plan <file> [--adjudication <path>|none]
 bench history [--bench-dir <dir>]
 bench compare <before-results> <after-results>
 bench rescore [--bench-dir <dir>] <results>
+bench adjudicate --run <results>/<case>/<run> [--plan <path>] --row <n> --verdict <defect|false_positive|out_of_scope>
+          [--defect <id>] --by <who> --reason <why> [--replace] [--ts <RFC3339>]
+bench adjudicate --run <results>/<case>/<run> [--plan <path>] (--show | --pending)
+          (writes <run>/adjudication.json: the decisions a score applies, one per finding row. A row
+           nobody decided stays pending and is never counted as a false positive. A score applies a
+           record only when --adjudication names it: the workspace the subject wrote must not be able
+           to supply the verdicts about its own findings)
 plan init [--path <path>] [--force]
 plan check [--path <path>]
 plan gaps [--run <slug>] [--all] [--path <path>]
@@ -89,6 +98,11 @@ feedback [--config-dir <dir>] [--template] [--file <path>] [--plan <path>] [--su
 `
 
 func defaultConfigDir() string {
+	for _, key := range []string{"CLAUDE_CONFIG_DIR", "PI_CODING_AGENT_DIR"} {
+		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+			return value
+		}
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ".claude"
@@ -297,7 +311,7 @@ func runFeedback(args []string) int {
 			TS:    time.Now().UTC().Format(time.RFC3339),
 			Repo:  feedback.RepoRoot("."),
 			Plan:  *plan,
-			Skill: feedback.EmbeddedSkillVersion(),
+			Skill: feedback.EmbeddedSkillIdentity(),
 			Build: buildinfo.String(),
 		}))
 		return 0
@@ -589,9 +603,29 @@ func runBench(args []string) int {
 		return runBenchCompare(args[1:])
 	case "rescore":
 		return runBenchRescore(args[1:])
+	case "adjudicate":
+		return runBenchAdjudicate(args[1:])
 	default:
 		fmt.Fprint(os.Stderr, usage)
 		return 2
+	}
+}
+
+// configModeFor names the agent configuration a run measured with: a throwaway directory holding only
+// the embedded skills, the operator's own configuration, or a directory the operator chose. The
+// provenance records it because the three are not the same instrument.
+func configModeFor(runner, agentConfig string) string {
+	switch {
+	case agentConfig == "bench":
+		return bench.ConfigBench
+	case agentConfig != "":
+		return bench.ConfigCustom
+	case runner == bench.RunnerPi:
+		// A Pi run always gets a throwaway config; the runner exists so a reading is not shaped by
+		// the operator's packages, extensions, memory protocol, or MCP servers.
+		return bench.ConfigBench
+	default:
+		return bench.ConfigInherited
 	}
 }
 
@@ -668,7 +702,7 @@ func runBenchRun(args []string) int {
 		Timeout:      *timeout,
 		SuiteTimeout: *suiteTimeout, MaxCostUSD: *maxCost, Out: *out, BenchDir: *benchDir,
 		SkillFile: skillFile,
-		ConfigDir: cfgDir, BinDir: selfDir(), Workers: *workers,
+		ConfigDir: cfgDir, BinDir: selfDir(), Workers: *workers, ConfigMode: configModeFor(*runner, *agentConfig),
 		DryRun: *dryRun, Keep: *keep, Retries: *retries, RetryDelay: *retryDelay, Log: os.Stdout,
 	})
 	// The results line is a promise about a file: a run that matched no case, or one whose record could not be
@@ -685,6 +719,7 @@ func runBenchScore(args []string) int {
 	caseDir := fs.String("case", "", "case directory holding KEY.json")
 	ws := fs.String("workspace", "", "workspace to score")
 	planFile := fs.String("plan", "", "plan file to score, such as the test-plan.md a run keeps beside result.json")
+	adjFlag := fs.String("adjudication", "", "adjudication record to apply; named here or not at all, never discovered beside the plan (none is the same as omitting it)")
 	if err := fs.Parse(args); err != nil || *caseDir == "" || (*ws == "") == (*planFile == "") {
 		fmt.Fprintln(os.Stderr, "bench score needs --case and exactly one of --workspace or --plan")
 		return 2
@@ -694,23 +729,340 @@ func runBenchScore(args []string) int {
 		fmt.Fprintln(os.Stderr, "score:", err)
 		return 1
 	}
+	adj, err := scoreAdjudication(*adjFlag)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "score:", err)
+		return 1
+	}
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
+	var res bench.Result
 	if *planFile != "" {
-		if err := enc.Encode(bench.ScorePlanFile(*planFile, key)); err != nil {
-			fmt.Fprintln(os.Stderr, "score:", err)
-			return exitArtifact
+		res, err = bench.ScorePlanFileWithAdjudication(*planFile, key, adj)
+	} else {
+		res, err = bench.ScoreWorkspaceWithAdjudication(*ws, key, adj)
+		if err == nil {
+			res.Catch = bench.Discriminate(*caseDir, *ws, key, 10*time.Minute)
+			res.Caught = res.Catch.Count()
 		}
-		return 0
 	}
-	res := bench.ScoreWorkspace(*ws, key)
-	res.Catch = bench.Discriminate(*caseDir, *ws, key, 10*time.Minute)
-	res.Caught = res.Catch.Count()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "score:", err)
+		return 1
+	}
 	if err := enc.Encode(res); err != nil {
 		fmt.Fprintln(os.Stderr, "score:", err)
 		return exitArtifact
 	}
 	return 0
+}
+
+// scoreAdjudication resolves the record a score applies. The record has authority over the score, so it is
+// applied only when the caller names it here. It is deliberately never discovered beside the plan: the plan a
+// workspace holds sits in the area the evaluated subject writes, and a record found there would let the subject
+// rule on its own finding rows — closing them as out of scope, leaving the precision denominator, and reporting
+// a run that invented findings as one with none. `bench rescore` reads the record of a run from that run's own
+// directory, which the runner owns, and names it explicitly.
+func scoreAdjudication(flagValue string) (*bench.Adjudication, error) {
+	switch flagValue {
+	case "", "none":
+		return nil, nil
+	default:
+		loaded, err := bench.LoadAdjudication(flagValue)
+		if err != nil {
+			return nil, err
+		}
+		return &loaded, nil
+	}
+}
+
+// adjudicateInput is one invocation of `bench adjudicate`, parsed and checked before any file is read.
+type adjudicateInput struct {
+	runDir   string
+	planPath string
+	row      int
+	verdict  string
+	defect   string
+	by       string
+	reason   string
+	ts       string
+	replace  bool
+	show     bool
+	pending  bool
+}
+
+func runBenchAdjudicate(args []string) int {
+	in, code := parseAdjudicate(args)
+	if code != 0 {
+		return code
+	}
+	switch {
+	case in.show:
+		return adjudicateShow(in)
+	case in.pending:
+		return adjudicatePending(in)
+	default:
+		return adjudicateRecord(in)
+	}
+}
+
+// parseAdjudicate keeps every refusal about the invocation's own values here: an unknown verdict or a
+// missing actor is a usage error (exit 2), while a row the plan does not have is the data's refusal.
+func parseAdjudicate(args []string) (adjudicateInput, int) {
+	fs := flag.NewFlagSet("bench adjudicate", flag.ContinueOnError)
+	var in adjudicateInput
+	fs.StringVar(&in.runDir, "run", "", "results directory of one case run: it holds result.json and the kept test-plan.md")
+	fs.StringVar(&in.planPath, "plan", "", "plan file to decide against (default: <run>/test-plan.md)")
+	fs.IntVar(&in.row, "row", 0, "1-based Findings row to decide")
+	fs.StringVar(&in.verdict, "verdict", "", "defect | false_positive | out_of_scope")
+	fs.StringVar(&in.defect, "defect", "", "keyed defect id, required for verdict defect")
+	fs.StringVar(&in.by, "by", "", "who decided")
+	fs.StringVar(&in.reason, "reason", "", "why, in one line")
+	fs.StringVar(&in.ts, "ts", "", "decision timestamp in RFC3339 (default: now, UTC)")
+	fs.BoolVar(&in.replace, "replace", false, "displace the decision already standing for the row")
+	fs.BoolVar(&in.show, "show", false, "print the record and the rows it decides")
+	fs.BoolVar(&in.pending, "pending", false, "print the finding rows still undecided")
+	if err := fs.Parse(args); err != nil {
+		return in, 2
+	}
+	if in.runDir == "" {
+		fmt.Fprintln(os.Stderr, "bench adjudicate: --run <dir> is required")
+		return in, 2
+	}
+	if in.planPath == "" {
+		in.planPath = filepath.Join(in.runDir, "test-plan.md")
+	}
+	if in.show || in.pending {
+		if in.show && in.pending {
+			fmt.Fprintln(os.Stderr, "bench adjudicate: --show and --pending are two different readings; pass one")
+			return in, 2
+		}
+		return in, 0
+	}
+	return in, checkDecisionValues(in)
+}
+
+// checkDecisionValues refuses an invocation whose values the record would reject anyway, so the
+// operator hears about it before anything is written.
+func checkDecisionValues(in adjudicateInput) int {
+	problems := []string{}
+	switch in.verdict {
+	case bench.VerdictDefect:
+		if in.defect == "" {
+			problems = append(problems, "--defect <id> is required for verdict defect")
+		}
+	case bench.VerdictFalsePositive, bench.VerdictOutOfScope:
+		if in.defect != "" {
+			problems = append(problems, "--defect belongs to verdict defect only")
+		}
+	default:
+		problems = append(problems, fmt.Sprintf("--verdict %q is not defect, false_positive or out_of_scope", in.verdict))
+	}
+	if in.row < 1 {
+		problems = append(problems, "--row <n> is required, 1-based")
+	}
+	if strings.TrimSpace(in.by) == "" {
+		problems = append(problems, "--by <who> is required: a decision without an author is not auditable")
+	}
+	if strings.TrimSpace(in.reason) == "" {
+		problems = append(problems, "--reason <why> is required")
+	}
+	if in.ts != "" {
+		if _, err := time.Parse(time.RFC3339, in.ts); err != nil {
+			problems = append(problems, "--ts must be RFC3339, such as 2026-09-17T12:00:00Z")
+		}
+	}
+	if len(problems) > 0 {
+		fmt.Fprintln(os.Stderr, "bench adjudicate: "+strings.Join(problems, "; "))
+		return 2
+	}
+	return 0
+}
+
+// loadAdjudication reads the record of the run the invocation names. It is read from the run's own
+// directory rather than from beside the plan: the plan can be named anywhere, including the workspace
+// the evaluated subject wrote, while the run directory is the runner's. A missing file means nothing is
+// decided yet; a malformed one is a refusal, because a record that cannot be read must not be replaced.
+func loadAdjudication(in adjudicateInput) (*bench.Adjudication, error) {
+	path := filepath.Join(in.runDir, bench.AdjudicationFile)
+	record, err := bench.LoadAdjudication(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &record, nil
+}
+
+// adjudicateRunInfo is the identity a decision is recorded under: the case and run the result.json
+// names. It is read rather than inferred from the path, so a moved directory cannot relabel a record.
+type adjudicateRunInfo struct {
+	Case string `json:"case"`
+	Run  int    `json:"run"`
+}
+
+func adjudicateRecord(in adjudicateInput) int {
+	info, code := readAdjudicateRun(in)
+	if code != 0 {
+		return code
+	}
+	plan, err := os.ReadFile(in.planPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "adjudicate:", err)
+		return 1
+	}
+	fingerprint, err := bench.FindingRowFingerprint(string(plan), in.row)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "adjudicate:", err)
+		return 1
+	}
+	record, err := loadAdjudication(in)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "adjudicate:", err)
+		return 1
+	}
+	if record == nil {
+		record = &bench.Adjudication{Case: info.Case, Run: info.Run}
+	}
+	if record.Case != info.Case || record.Run != info.Run {
+		fmt.Fprintf(os.Stderr, "adjudicate: the record decides case %q run %d, not case %q run %d\n", record.Case, record.Run, info.Case, info.Run)
+		return 1
+	}
+	ts := in.ts
+	if ts == "" {
+		ts = time.Now().UTC().Format(time.RFC3339)
+	}
+	decision := bench.Decision{Row: in.row, RowFingerprint: fingerprint, Verdict: in.verdict, Defect: in.defect, By: in.by, TS: ts, Reason: in.reason}
+	if err := record.Decide(decision, in.replace); err != nil {
+		fmt.Fprintln(os.Stderr, "adjudicate:", err)
+		return 1
+	}
+	if err := record.Validate(); err != nil {
+		fmt.Fprintln(os.Stderr, "adjudicate:", err)
+		return 1
+	}
+	if err := writeAdjudication(filepath.Join(in.runDir, bench.AdjudicationFile), *record); err != nil {
+		fmt.Fprintln(os.Stderr, "adjudicate:", err)
+		return exitArtifact
+	}
+	rows := bench.FindingRowsText(string(plan))
+	fmt.Printf("row %d %s: %s\n%s\n", in.row, shortFingerprint(fingerprint), in.verdict, rows[in.row-1])
+	return 0
+}
+
+func adjudicateShow(in adjudicateInput) int {
+	record, err := loadAdjudication(in)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "adjudicate:", err)
+		return 1
+	}
+	if record == nil {
+		fmt.Println("no decisions recorded")
+		return 0
+	}
+	fmt.Printf("case %s run %d\n", record.Case, record.Run)
+	for _, d := range record.Decisions {
+		fmt.Printf("row %d %s %s by %s at %s: %s\n", d.Row, shortFingerprint(d.RowFingerprint), d.Verdict, d.By, d.TS, d.Reason)
+	}
+	if len(record.Superseded) > 0 {
+		fmt.Println("superseded:")
+		for _, d := range record.Superseded {
+			fmt.Printf("row %d %s %s by %s at %s: %s\n", d.Row, shortFingerprint(d.RowFingerprint), d.Verdict, d.By, d.TS, d.Reason)
+		}
+	}
+	return 0
+}
+
+func adjudicatePending(in adjudicateInput) int {
+	record, err := loadAdjudication(in)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "adjudicate:", err)
+		return 1
+	}
+	decided := map[int]bool{}
+	if record != nil {
+		for _, d := range record.Decisions {
+			decided[d.Row] = true
+		}
+	}
+	plan, err := os.ReadFile(in.planPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "adjudicate:", err)
+		return 1
+	}
+	rows := bench.FindingRowsText(string(plan))
+	pending := 0
+	for i := range rows {
+		row := i + 1
+		if decided[row] {
+			continue
+		}
+		pending++
+		fingerprint, err := bench.FindingRowFingerprint(string(plan), row)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "adjudicate:", err)
+			return 1
+		}
+		fmt.Printf("row %d %s %s\n", row, shortFingerprint(fingerprint), rows[i])
+	}
+	if pending == 0 {
+		fmt.Println("no pending rows")
+	}
+	return 0
+}
+
+// readAdjudicateRun reads the case and run the directory's result.json names, and refuses a directory
+// whose result cannot be read: deciding a run nobody can identify would produce a record the scorer
+// refuses anyway.
+func readAdjudicateRun(in adjudicateInput) (adjudicateRunInfo, int) {
+	var info adjudicateRunInfo
+	data, err := os.ReadFile(filepath.Join(in.runDir, "result.json"))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "adjudicate:", err)
+		return info, 1
+	}
+	if err := json.Unmarshal(data, &info); err != nil {
+		fmt.Fprintf(os.Stderr, "adjudicate: result.json: %v\n", err)
+		return info, 1
+	}
+	if info.Case == "" || info.Run < 1 {
+		fmt.Fprintf(os.Stderr, "adjudicate: result.json names case %q run %d; a record needs both\n", info.Case, info.Run)
+		return info, 1
+	}
+	return info, 0
+}
+
+// writeAdjudication writes the record so a reader sees either the whole file or the one before it: a
+// half-written decision is an audit trail that lies.
+func writeAdjudication(path string, record bench.Adjudication) error {
+	data, err := json.MarshalIndent(record, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".adjudication-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(append(data, '\n')); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp.Name(), 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
+}
+
+func shortFingerprint(fingerprint string) string {
+	if len(fingerprint) <= 12 {
+		return fingerprint
+	}
+	return fingerprint[:12]
 }
 
 func runBenchRescore(args []string) int {

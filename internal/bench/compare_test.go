@@ -18,8 +18,11 @@ func writeAggregate(t *testing.T, dir string, agg Aggregate) string {
 }
 
 func TestCompareRuns(t *testing.T) {
+	beforePrecision := 0.50
+	afterPrecision := 0.80
 	before := writeAggregate(t, filepath.Join(t.TempDir(), "before"), Aggregate{
-		TS: "t1", Defects: 5, Found: 2, Caught: 1,
+		TS: "t1", Defects: 5, Found: 2, Caught: 1, UniqueDefects: 5, UniqueFound: 2, UniqueCaught: 1,
+		DefectRuns: 5, AdjudicatedTrue: 1, AdjudicatedFalse: 1, PendingAdjudication: 2, Precision: &beforePrecision, Inconclusive: 1,
 		Cases: []Result{
 			{Case: "a", Total: 2, Found: 1, Caught: 0, PlanFound: true},
 			{Case: "b", Total: 2, Found: 1, Caught: 1, PlanFound: true},
@@ -27,7 +30,8 @@ func TestCompareRuns(t *testing.T) {
 		},
 	})
 	after := writeAggregate(t, filepath.Join(t.TempDir(), "after"), Aggregate{
-		TS: "t2", Defects: 5, Found: 4, Caught: 4,
+		TS: "t2", Defects: 5, Found: 4, Caught: 4, UniqueDefects: 5, UniqueFound: 4, UniqueCaught: 4,
+		DefectRuns: 5, AdjudicatedTrue: 4, AdjudicatedFalse: 1, PendingAdjudication: 1, Precision: &afterPrecision,
 		Cases: []Result{
 			{Case: "a", Total: 2, Found: 2, Caught: 2, ClaimedPinned: 2, PlanFound: true, Catch: CatchResult{Checked: true, Notes: []string{"3 test(s) pin the defective behaviour"}}},
 			{Case: "b", Total: 2, Found: 2, Caught: 2, ClaimedPinned: 2, PlanFound: true},
@@ -49,7 +53,139 @@ func TestCompareRuns(t *testing.T) {
 		t.Fatalf("a case failed before and valid after must be flagged: %+v", c)
 	}
 	md := cmp.Markdown()
-	for _, want := range []string{"| a | 1/2 | 2/2 | 0/2 | 2/2 | 0/2 | 2/2 |", "| c | FAILED | 0/1 | FAILED | 0/1 | FAILED | 0/1 | before did not run to completion; NO PLAN after |", "reported 2 → 4", "caught 1 → 4", "3 test(s) pin the defect"} {
+	for _, want := range []string{"| a | 1/2 | 2/2 | 0/2 | 2/2 | 0/2 | 2/2 |", "| c | FAILED | 0/1 | FAILED | 0/1 | FAILED | 0/1 | before did not run to completion; NO PLAN after |", "reported (defect-runs): 2/5 → 4/5", "reported (unique defects): 2/5 → 4/5", "caught (defect-runs): 1/5 → 4/5", "precision: 0.50 (2 adjudicated, 2 pending) → 0.80 (5 adjudicated, 1 pending)", "inconclusive: 1 runs → 0 runs", "3 test(s) pin the defect"} {
+		if !strings.Contains(md, want) {
+			t.Fatalf("markdown missing %q:\n%s", want, md)
+		}
+	}
+}
+
+func comparisonAggregate(p Provenance) Aggregate {
+	return Aggregate{
+		Corpus:     p.Corpus,
+		Provenance: p,
+		Cases:      []Result{{Case: "a", Total: 1, PlanFound: true}},
+	}
+}
+
+func comparisonProvenance() Provenance {
+	return Provenance{
+		MetricsVersion: MetricsVersion, Scorer: "scorer", Model: "model", Runner: RunnerPi,
+		SkillVersion: "skill", Corpus: "sha256:corpus", Cases: 1, Runs: 1,
+		AgentConfig: ConfigBench, Environment: "linux/amd64", SuiteTools: "node v1; go v1",
+	}
+}
+
+func TestCompareRejectsEachChangedProvenanceField(t *testing.T) {
+	tests := []struct {
+		name   string
+		change func(*Provenance)
+	}{
+		{name: "metrics version", change: func(p *Provenance) { p.MetricsVersion = 1 }},
+		{name: "model", change: func(p *Provenance) { p.Model = "other-model" }},
+		{name: "runner", change: func(p *Provenance) { p.Runner = RunnerClaude }},
+		{name: "skill version", change: func(p *Provenance) { p.SkillVersion = "other-skill" }},
+		{name: "runs per case", change: func(p *Provenance) { p.Runs = 2 }},
+		{name: "agent-config mode", change: func(p *Provenance) { p.AgentConfig = ConfigCustom }},
+		{name: "environment", change: func(p *Provenance) { p.Environment = "darwin/arm64" }},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			before := comparisonProvenance()
+			after := comparisonProvenance()
+			tc.change(&after)
+			_, err := Compare(
+				writeAggregate(t, filepath.Join(t.TempDir(), "before"), comparisonAggregate(before)),
+				writeAggregate(t, filepath.Join(t.TempDir(), "after"), comparisonAggregate(after)),
+			)
+			if err == nil || !strings.Contains(strings.ToLower(err.Error()), tc.name) {
+				t.Fatalf("error = %v, want the changed field %q", err, tc.name)
+			}
+		})
+	}
+}
+
+func TestCompareMetricsVersionRequiresRescore(t *testing.T) {
+	before := comparisonProvenance()
+	after := comparisonProvenance()
+	after.MetricsVersion = 1
+	_, err := Compare(
+		writeAggregate(t, filepath.Join(t.TempDir(), "before"), comparisonAggregate(before)),
+		writeAggregate(t, filepath.Join(t.TempDir(), "after"), comparisonAggregate(after)),
+	)
+	if err == nil {
+		t.Fatal("different metrics versions compared silently")
+	}
+	for _, want := range []string{"metrics version", "older reading", "rescor", "delta"} {
+		if !strings.Contains(strings.ToLower(err.Error()), want) {
+			t.Fatalf("error %q missing %q", err, want)
+		}
+	}
+}
+
+func TestCompareAllowsSuiteToolDifferencesAndReportsThem(t *testing.T) {
+	before := comparisonProvenance()
+	after := comparisonProvenance()
+	after.SuiteTools = "node v2; go v2"
+	cmp, err := Compare(
+		writeAggregate(t, filepath.Join(t.TempDir(), "before"), comparisonAggregate(before)),
+		writeAggregate(t, filepath.Join(t.TempDir(), "after"), comparisonAggregate(after)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(cmp.Markdown(), "suite runtimes differed") {
+		t.Fatalf("markdown must weigh suite runtime differences:\n%s", cmp.Markdown())
+	}
+}
+
+func TestCompareAllowsAndNotesTwoUnspecifiedAgentConfigModes(t *testing.T) {
+	before := comparisonProvenance()
+	after := comparisonProvenance()
+	before.AgentConfig, after.AgentConfig = "", ""
+	cmp, err := Compare(
+		writeAggregate(t, filepath.Join(t.TempDir(), "before"), comparisonAggregate(before)),
+		writeAggregate(t, filepath.Join(t.TempDir(), "after"), comparisonAggregate(after)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(cmp.Markdown(), "agent-config mode was not recorded") {
+		t.Fatalf("markdown must disclose unspecified agent-config modes:\n%s", cmp.Markdown())
+	}
+}
+
+func TestCompareRefusesLegacyAggregateAgainstVersionTwo(t *testing.T) {
+	legacy := Aggregate{Corpus: "sha256:corpus", Cases: []Result{{Case: "a", Total: 1, PlanFound: true}}}
+	modern := comparisonAggregate(comparisonProvenance())
+	_, err := Compare(
+		writeAggregate(t, filepath.Join(t.TempDir(), "legacy"), legacy),
+		writeAggregate(t, filepath.Join(t.TempDir(), "modern"), modern),
+	)
+	if err == nil {
+		t.Fatal("a legacy aggregate was compared with a version 2 aggregate")
+	}
+	for _, want := range []string{"metrics version", "older reading", "rescor"} {
+		if !strings.Contains(strings.ToLower(err.Error()), want) {
+			t.Fatalf("error %q missing %q", err, want)
+		}
+	}
+}
+
+func TestCompareMarkdownStatesProvenanceAndAdjudicatedUnits(t *testing.T) {
+	before := comparisonAggregate(comparisonProvenance())
+	after := comparisonAggregate(comparisonProvenance())
+	before.PendingAdjudication = 2
+	after.PendingAdjudication = 1
+	cmp, err := Compare(
+		writeAggregate(t, filepath.Join(t.TempDir(), "before"), before),
+		writeAggregate(t, filepath.Join(t.TempDir(), "after"), after),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	md := cmp.Markdown()
+	for _, want := range []string{"model=model", "runner=pi", "skill version=skill", "scorer=scorer", "corpus digest=sha256:corpus", "runs=1", "cases=1", "agent-config mode=bench", "environment=linux/amd64", "defect-runs", "unique defects", "pending"} {
 		if !strings.Contains(md, want) {
 			t.Fatalf("markdown missing %q:\n%s", want, md)
 		}

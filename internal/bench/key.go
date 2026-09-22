@@ -36,6 +36,7 @@ type Key struct {
 	Language string `json:"language"`
 	Suite    string `json:"suite"`
 	Surface  string `json:"surface"`
+	Control  string `json:"control,omitempty"`
 	// Request is the bounded unit of work a run is asked to test, when the case has one. A case without
 	// it is the generic case the bench has always run. The pointer is what tells the two apart: a key
 	// that supplies a blank request is a mistake, not a generic case, and is refused rather than read
@@ -52,8 +53,31 @@ func (k Key) RequestText() string {
 	return strings.TrimSpace(*k.Request)
 }
 
+func controlProblems(control string, defectCount int) []string {
+	switch control {
+	case "":
+		if defectCount == 0 {
+			return []string{"no defects"}
+		}
+	case ControlClean:
+		if defectCount > 0 {
+			return []string{fmt.Sprintf("clean control has %d defect(s)", defectCount)}
+		}
+	default:
+		return []string{fmt.Sprintf("control %q is not accepted; accepted value is %q", control, ControlClean)}
+	}
+	return nil
+}
+
 // KeyFile is the answer-key file name; it must never be copied into a workspace.
 const KeyFile = "KEY.json"
+
+const ControlClean = "clean"
+
+// IsCleanControl reports whether the key describes a reviewed clean negative control.
+func (k Key) IsCleanControl() bool {
+	return k.Control == ControlClean
+}
 
 // LoadKey reads and validates a case's KEY.json.
 func LoadKey(caseDir string) (Key, error) {
@@ -86,9 +110,7 @@ func (k Key) Validate() error {
 	if k.Request != nil && k.RequestText() == "" {
 		problems = append(problems, "request is present but empty")
 	}
-	if len(k.Defects) == 0 {
-		problems = append(problems, "no defects")
-	}
+	problems = append(problems, controlProblems(k.Control, len(k.Defects))...)
 	seen := map[string]bool{}
 	for i, d := range k.Defects {
 		switch {
