@@ -32,3 +32,9 @@ func makeRaw(in, out *os.File) (func() error, error) {
 		return ioctlTermios(in.Fd(), uintptr(syscall.TCSETS), &old)
 	}, nil
 }
+
+// IsTerminal reports whether f is a terminal this package can drive interactively.
+func IsTerminal(f *os.File) bool {
+	var t syscall.Termios
+	return ioctlTermios(f.Fd(), uintptr(syscall.TCGETS), &t) == nil
+}

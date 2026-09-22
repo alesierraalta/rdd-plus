@@ -21,3 +21,6 @@ func isCharDevice(f *os.File) bool {
 	fi, err := f.Stat()
 	return err == nil && fi.Mode()&os.ModeCharDevice != 0
 }
+
+// IsTerminal reports whether f is a terminal this package can drive interactively.
+func IsTerminal(f *os.File) bool { return false }
