@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -37,6 +38,16 @@ type Deps struct {
 	Replay        func(run Runner, timeout time.Duration) func(plan.Mutation, string, string) evidence.ReplayResult
 	Out           io.Writer
 	Err           io.Writer
+}
+
+// planLockWait bounds only the persistence phase: rows may run for minutes before this lock is needed, but the
+// lock guards the local read, fsync and rename. One second allows a slow local write to finish without making a
+// writer wait for the lifetime of another process.
+const planLockWait = time.Second
+
+type planLockResult struct {
+	file *os.File
+	err  error
 }
 
 // Run admits the requested Evidence rows and returns the process exit code: 0 when no row was refused, 1 when
@@ -200,6 +211,9 @@ func recordResults(results []evidence.RowResult, recordIDs []string, raw []byte,
 	return lines, recorded, true
 }
 
+// renameRecorded is a seam for proving that a failed replacement leaves the original plan untouched.
+var renameRecorded = os.Rename
+
 // writeRecorded replaces the plan with the document the rows recorded, in one transaction.
 //
 // The document was read before the rows ran and a row can take minutes, so the digests this run observed belong
@@ -207,7 +221,7 @@ func recordResults(results []evidence.RowResult, recordIDs []string, raw []byte,
 // and the write it guards cannot be split by a cooperating writer, because every writer takes this lock. A lock
 // that cannot be taken is a refusal, never an unserialized write.
 func writeRecorded(path string, raw []byte, doc string) error {
-	lock, err := plan.LockPlan(path)
+	lock, err := lockPlanWithBound(path)
 	if err != nil {
 		return err
 	}
@@ -223,7 +237,64 @@ func writeRecorded(path string, raw []byte, doc string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte(doc), info.Mode().Perm())
+	return writeRecordedAtomically(path, []byte(doc), info.Mode().Perm())
+}
+
+func lockPlanWithBound(path string) (*os.File, error) {
+	result := make(chan planLockResult, 1)
+	go func() {
+		file, err := plan.LockPlan(path)
+		result <- planLockResult{file: file, err: err}
+	}()
+
+	timer := time.NewTimer(planLockWait)
+	defer timer.Stop()
+	select {
+	case locked := <-result:
+		return locked.file, locked.err
+	case <-timer.C:
+		go func() {
+			locked := <-result
+			if locked.file != nil {
+				plan.UnlockPlan(locked.file)
+			}
+		}()
+		return nil, fmt.Errorf("timed out waiting for the plan lock on %s after %s", path, planLockWait)
+	}
+}
+
+// writeRecordedAtomically writes beside the plan, flushes the complete temporary file, and replaces the plan in
+// one rename. The cleanup keeps a failed replacement from leaving an ambiguous second plan behind.
+func writeRecordedAtomically(path string, content []byte, mode os.FileMode) error {
+	temp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tempPath := temp.Name()
+	keepTemp := true
+	defer func() {
+		if keepTemp {
+			_ = temp.Close()
+			_ = os.Remove(tempPath)
+		}
+	}()
+	if _, err := temp.Write(content); err != nil {
+		return err
+	}
+	if err := temp.Sync(); err != nil {
+		return err
+	}
+	if err := temp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tempPath, mode); err != nil {
+		return err
+	}
+	if err := renameRecorded(tempPath, path); err != nil {
+		return err
+	}
+	keepTemp = false
+	return nil
 }
 
 // unknownID returns the first id in ids that names no ledger row, or "" when every id names one. An
