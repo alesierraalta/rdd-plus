@@ -16,3 +16,6 @@ bench/.agent-config/
 
 # Harness state the gentle-ai sync writes into a project
 .pi/
+
+# Local-only tests (no-excess-tests routing destination): never committed.
+testLocales/
