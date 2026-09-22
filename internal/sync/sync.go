@@ -588,10 +588,41 @@ func wireHook(settings map[string]any, command string) (bool, []string) {
 		hooks = map[string]any{}
 		settings["hooks"] = hooks
 	}
+	changed, removed, present := filterStopGates(settings, func(cmd string) bool { return cmd == command })
+	if present {
+		return changed, removed
+	}
 	stop, _ := hooks["Stop"].([]any)
-	changed := false
-	var removed []string
-	present := false
+	stop = append(stop, map[string]any{
+		"matcher": "",
+		"hooks": []any{map[string]any{
+			"type":          "command",
+			"command":       command,
+			"timeout":       30,
+			"statusMessage": "Checking testing discipline...",
+		}},
+	})
+	hooks["Stop"] = stop
+	return true, removed
+}
+
+// unwireHook drops every rdd-plus gate command from Stop and leaves every other hook alone; it
+// answers whether settings changed and which commands it removed.
+func unwireHook(settings map[string]any) (bool, []string) {
+	changed, removed, _ := filterStopGates(settings, func(string) bool { return false })
+	return changed, removed
+}
+
+// filterStopGates rewrites settings.hooks.Stop so that every gate command keep does not accept is
+// dropped, every other hook is preserved, and an entry emptied by the drop goes away with it.
+// keep decides which gate commands stay wired (the one being wired, or none for an unwire);
+// present reports whether keep matched a command already there.
+func filterStopGates(settings map[string]any, keep func(cmd string) bool) (changed bool, removed []string, present bool) {
+	hooks, _ := settings["hooks"].(map[string]any)
+	if hooks == nil {
+		return false, nil, false
+	}
+	stop, _ := hooks["Stop"].([]any)
 	kept := make([]any, 0, len(stop))
 	for _, e := range stop {
 		entry, _ := e.(map[string]any)
@@ -605,7 +636,7 @@ func wireHook(settings map[string]any, command string) (bool, []string) {
 			hook, _ := h.(map[string]any)
 			cmd, _ := hook["command"].(string)
 			switch {
-			case cmd == command:
+			case keep(cmd):
 				present = true
 				keptHooks = append(keptHooks, h)
 			case isPreviousGate(cmd):
@@ -616,25 +647,15 @@ func wireHook(settings map[string]any, command string) (bool, []string) {
 			}
 		}
 		if len(keptHooks) == 0 && len(list) > 0 {
-			continue // an entry that only carried a previous gate goes away with it
+			continue // an entry that only carried a gate we dropped goes away with it
 		}
 		entry["hooks"] = keptHooks
 		kept = append(kept, entry)
 	}
-	if !present {
-		kept = append(kept, map[string]any{
-			"matcher": "",
-			"hooks": []any{map[string]any{
-				"type":          "command",
-				"command":       command,
-				"timeout":       30,
-				"statusMessage": "Checking testing discipline...",
-			}},
-		})
-		changed = true
+	if changed {
+		hooks["Stop"] = kept
 	}
-	hooks["Stop"] = kept
-	return changed, removed
+	return changed, removed, present
 }
 
 // isPreviousGate recognizes every earlier way the gate was wired.

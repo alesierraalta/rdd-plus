@@ -45,6 +45,9 @@ const usage = `usage: rdd-plus <command> [flags]
 commands:
   gate     Stop hook: read the hook payload on stdin, decide, log, emit feedback
   sync     install the embedded skills into discovered hosts and wire Claude's Stop hook
+  uninstall remove the installed skills and unwire the Stop hook (--dry-run writes nothing,
+           --orphans also removes recorded paths the manifest no longer ships, --force
+           snapshots modified files to the central backup store, then removes them)
   doctor   report installed skills, the hook wiring, and optional capabilities
   bench    run the testing skill against sealed-key fixtures and score it (run | score | history |
            compare | rescore | adjudicate)
@@ -61,7 +64,7 @@ commands:
            (--template | --file <path> | --summary)
   version  print the version
 
-flags shared by gate, sync, doctor, feedback:
+flags shared by gate, sync, doctor, uninstall, feedback:
   --config-dir <dir>   Claude config directory (default: ~/.claude)
 
 flags for sync:
@@ -133,6 +136,8 @@ func main() {
 		os.Exit(runGate(os.Args[2:]))
 	case "sync":
 		os.Exit(runSync(os.Args[2:]))
+	case "uninstall":
+		os.Exit(runUninstall(os.Args[2:]))
 	case "doctor":
 		os.Exit(runDoctor(os.Args[2:]))
 	case "bench":
@@ -549,6 +554,44 @@ func filterSyncHosts(hosts []sync.Host, selected map[string]bool) []sync.Host {
 		}
 	}
 	return filtered
+}
+
+// runUninstall takes the installation off the machine: state decides what was installed, so no
+// discovery runs here. An explicit --config-dir only redirects the hook unwire; without it the
+// recorded host directory wins, because that is where the gate was wired. A modified file stops
+// the whole run before anything is deleted (exit 1 naming --force), so a refusal never leaves a
+// half-uninstalled tree.
+func runUninstall(args []string) int {
+	fs := flag.NewFlagSet("uninstall", flag.ContinueOnError)
+	configDir := fs.String("config-dir", defaultConfigDir(), "Claude config directory")
+	dryRun := fs.Bool("dry-run", false, "print the plan and write nothing")
+	orphans := fs.Bool("orphans", false, "also remove recorded assets the manifest no longer ships")
+	force := fs.Bool("force", false, "snapshot modified files to the central backup store, then remove them")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() > 0 {
+		fmt.Fprintf(os.Stderr, "uninstall: unexpected argument %q\n", fs.Arg(0))
+		return 2
+	}
+	// The flag carries a default for --help, but only an explicit value may override what state
+	// recorded: the default would unwire ~/.claude while the gate lives wherever sync installed it.
+	explicitConfigDir := ""
+	if flagSet(fs, "config-dir") {
+		explicitConfigDir = *configDir
+	}
+	report, err := sync.Uninstall(sync.UninstallOptions{
+		DryRun:    *dryRun,
+		Orphans:   *orphans,
+		Force:     *force,
+		ConfigDir: explicitConfigDir,
+	})
+	fmt.Print(report.String())
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "uninstall:", err)
+		return 1
+	}
+	return 0
 }
 
 func runDoctor(args []string) int {
