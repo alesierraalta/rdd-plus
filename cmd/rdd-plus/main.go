@@ -48,6 +48,8 @@ commands:
   uninstall remove the installed skills and unwire the Stop hook (--dry-run writes nothing,
            --orphans also removes recorded paths the manifest no longer ships, --force
            snapshots modified files to the central backup store, then removes them)
+  restore  copy a backup store entry back onto its original paths (--dry-run writes nothing,
+           --id <backup-id> selects one; default is the latest backup)
   doctor   report installed skills, the hook wiring, and optional capabilities
   bench    run the testing skill against sealed-key fixtures and score it (run | score | history |
            compare | rescore | adjudicate)
@@ -107,6 +109,7 @@ plan admit [--path <path>] [--execute] [--sandbox] [--sandbox-image <image>] [--
 check [--cwd .] [--path <path>]
 status [--json]
 update [--check]  --check only checks and refreshes the cache; it never installs
+restore [--id <backup-id>] [--dry-run]   (default: the latest backup)
 feature list|enable|disable <id> [--preview]
 --path: relative values resolve against the worktree root; absolute values are taken as given except in check, which refuses them. Without --path, use the plan declared in .rdd-plus.json when there is one, else docs/testing/test-plan.md
 --run: a lowercase slug identifying the active run; plan gaps uses the declaration when omitted, while --all forces whole-document counts
@@ -138,6 +141,8 @@ func main() {
 		os.Exit(runSync(os.Args[2:]))
 	case "uninstall":
 		os.Exit(runUninstall(os.Args[2:]))
+	case "restore":
+		os.Exit(runRestore(os.Args[2:]))
 	case "doctor":
 		os.Exit(runDoctor(os.Args[2:]))
 	case "bench":
@@ -589,6 +594,34 @@ func runUninstall(args []string) int {
 	fmt.Print(report.String())
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "uninstall:", err)
+		return 1
+	}
+	return 0
+}
+
+// runRestore puts a backup store entry back on disk. There is no --config-dir: the manifest
+// records absolute original paths, so the store alone decides where the bytes land. Exit 1 is
+// operational (no backup, unknown id, a refused path, a failed write), 2 is a usage mistake.
+func runRestore(args []string) int {
+	fs := flag.NewFlagSet("restore", flag.ContinueOnError)
+	id := fs.String("id", "", "backup id to restore (default: the latest backup)")
+	dryRun := fs.Bool("dry-run", false, "print the plan and write nothing")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() > 0 {
+		fmt.Fprintf(os.Stderr, "restore: unexpected argument %q\n", fs.Arg(0))
+		return 2
+	}
+	report, err := sync.Restore(*id, *dryRun)
+	// A report from a run that failed before it planned anything says nothing worth printing;
+	// a partial apply still shows the files that did land, beside the error naming the one that
+	// did not.
+	if err == nil || len(report.Restored) > 0 {
+		fmt.Print(report.String())
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "restore:", err)
 		return 1
 	}
 	return 0

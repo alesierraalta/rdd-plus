@@ -1,5 +1,8 @@
 // Package sync installs the embedded skills into every discovered host and wires the gate
 // as a Claude Stop hook, merging into settings.json without touching anything it does not own.
+// Restore is the deliberate exception about existing content: it overwrites a destination with
+// the snapshot bytes and takes no pre-restore backup of the current file, because the backup
+// being applied is already the authority the operator chose.
 package sync
 
 import (
