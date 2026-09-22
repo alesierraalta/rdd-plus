@@ -209,6 +209,67 @@ func TestWriteRecordedLeavesPlanUnchangedWhenRenameFails(t *testing.T) {
 	}
 }
 
+func TestWriteRecordedSyncsPlanDirectoryAfterRename(t *testing.T) {
+	path := writeTestPlan(t, "before\n")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var events []string
+	renameWasSuccessful := false
+	originalRename := renameRecorded
+	originalSync := syncRecordedDirectory
+	renameRecorded = func(from, to string) error {
+		events = append(events, "rename")
+		if err := os.Rename(from, to); err != nil {
+			return err
+		}
+		renameWasSuccessful = true
+		return nil
+	}
+	syncRecordedDirectory = func(dir string) error {
+		if !renameWasSuccessful {
+			t.Errorf("directory sync ran before the plan rename")
+		}
+		events = append(events, "sync:"+dir)
+		return nil
+	}
+	defer func() {
+		renameRecorded = originalRename
+		syncRecordedDirectory = originalSync
+	}()
+
+	if err := writeRecorded(path, raw, "after\n"); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Join(events, ","), "rename,sync:"+filepath.Dir(path); got != want {
+		t.Fatalf("replacement events = %q, want %q", got, want)
+	}
+}
+
+func TestWriteRecordedPropagatesDirectorySyncFailure(t *testing.T) {
+	path := writeTestPlan(t, "before\n")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalSync := syncRecordedDirectory
+	syncRecordedDirectory = func(string) error { return errors.New("injected directory sync failure") }
+	defer func() { syncRecordedDirectory = originalSync }()
+
+	err = writeRecorded(path, raw, "after\n")
+	if err == nil || !strings.Contains(err.Error(), "injected directory sync failure") {
+		t.Fatalf("writeRecorded error = %v, want the injected directory sync failure", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "after\n" {
+		t.Fatalf("directory sync failure changed the renamed plan: %q", got)
+	}
+}
+
 func TestWriteRecordedWritesExactBytesAndPreservesMode(t *testing.T) {
 	before := "before\n"
 	path := writeTestPlan(t, before)

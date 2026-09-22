@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -214,6 +215,20 @@ func recordResults(results []evidence.RowResult, recordIDs []string, raw []byte,
 // renameRecorded is a seam for proving that a failed replacement leaves the original plan untouched.
 var renameRecorded = os.Rename
 
+// syncRecordedDirectory is a seam for proving that the plan directory is synced after replacement.
+var syncRecordedDirectory = func(dir string) error {
+	if runtime.GOOS == "windows" {
+		// Windows does not support opening a directory handle for syncing; atomic rename is the supported guarantee there.
+		return nil
+	}
+	directory, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	return directory.Sync()
+}
+
 // writeRecorded replaces the plan with the document the rows recorded, in one transaction.
 //
 // The document was read before the rows ran and a row can take minutes, so the digests this run observed belong
@@ -291,6 +306,11 @@ func writeRecordedAtomically(path string, content []byte, mode os.FileMode) erro
 		return err
 	}
 	if err := renameRecorded(tempPath, path); err != nil {
+		return err
+	}
+	if err := syncRecordedDirectory(filepath.Dir(path)); err != nil {
+		// Propagate the failure: the rename already landed, but reporting success would claim directory-entry
+		// durability that was not confirmed. Callers may therefore observe an error for bytes already on disk.
 		return err
 	}
 	keepTemp = false
