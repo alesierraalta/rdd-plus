@@ -77,6 +77,8 @@ of its cited files changed; when a run skips it, it cites the row. Severity is t
 finding names the promoted test that asserts the promised behaviour, so it is red on the current
 code and green once fixed (rule 13); a test written the other way round is a characterization
 test and says so in its name. A finding that never got a test stays `open`, reason `not pinned`.
+The fingerprint cell holds the `assets/fingerprint.sh` output, one or more git SHAs, `-` when none
+is recorded, or `pending` while the value is owed; `plan check` refuses anything else.
 
 | Id | Finding (path:line, one line) | Severity (consequence class) | Data safe? | Evidence id | Pinning test (suite path :: test name) | Status | Verdict by / date | Reason | Cited-files fingerprint at verdict |
 |---|---|---|---|---|---|---|---|---|---|

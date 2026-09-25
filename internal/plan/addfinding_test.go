@@ -87,6 +87,8 @@ func TestAddFindingRefusesWithoutMovingTheFile(t *testing.T) {
 			"E9", false},
 		{"a value carrying a newline", addPlan(), edited(func(f *Finding) { f.Reason = "first\nsecond" }),
 			"newline", true},
+		{"a fingerprint that is neither a digest, a SHA nor a placeholder", addPlan(),
+			edited(func(f *Finding) { f.Fingerprint = "TestFoo" }), "--fingerprint", true},
 		{"a plan the checker already rejects",
 			addPlan("| F0 | no path here | M | yes | E1 | | open | me | - | - |\n"), openFinding(),
 			"would not pass plan check", false},
@@ -116,6 +118,21 @@ func TestAddFindingRefusesWithoutMovingTheFile(t *testing.T) {
 				t.Fatal("a refusal must leave the plan byte-identical")
 			}
 		})
+	}
+}
+
+// A git SHA is a fingerprint the checker accepts, so add-finding writes it into the row as given.
+func TestAddFindingWritesAGitSHAFingerprint(t *testing.T) {
+	p := write(t, t.TempDir(), "plan.md", addPlan())
+	if _, err := AddFinding(p, edited(func(f *Finding) { f.Fingerprint = "953908a" })); err != nil {
+		t.Fatalf("AddFinding: %v", err)
+	}
+	got, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), "| 953908a |") {
+		t.Fatalf("the row does not carry the SHA fingerprint:\n%s", got)
 	}
 }
 
