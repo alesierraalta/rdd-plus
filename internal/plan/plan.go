@@ -52,8 +52,8 @@ var (
 	// extensionless build file (Makefile:3). A bare word:digits stays out, so localhost:8080 is no cite.
 	pathCiteRe  = regexp.MustCompile(`(?:[A-Za-z0-9_./\\-]*\.[A-Za-z][A-Za-z0-9]*|(?:[A-Za-z0-9_./\\-]*/)?\b(?i:Makefile|GNUmakefile|Dockerfile|Containerfile|Jenkinsfile|Justfile|Procfile|Gemfile|Rakefile|Vagrantfile|Brewfile|Tiltfile|Caddyfile)):\d+`)
 	placeholder = regexp.MustCompile(`^(?i)(|-|—|n/?a|none|\(none\)|tbd)$`)
-	// A finding whose verdict asserts the defect is real owes a test that holds it.
-	settledStatus = regexp.MustCompile(`(?i)\b(confirmed|fixed)\b`)
+	// A finding whose verdict settles it (a real defect, or a missing test now added) owes the test that holds it.
+	settledStatus = regexp.MustCompile(`(?i)\b(confirmed|fixed|gap-closed)\b`)
 	// A scoped run declares itself in one plan-header line, `Light: <blast radius> · touches
 	// <classes>`. The declaration is the cheap half of the decision: a binary can read its shape and
 	// whether the plan corroborates the target it names, never whether the change was really bounded.
@@ -73,13 +73,13 @@ var unrecordedFingerprints = map[string]bool{"<assets/fingerprint.sh output>": t
 // findingsStatuses is the Findings status vocabulary the plan documents. It is the membership the
 // checker enforces; FindingsStatusList spells the same list for every message that has to offer it.
 var findingsStatuses = map[string]bool{
-	"open": true, "confirmed": true, "fixed": true, "rejected": true, "wontfix": true,
+	"open": true, "confirmed": true, "fixed": true, "gap-closed": true, "rejected": true, "wontfix": true,
 }
 
 // FindingsStatusList is the closed Findings vocabulary in one string, so the list a reader is shown is
 // the list the checker enforces: a status the vocabulary does not carry (`resolved`) is answered rather
 // than silently read as `open`.
-const FindingsStatusList = "open, confirmed, fixed, rejected, wontfix"
+const FindingsStatusList = "open, confirmed, fixed, gap-closed, rejected, wontfix"
 
 // Check reads a plan and returns everything that breaks the contract, most structural first.
 // Every breach that names a row or a cell carries its file line, so the reader opens the plan at the row

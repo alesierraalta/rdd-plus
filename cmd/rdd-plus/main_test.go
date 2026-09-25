@@ -1080,7 +1080,7 @@ func TestPlanAddFindingExitCodes(t *testing.T) {
 		// Exit 2: the invocation's own data is wrong.
 		{name: "an empty required flag", plan: valid, over: map[string]string{"id": ""}, wantExit: 2, wantOut: "--id"},
 		{name: "an empty severity", plan: valid, over: map[string]string{"severity": ""}, wantExit: 2, wantOut: "--severity"},
-		{name: "a status outside the vocabulary", plan: valid, over: map[string]string{"status": "resolved"}, wantExit: 2, wantOut: "open, confirmed, fixed, rejected, wontfix"},
+		{name: "a status outside the vocabulary", plan: valid, over: map[string]string{"status": "resolved"}, wantExit: 2, wantOut: "open, confirmed, fixed, gap-closed, rejected, wontfix"},
 		{name: "an empty status", plan: valid, over: map[string]string{"status": ""}, wantExit: 2, wantOut: "--status"},
 		{name: "a settled status with no pinning test", plan: valid, over: map[string]string{"status": "confirmed"}, wantExit: 2, wantOut: "--test"},
 		{name: "a settled status with a placeholder pinning test", plan: valid, over: map[string]string{"status": "fixed", "test": "-"}, wantExit: 2, wantOut: "--test"},
