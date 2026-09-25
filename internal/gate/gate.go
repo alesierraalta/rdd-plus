@@ -91,6 +91,8 @@ type Result struct {
 	// both make Gaps.Any() true without raising Owed or Pending.
 	Unreadable int
 	Unplanned  bool
+	// Micro marks a plan that owes nothing because it is an activated micro plan: complete, with no layer swept.
+	Micro bool
 	// Problem is a repository state the gate could not act on: a plan declaration it cannot read. It is
 	// not an audit — nothing was read — and it is never silence: the model and the operator both hear it.
 	Problem string
@@ -423,9 +425,13 @@ func audit(d Deps, root, rel string, cfgErr error, res Result, entry *Entry) Res
 			entry.Audited = true
 			res.Owed, res.Pending = len(gaps.UnsweptLayers), len(gaps.PendingTargets)
 			res.Unreadable, res.Unplanned = len(gaps.InterruptedTables), gaps.NoLayerMatrix
-			if gaps.Any() {
+			res.Micro = gaps.Micro != ""
+			switch {
+			case gaps.Any():
 				res.Reason = BuildAuditReason(rel, gaps.Report())
-			} else {
+			case res.Micro:
+				res.Reason = BuildMicroCompleteReason(rel)
+			default:
 				res.Reason = BuildCompleteReason(rel)
 			}
 		}

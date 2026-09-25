@@ -24,20 +24,37 @@ const DefaultPath = "docs/testing/test-plan.md"
 
 // Template returns the shipped plan skeleton.
 func Template() (string, error) {
-	data, err := fs.ReadFile(assets.Skills(), TemplatePath)
+	return embeddedTemplate(TemplatePath)
+}
+
+func embeddedTemplate(path string) (string, error) {
+	data, err := fs.ReadFile(assets.Skills(), path)
 	if err != nil {
 		return "", fmt.Errorf("read embedded template: %w", err)
 	}
 	return string(data), nil
 }
 
+// MicroTemplatePath is the skeleton `plan init --micro` writes: a header, Findings and the Evidence
+// ledger, and nothing a single small function does not owe.
+const MicroTemplatePath = "test-strategy/assets/test-micro-plan-template.md"
+
 // Init writes the skeleton to path. An existing plan is never overwritten unless force is set:
 // the plan never shrinks, so replacing one is a decision, not a default.
 func Init(path string, force bool) error {
+	return initFrom(path, TemplatePath, force)
+}
+
+// InitMicro writes the micro skeleton to path, refusing an existing plan exactly as Init does.
+func InitMicro(path string, force bool) error {
+	return initFrom(path, MicroTemplatePath, force)
+}
+
+func initFrom(path, template string, force bool) error {
 	if _, err := os.Stat(path); err == nil && !force {
 		return fmt.Errorf("%s already exists; pass --force to replace it", path)
 	}
-	body, err := Template()
+	body, err := embeddedTemplate(template)
 	if err != nil {
 		return err
 	}
@@ -61,6 +78,9 @@ var (
 	// start on the previous line would name the wrong line as its home.
 	lightLineRe  = regexp.MustCompile(`^[ \t]*Light:[ \t]*(.*)$`)
 	lightShapeRe = regexp.MustCompile(`^(.+?)[ \t]*·[ \t]*touches[ \t]*(.*)$`)
+	// A micro plan declares itself the same way, `Micro: <file path> · touches none`, for one small function
+	// whose contract does not change. It reuses the Light shape so both declarations read alike.
+	microLineRe = regexp.MustCompile(`^[ \t]*Micro:[ \t]*(.*)$`)
 
 	baselineFingerprintRe = regexp.MustCompile("^[ \t]*Baseline:.*fingerprint:[ \t]*`([^`]*)`")
 	fingerprintRe         = regexp.MustCompile(`^[0-9a-f]{64}$`)
@@ -153,6 +173,9 @@ func CheckDocument(doc string) []string {
 	problems = append(problems, findingProblems(findings, ledgerIDs)...)
 	if lightProblems, declared := lightReport(lines); declared {
 		problems = append(problems, lightProblems...)
+	}
+	if microProblems, _, declared := microReport(lines); declared {
+		problems = append(problems, microProblems...)
 	}
 	return append(problems, baselineProblems(lines)...)
 }
@@ -710,6 +733,85 @@ func cellSpan(line string, i int) (start, end int, ok bool) {
 func LightActivated(doc string) bool {
 	problems, declared := lightReport(strings.Split(doc, "\n"))
 	return declared && len(problems) == 0
+}
+
+// MicroActivated reports whether a plan declares a micro plan that passes every Micro-specific rule. Only an
+// activated micro plan owes no breadth: a declaration that dropped its evidence is a label, not a plan.
+func MicroActivated(doc string) bool {
+	_, ok := microTarget(strings.Split(doc, "\n"))
+	return ok
+}
+
+// microTarget returns the file an activated micro plan names, and whether the plan is one.
+func microTarget(lines []string) (string, bool) {
+	problems, target, declared := microReport(lines)
+	return target, declared && len(problems) == 0
+}
+
+// microReport returns every breach a declared micro plan owes, the target it names, and whether the plan
+// declares one at all. A micro plan gives up the layer sweep, so what it keeps is checked instead of
+// believed: an Evidence ledger with an observed row and a row carrying a mutation, one corroborated file,
+// no Layer matrix, and no second, Light, declaration.
+func microReport(lines []string) ([]string, string, bool) {
+	line, raw, found := 0, "", false
+	for i, l := range lines {
+		if m := microLineRe.FindStringSubmatch(l); m != nil {
+			line, raw, found = i+1, strings.TrimSpace(m[1]), true
+			break
+		}
+	}
+	if !found {
+		return nil, "", false
+	}
+	var problems []string
+	target := ""
+	if shape := lightShapeRe.FindStringSubmatch(raw); shape == nil {
+		problems = append(problems, fmt.Sprintf("line %d: the Micro declaration must read `Micro: <file path> · touches none`", line))
+	} else {
+		target = strings.TrimSpace(shape[1])
+		if target == "" || placeholder.MatchString(target) {
+			problems = append(problems, fmt.Sprintf("line %d: the Micro declaration names no file", line))
+			target = ""
+		} else if !targetIsInEvidence(lines, target) {
+			problems = append(problems, fmt.Sprintf("line %d: the Micro declaration names target %s, which no Ranked-target row and no path:line citation corroborates", line, quote(target)))
+		}
+		if classes := strings.TrimSpace(shape[2]); !strings.EqualFold(classes, "none") {
+			problems = append(problems, fmt.Sprintf("line %d: the Micro declaration touches %s: a micro plan touches none of the Light refusal classes, so its classes read `none`", line, quote(classes)))
+		}
+	}
+	if d := lightDeclaration(lines); d.found {
+		problems = append(problems, fmt.Sprintf("line %d: the plan declares both Micro and Light: a run is one or the other", d.line))
+	}
+	if heading, _ := sectionRegion(lines, "Layer matrix"); heading >= 0 {
+		problems = append(problems, fmt.Sprintf("line %d: a Micro plan carries a Layer matrix: a micro plan owes no layer sweep, so a planned sweep makes it an ordinary plan", heading+1))
+	}
+	problems = append(problems, microLedgerProblems(lines, line)...)
+	return problems, target, true
+}
+
+// microLedgerProblems enforces the two ledger rows a micro plan keeps in place of the layer sweep: one
+// conclusion labelled `observado`, and one row whose `Mutate` cell carries the mutation the pinning test kills.
+func microLedgerProblems(lines []string, line int) []string {
+	ledger := scanSection(lines, "Evidence ledger")
+	if ledger.header == nil {
+		return []string{fmt.Sprintf("line %d: a Micro plan has no Evidence ledger table, so nothing records the pinning test or its mutation", line)}
+	}
+	iMutate := columnIndex(ledger.header, "mutate")
+	observed, mutated := false, false
+	for _, r := range ledger.rows {
+		observed = observed || strings.EqualFold(cell(r.cells, len(r.cells)-1), "observado")
+		if m := cell(r.cells, iMutate); iMutate >= 0 && m != "" && !placeholder.MatchString(m) {
+			mutated = true
+		}
+	}
+	var problems []string
+	if !observed {
+		problems = append(problems, fmt.Sprintf("line %d: a Micro plan has no Evidence ledger row labelled observado, so the pinning test was never observed", line))
+	}
+	if !mutated {
+		problems = append(problems, fmt.Sprintf("line %d: a Micro plan has no Evidence ledger row with a Mutate cell, so no mutation shows the pinning test can fail", line))
+	}
+	return problems
 }
 
 // lightDecl is a parsed `Light:` declaration: the target it names, the line it sits on, and the breaches

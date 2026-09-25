@@ -78,6 +78,11 @@ const settled = "## Layer matrix\n\n| Layer | Skill | Scope | Status |\n|---|---
 	"| Security | `appsec-adversarial-auditor` | input | done |\n\n" +
 	"## Ranked targets\n\n| Target | Verdict | Status |\n|---|---|---|\n| 1. auth | probe | done |\n"
 
+const micro = "Micro: internal/text/trim.go · touches none\n\n" +
+	"## Findings\n\n| Id | Finding | Status |\n|---|---|---|\n\n" +
+	"## Evidence ledger\n\n| Id | Claim | Mutate | Label |\n|---|---|---|---|\n" +
+	"| E1 | pinned | strings.TrimSpace(s) => s @ internal/text/trim.go:7 | observado |\n"
+
 func porcelain(entries ...string) string {
 	var b strings.Builder
 	for _, e := range entries {
@@ -133,6 +138,14 @@ func TestCheckReadsTheRepositoryAlone(t *testing.T) {
 				t.Fatalf("text missing %q:\n%s", tc.wantOut, res.Text)
 			}
 		})
+	}
+}
+
+// A micro plan owes no layer sweep, so check passes it, and never says a layer was swept.
+func TestCheckPassesAMicroPlanWithoutClaimingEveryLayer(t *testing.T) {
+	res := Run(".", (&fakeRepo{root: "/r", status: porcelain(" M src/app.js"), plan: micro}).deps())
+	if res.Exit != 0 || !strings.Contains(res.Text, "micro plan") || strings.Contains(res.Text, "every assigned layer") {
+		t.Fatalf("exit = %d:\n%s", res.Exit, res.Text)
 	}
 }
 

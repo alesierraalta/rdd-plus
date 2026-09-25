@@ -95,7 +95,8 @@ bench adjudicate --run <results>/<case>/<run> [--plan <path>] (--show | --pendin
            nobody decided stays pending and is never counted as a false positive. A score applies a
            record only when --adjudication names it: the workspace the subject wrote must not be able
            to supply the verdicts about its own findings)
-plan init [--path <path>] [--force]
+plan init [--path <path>] [--force] [--micro]
+          (--micro writes the micro skeleton: header, Findings and Evidence ledger, for one small function)
 plan check [--path <path>]
 plan gaps [--run <slug>] [--all] [--path <path>]
 plan upgrade [--run <slug>] [--path <path>]
@@ -808,6 +809,7 @@ func runPlan(args []string) int {
 	run := fs.String("run", "", "active run slug (gaps and upgrade)")
 	all := fs.Bool("all", false, "count every row (gaps only)")
 	force := fs.Bool("force", false, "replace an existing plan (init only)")
+	micro := fs.Bool("micro", false, "write the micro plan skeleton for one small function (init only)")
 	id := fs.String("id", "", "Findings row id (add-finding)")
 	location := fs.String("location", "", "the `path:line` the finding cites (add-finding)")
 	severity := fs.String("severity", "", "consequence class (add-finding)")
@@ -890,7 +892,11 @@ func runPlan(args []string) int {
 		fmt.Printf("upgraded %s: %d table(s) changed\n", effectivePath, changed)
 		return 0
 	case "init":
-		if err := plan.Init(effectivePath, *force); err != nil {
+		initPlan := plan.Init
+		if *micro {
+			initPlan = plan.InitMicro
+		}
+		if err := initPlan(effectivePath, *force); err != nil {
 			fmt.Fprintln(os.Stderr, "plan init:", err)
 			return 1
 		}
