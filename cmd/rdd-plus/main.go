@@ -1580,6 +1580,8 @@ const sandboxImageDefault = "golang:1.26-alpine"
 //     behind --read-only. `GOTMPDIR` was measured unnecessary.
 //   - `-v <dir>:/w:<mount>` with `-w /w`: the command needs the tree, and the tree is the thing that must not
 //     change.
+//   - `--quiet`: an image pulled on first use prints its progress into the same buffer as the command, so the
+//     first run's output would differ from the second and every row would read as unstable.
 //
 // `--read-only` and `--network none` do not change whether a command passes; they are exactly the isolation this
 // mode claims, so they are asserted here rather than relied on to make anything work.
@@ -1592,7 +1594,7 @@ func sandboxRunner(image, mount string) admit.Runner {
 			}
 		}
 		cmd := exec.CommandContext(ctx, "docker",
-			"run", "--rm",
+			"run", "--rm", "--quiet",
 			"--network", "none",
 			"--read-only",
 			"--tmpfs", "/tmp:exec",
