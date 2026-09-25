@@ -1314,6 +1314,34 @@ func TestParseMutationReadsTheOneShapeACellMayTake(t *testing.T) {
 	}
 }
 
+// A Mutate cell may carry a survey: several edits separated by ` ;; `, each replayed on its own, and an edit
+// prefixed `~ ` declared equivalent, so the command must stay green under it instead of going red.
+func TestParseMutationsReadsASurvey(t *testing.T) {
+	got, err := ParseMutations("a => b @ p.go:1 ;; ~ c => d @ q.go:2 ;; e => @ r.go:3")
+	if err != nil {
+		t.Fatalf("ParseMutations refused a well-formed survey: %v", err)
+	}
+	want := []Mutation{
+		{Old: "a", New: "b", Path: "p.go", Line: 1},
+		{Old: "c", New: "d", Path: "q.go", Line: 2, Equivalent: true},
+		{Old: "e", New: "", Path: "r.go", Line: 3},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("ParseMutations = %#v, want %d edits", got, len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("edit %d = %#v, want %#v", i+1, got[i], want[i])
+		}
+	}
+
+	_, err = ParseMutations("a => b @ p.go:1 ;; no arrow here")
+	bad, ok := err.(MutationError)
+	if !ok || bad.Reason != ReasonMutationMalformed || !strings.Contains(bad.Detail, "edit 2 of 2") {
+		t.Fatalf("a malformed second edit = %v, want %s naming edit 2 of 2", err, ReasonMutationMalformed)
+	}
+}
+
 // The claim a Mutate cell makes is about this tree, so it is checked here: nothing here runs, and nothing here
 // edits. Every refusal is named, because each one tells the author a different thing to fix.
 func TestValidateMutationChecksTheTreeBeforeAnythingRuns(t *testing.T) {

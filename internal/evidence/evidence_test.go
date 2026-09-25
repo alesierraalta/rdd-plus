@@ -1008,6 +1008,67 @@ func TestAdmitRefusesARowWhoseReplayWasRefused(t *testing.T) {
 	}
 }
 
+// surveyCell is a three-edit survey over mutationDir's src.go: two edits the command must kill and one declared
+// equivalent, which the command must survive.
+const surveyCell = "x => y @ src.go:3 ;; 1 => 2 @ src.go:3 ;; ~ package p => package q @ src.go:1"
+
+// surveyReplay answers each edit by its old text: an edit named in red goes red, every other one stays green, and
+// every restored half comes back green. It records each edit it was handed, so a test can count the replays.
+func surveyReplay(red map[string]bool, seen *[]plan.Mutation) func(plan.Mutation, string, string) ReplayResult {
+	return func(m plan.Mutation, _, _ string) ReplayResult {
+		*seen = append(*seen, m)
+		if red[m.Old] {
+			return ReplayResult{MutatedOutput: "boom\n", MutatedErr: errors.New("exit status 1"), RestoredOutput: "one\n"}
+		}
+		return ReplayResult{MutatedOutput: "one\n", RestoredOutput: "one\n"}
+	}
+}
+
+// A survey is admitted only when every edit behaves as declared, each one replayed on its own, and the admission
+// names what the survey established.
+func TestAdmitAdmitsASurveyWhoseEditsBehaveAsDeclared(t *testing.T) {
+	dir := mutationDir(t)
+	fresh := digest(t, "one\n", "")
+	rows := []plan.LedgerRow{{ID: "E1", Admit: "printf one", Digest: fresh, Mutate: surveyCell, Label: "observado"}}
+	var seen []plan.Mutation
+	results := Admit(rows, Options{Execute: true, Dir: dir}, Deps{
+		Run:    func(context.Context, string, string) (string, error) { return "one\n", nil },
+		Replay: surveyReplay(map[string]bool{"x": true, "1": true}, &seen),
+	})
+	assertRows(t, results, []want{{id: "E1", verdict: VerdictAdmitted, command: "printf one", digest: fresh, lines: 1,
+		detail: []string{"2 killed, 1 equivalent"}}})
+	if len(seen) != 3 || !seen[2].Equivalent || seen[0].Equivalent {
+		t.Fatalf("the replay saw %#v, want one replay per edit with only the third declared equivalent", seen)
+	}
+}
+
+// The first edit that breaks its declaration refuses the row and is named by its position: a killed-expected edit
+// the command survives is not red, and an equivalent edit the command fails under is not equivalent.
+func TestAdmitRefusesASurveyEditThatBreaksItsDeclaration(t *testing.T) {
+	cases := []struct {
+		name   string
+		red    map[string]bool
+		reason string
+		detail string
+	}{
+		{"a killed-expected edit stays green", map[string]bool{"x": true}, ReasonMutationNotRed, "edit 2 of 3"},
+		{"an equivalent edit goes red", map[string]bool{"x": true, "1": true, "package p": true}, ReasonMutationNotEquivalent, "edit 3 of 3"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := mutationDir(t)
+			rows := []plan.LedgerRow{{ID: "E1", Admit: "printf one", Digest: digest(t, "one\n", ""), Mutate: surveyCell, Label: "observado"}}
+			var seen []plan.Mutation
+			results := Admit(rows, Options{Execute: true, Dir: dir}, Deps{
+				Run:    func(context.Context, string, string) (string, error) { return "one\n", nil },
+				Replay: surveyReplay(tc.red, &seen),
+			})
+			assertRows(t, results, []want{{id: "E1", verdict: VerdictRefused, reason: tc.reason, command: "printf one",
+				detail: []string{tc.detail}}})
+		})
+	}
+}
+
 // A runner that knows the failure is about its own environment rather than about the command says so with a
 // Refusal, and that reason is reported as it stands: a sandbox that refused a write is not a failing test, and
 // calling it one would send the reader looking in the wrong place.

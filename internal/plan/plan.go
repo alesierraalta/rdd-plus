@@ -388,6 +388,69 @@ type Mutation struct {
 	New  string
 	Path string
 	Line int
+	// Equivalent marks an edit declared equivalent (`~ ` in the cell): the command must stay green under it
+	// rather than go red, so a survey states which of its mutants it claims no test can tell apart.
+	Equivalent bool
+}
+
+// MutationSeparator splits a Mutate cell into the edits of a survey. It is spaced on both sides so a `;;` inside
+// an edit's text still parses; an edit whose own text carries ` ;; ` cannot be expressed in a cell.
+const MutationSeparator = " ;; "
+
+// equivalentPrefix marks an edit the row declares equivalent: the command must stay green under it.
+const equivalentPrefix = "~ "
+
+// ParseMutations reads a Mutate cell as a survey: one or more edits separated by ` ;; `, each in the shape
+// ParseMutation reads, and each optionally prefixed `~ ` to declare it equivalent. Every edit is parsed before
+// any is returned, so a survey with one bad edit is refused whole, and a refusal names the edit's position
+// whenever the cell holds more than one, because "the second edit" is what the author has to go and fix.
+func ParseMutations(cell string) ([]Mutation, error) {
+	edits := strings.Split(strings.TrimSpace(cell), MutationSeparator)
+	mutations := make([]Mutation, 0, len(edits))
+	for i, edit := range edits {
+		edit = strings.TrimSpace(edit)
+		equivalent := strings.HasPrefix(edit, equivalentPrefix)
+		m, err := ParseMutation(strings.TrimPrefix(edit, equivalentPrefix))
+		if err != nil {
+			return nil, atEdit(err, i, len(edits))
+		}
+		m.Equivalent = equivalent
+		mutations = append(mutations, m)
+	}
+	return mutations, nil
+}
+
+// ValidateMutations checks every edit of a survey against the tree, in order, and reports the first that a
+// replay would refuse, naming its position when there is more than one. Nothing here runs or edits.
+func ValidateMutations(root string, mutations []Mutation) error {
+	for i, m := range mutations {
+		if err := ValidateMutation(root, m); err != nil {
+			return atEdit(err, i, len(mutations))
+		}
+	}
+	return nil
+}
+
+// MutationPosition names edit i (zero-based) of a survey of n edits, and is empty for a single edit so a row
+// that declares one edit reads exactly as it did before surveys existed.
+func MutationPosition(i, n int) string {
+	if n < 2 {
+		return ""
+	}
+	return fmt.Sprintf("edit %d of %d", i+1, n)
+}
+
+// atEdit prefixes a mutation defect with the position of the edit it belongs to, keeping its reason code.
+func atEdit(err error, i, n int) error {
+	position := MutationPosition(i, n)
+	if position == "" {
+		return err
+	}
+	var bad MutationError
+	if errors.As(err, &bad) {
+		return MutationError{Reason: bad.Reason, Detail: position + ": " + bad.Detail}
+	}
+	return fmt.Errorf("%s: %w", position, err)
 }
 
 // ParseMutation reads the one shape a Mutate cell may take:
