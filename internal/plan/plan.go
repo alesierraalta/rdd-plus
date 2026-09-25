@@ -282,6 +282,7 @@ func findingStatus(raw string) (string, string) {
 // LedgerRow is one row of the Evidence ledger, with the cells a machine reads resolved by column name
 // rather than by position. `Admit` is the single command the row declares and `Digest` the output that
 // command was observed to produce; both are empty on a plan written before those columns existed.
+// `Expect` says which way the command must exit: empty or `pass` for zero, `fail` for a test observed red.
 //
 // Cells and HeaderCells are the number of cells the row's line and its table's header hold as the
 // table splitter reads them. The two differ exactly when an unescaped `|` cut a cell, which shifts
@@ -298,6 +299,7 @@ type LedgerRow struct {
 	Normalize    string
 	Mode         string
 	Mutate       string
+	Expect       string
 	Mutation     string
 	Reproduction string
 	Label        string
@@ -316,9 +318,9 @@ func Ledger(doc string) []LedgerRow {
 	}
 	// Column names are matched by substring, so each name below is the whole word the header cell
 	// carries and shares it with no other column: `admit` never resolves to `Executed`, `digest` never
-	// resolves to `Observed` or to the mutation column, and `normalize` resolves to nothing else.
+	// resolves to `Observed` or to the mutation column, and `normalize` and `expect` resolve to nothing else.
 	index := map[string]int{}
-	for _, name := range []string{"claim", "executed", "admit", "inputs", "observed", "digest", "normalize", "mode", "mutate", "mutation", "reproduction"} {
+	for _, name := range []string{"claim", "executed", "admit", "inputs", "observed", "digest", "normalize", "mode", "mutate", "expect", "mutation", "reproduction"} {
 		index[name] = columnIndex(scan.header, name)
 	}
 	ledger := make([]LedgerRow, 0, len(scan.rows))
@@ -338,6 +340,7 @@ func Ledger(doc string) []LedgerRow {
 			{"normalize", &r.Normalize},
 			{"mode", &r.Mode},
 			{"mutate", &r.Mutate},
+			{"expect", &r.Expect},
 			{"mutation", &r.Mutation},
 			{"reproduction", &r.Reproduction},
 		} {

@@ -97,6 +97,11 @@ const (
 	ReasonMutationNotReplay = "mutation-not-replayed"
 	ReasonMutationNotRed    = "mutation-not-red"
 	ReasonMutationNotGreen  = "mutation-not-green"
+	// An Expect cell that is neither pass nor fail, an expected failure beside a Mutate cell that already
+	// defines its own red and green halves, and a command expected to fail that exited zero.
+	ReasonExpectInvalid         = "expect-invalid"
+	ReasonExpectWithMutate      = "expect-with-mutate"
+	ReasonExpectedFailurePassed = "expected-failure-passed"
 )
 
 // Refusal lets a runner say why a command could not run, when the answer is about the runner's own
@@ -265,6 +270,24 @@ func admitRow(row plan.LedgerRow, opts Options, deps Deps, record bool) RowResul
 			row.ID, row.Normalize, err))
 	}
 
+	// An Expect cell says which way the command must exit, and like Normalize it is a defect in the row when it
+	// cannot be read, so it is reported before anything is spawned. A row that declares a mutation already claims
+	// both a red and a green run, so an expected failure beside it contradicts one half of that claim.
+	expectFail := false
+	switch expect := strings.ToLower(strings.TrimSpace(row.Expect)); expect {
+	case "", "pass":
+	case "fail":
+		expectFail = true
+	default:
+		return refused(result, ReasonExpectInvalid, fmt.Sprintf(
+			"evidence %s declares Expect %q: an Expect cell is empty, pass, or fail", row.ID, row.Expect))
+	}
+	if expectFail && strings.TrimSpace(row.Mutate) != "" {
+		return refused(result, ReasonExpectWithMutate, fmt.Sprintf(
+			"evidence %s declares Expect fail and a Mutate edit: a mutation already defines the red run under the edit and the green run without it, so the row declares one or the other",
+			row.ID))
+	}
+
 	// The mode a pin was taken in is part of what the pin means, because the same command digests differently
 	// in a container than on this machine. A row pinned in one mode and checked in the other would report a
 	// digest mismatch that says nothing about why, so the mismatch is named before anything is spawned. Only a
@@ -334,9 +357,33 @@ func admitRow(row plan.LedgerRow, opts Options, deps Deps, record bool) RowResul
 		return refused(result, ReasonCommandFailed, fmt.Sprintf("evidence %s failed to run%s: %v", row.ID, suffix, err))
 	}
 
+	// runOutcome reads one run against what the row expects. A row expecting a failure is observing a test
+	// that is red, so only a command that ran to its end and exited non-zero is that observation: a runner
+	// refusal, a deadline, and a command that never ran stay the failures they are, and a zero exit is a
+	// command that no longer fails. The zero exit is a refusal of its own, never a pin taken over a green run.
+	runOutcome := func(err error, suffix string) (RowResult, bool) {
+		if !expectFail {
+			if err != nil {
+				return runFailure(err, suffix), false
+			}
+			return result, true
+		}
+		if err == nil {
+			return refused(result, ReasonExpectedFailurePassed, fmt.Sprintf(
+				"evidence %s declares Expect fail and the command exited zero%s: the test it pins is no longer red, so there is no failure to observe",
+				row.ID, suffix)), false
+		}
+		var exit interface{ ExitCode() int }
+		var refusal Refusal
+		if !errors.As(err, &refusal) && !errors.Is(err, context.DeadlineExceeded) && errors.As(err, &exit) && exit.ExitCode() > 0 {
+			return result, true
+		}
+		return runFailure(err, suffix), false
+	}
+
 	output, err := runOnce()
-	if err != nil {
-		return runFailure(err, "")
+	if failed, ok := runOutcome(err, ""); !ok {
+		return failed
 	}
 
 	// The command produced output, so the fresh observation is carried whether or not the row is
@@ -385,8 +432,8 @@ func admitRow(row plan.LedgerRow, opts Options, deps Deps, record bool) RowResul
 		again = replayed.RestoredOutput
 	} else {
 		again, err = runOnce()
-		if err != nil {
-			return runFailure(err, " on its second run")
+		if failed, ok := runOutcome(err, " on its second run"); !ok {
+			return failed
 		}
 	}
 	second, err := Digest(again, row.Normalize)

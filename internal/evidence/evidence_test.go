@@ -1028,3 +1028,86 @@ func TestAdmitReportsWhatTheRunnerRefused(t *testing.T) {
 		})
 	}
 }
+
+// exitStatus is the error a runner returns for a command that ran to its end and exited non-zero: like
+// *exec.ExitError it reports its exit code, which is what tells a failing command from one that never ran.
+type exitStatus int
+
+func (e exitStatus) Error() string { return fmt.Sprintf("exit status %d", int(e)) }
+func (e exitStatus) ExitCode() int { return int(e) }
+
+// expectFail is a pinned row that declares its command must go red.
+func expectFail(t *testing.T, output string) plan.LedgerRow {
+	t.Helper()
+	return plan.LedgerRow{ID: "E1", Admit: "go test ./a", Digest: digest(t, output, ""), Expect: "fail", Label: "observado"}
+}
+
+// A FAIL_TO_PASS test observed red is evidence worth pinning. With `Expect: fail` a plain non-zero exit is the
+// observation and is pinned like any other; a command that passes, and a failure that is about the runner or
+// the deadline rather than about the command, are refused, on either of the two runs.
+func TestAdmitPinsAnExpectedRedCommand(t *testing.T) {
+	red := "--- FAIL: TestKeepsTheComma\nFAIL\n"
+	cases := []struct {
+		name   string
+		errs   []error // one per run; the last repeats
+		reason string
+		detail string
+	}{
+		{name: "a stable non-zero exit is admitted", errs: []error{exitStatus(1)}},
+		{name: "a zero exit is refused", errs: []error{nil}, reason: ReasonExpectedFailurePassed, detail: "exited zero"},
+		{name: "a second run that passes is refused", errs: []error{exitStatus(1), nil}, reason: ReasonExpectedFailurePassed, detail: "second run"},
+		{name: "a runner refusal keeps its reason", errs: []error{Refusal{Reason: ReasonNoNetwork, Detail: "no network"}}, reason: ReasonNoNetwork},
+		{name: "a timeout keeps its reason", errs: []error{fmt.Errorf("run: %w", context.DeadlineExceeded)}, reason: ReasonTimeout},
+		{name: "a command that never ran is not a red run", errs: []error{errors.New("exec: sh: not found")}, reason: ReasonCommandFailed},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runs := 0
+			got := Admit([]plan.LedgerRow{expectFail(t, red)}, Options{Execute: true}, Deps{Run: func(context.Context, string, string) (string, error) {
+				err := tc.errs[min(runs, len(tc.errs)-1)]
+				runs++
+				return red, err
+			}})
+			if tc.reason == "" {
+				assertRows(t, got, []want{{id: "E1", verdict: VerdictAdmitted, command: "go test ./a", digest: digest(t, red, ""), lines: 2}})
+				return
+			}
+			var detail []string
+			if tc.detail != "" {
+				detail = []string{tc.detail}
+			}
+			assertRows(t, got, []want{{id: "E1", verdict: VerdictRefused, reason: tc.reason, command: "go test ./a", detail: detail}})
+		})
+	}
+}
+
+// An Expect cell is read before anything runs, in a dry run too: a value that is neither pass nor fail is a
+// defect in the row, and an expected failure beside a mutation contradicts the red and green halves the
+// mutation already defines. An empty cell and `pass` keep today's reading, where a non-zero exit is a failure.
+func TestAdmitReadsTheExpectCell(t *testing.T) {
+	cases := []struct {
+		name    string
+		expect  string
+		mutate  string
+		execute bool
+		reason  string
+	}{
+		{name: "an unknown value", expect: "maybe", execute: true, reason: ReasonExpectInvalid},
+		{name: "an unknown value in a dry run", expect: "maybe", reason: ReasonExpectInvalid},
+		{name: "fail beside a mutation", expect: " FAIL ", mutate: "a => b @ x.go:1", execute: true, reason: ReasonExpectWithMutate},
+		{name: "empty keeps a non-zero exit a failure", execute: true, reason: ReasonCommandFailed},
+		{name: "pass keeps a non-zero exit a failure", expect: "Pass", execute: true, reason: ReasonCommandFailed},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := plan.LedgerRow{ID: "E1", Admit: "go test ./a", Expect: tc.expect, Mutate: tc.mutate, Label: "observado"}
+			got, calls := admit(t, []plan.LedgerRow{r}, Options{Execute: tc.execute}, "FAIL\n", exitStatus(1))
+			if got[0].Verdict != VerdictRefused || got[0].Reason != tc.reason {
+				t.Fatalf("row = %#v, want refused as %s", got[0], tc.reason)
+			}
+			if tc.reason != ReasonCommandFailed {
+				assertNoRun(t, calls)
+			}
+		})
+	}
+}
