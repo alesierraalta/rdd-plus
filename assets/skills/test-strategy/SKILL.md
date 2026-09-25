@@ -163,6 +163,13 @@ tree on main means the whole app. A scope may keep its own plan beside another s
 example `docs/testing/test-plan-reports.md` beside an existing `test-plan.md` — closing against
 `plan check` on its own path.
 
+**Reviewing someone else's PR.** Keep the plan outside the author's branch, for example
+`~/.config/rdd-plus/reviews/<repo>/pr-<n>.md`, and pass it to every `plan` subcommand with `--path`; run
+`plan admit` from inside the checkout, where its commands and `Mutate` replays resolve. Pinning tests ship as
+a suggested patch, each named by its suite path :: test name, never as a commit to the author's branch.
+`rdd-plus plan export --path <plan>` prints the Findings as a sanitised Markdown comment naming the commit
+it covers; post it (`gh pr comment <n> -F -`) only with the operator's approval.
+
 **Verdict per target**: probe · pin · none (`n/a`), profiles in
 [references/prioritization.md](references/prioritization.md). **Routing** by need: full table in
 [references/ordering.md](references/ordering.md); `exploit-testing` owns adversarial probing.
