@@ -118,7 +118,7 @@ func TestCheckAcceptsACompliantPlan(t *testing.T) {
 	body, _ := os.ReadFile(p)
 	plan := replaceFixture(t, string(body), "the Findings header",
 		"| Id | Finding (path:line, one line) | Severity (consequence class) | Data safe? | Evidence id | Pinning test (suite path :: test name) | Status | Verdict by / date | Reason | Cited-files fingerprint at verdict |\n|---|---|---|---|---|---|---|---|---|---|\n",
-		"| F1 | `src/a.js:5` drops a quoted comma | data loss | yes | E1 | tests/a.test.js :: keeps a quoted comma | fixed | me / 2026-09-10 | - | abc123 |\n")
+		"| F1 | `src/a.js:5` drops a quoted comma | data loss | yes | E1 | tests/a.test.js :: keeps a quoted comma | fixed | me / 2026-09-10 | - | abc1234 |\n")
 	plan = replaceFixture(t, plan, "the Evidence ledger header",
 		"| Id | Claim | Executed | Admit | Inputs and parameters | Observed | Digest | Normalize | Mode | Mutate | Expect | Mutation or negative control → result | Reproduction | Label (`observado` / `razonado`, literal) |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n",
 		"| E1 | it drops the comma | `node --test` | node --test | `a,\"b,c\"` | 3 fields | sha256:7eada7a897497315d39d2541f5058a9631e80828245781b3c9c96205d9d759ed | | | | | reverted → red | same input | observado |\n")
@@ -183,6 +183,48 @@ func TestCheckNamesEveryContractBreach(t *testing.T) {
 			}
 			if !strings.Contains(strings.Join(problems, "\n"), tc.wantSub) {
 				t.Fatalf("problems = %v, want one containing %q", problems, tc.wantSub)
+			}
+		})
+	}
+}
+
+// The fingerprint cell is what lets a settled verdict be re-checked against the files it cited, so it holds
+// a `fingerprint.sh` digest, one or more git SHAs, or a placeholder that says none is recorded yet. Free text
+// such as a test name passes for a fingerprint and re-checks nothing, so it is refused against its row.
+func TestCheckReadsTheFindingsFingerprintCell(t *testing.T) {
+	digest := strings.Repeat("0123456789abcdef", 4)
+	cases := []struct {
+		cell   string
+		accept bool
+	}{
+		{digest, true},
+		{"953908a", true},
+		{"`953908a`", true},
+		{"b85f035, f016acd", true},
+		{"-", true},
+		{"pending", true},
+		{"pending commit", true},
+		{"", true},
+		{"`{{FP_PARSE}}`", true},
+		{"{{TODO}}", false},
+		{"TestFoo", false},
+		{"pilot fingerprint", false},
+		{"abc12", false},
+		{strings.ToUpper(digest), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.cell, func(t *testing.T) {
+			plan := header + "| F1 | `src/a.js:5` x | M | yes | E1 | t.js :: x | fixed | me | - | " + tc.cell + " |\n" +
+				ledger + "| E1 | c | cmd | i | o | m | r | observado |\n"
+			problems := strings.Join(CheckDocument(plan), "\n")
+			if tc.accept {
+				if problems != "" {
+					t.Fatalf("fingerprint %q refused: %s", tc.cell, problems)
+				}
+				return
+			}
+			if !strings.Contains(problems, "line 5: finding F1") || !strings.Contains(problems, "fingerprint") {
+				t.Fatalf("fingerprint %q: problems = %q, want a breach naming line 5, finding F1 and the fingerprint cell", tc.cell, problems)
 			}
 		})
 	}

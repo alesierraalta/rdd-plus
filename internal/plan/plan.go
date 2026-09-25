@@ -64,6 +64,12 @@ var (
 
 	baselineFingerprintRe = regexp.MustCompile("^[ \t]*Baseline:.*fingerprint:[ \t]*`([^`]*)`")
 	fingerprintRe         = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	// A Findings fingerprint cell names what the verdict can be re-checked against: a `fingerprint.sh` digest,
+	// or one or more git SHAs separated by commas and spaces. A cell starting with `pending` says the value is
+	// owed, the way the placeholder vocabulary says it is absent. `{{FP_PARSE}}` is the one token the eval harness
+	// substitutes into a fixture plan's Findings, as `{{FINGERPRINT}}` is for the Baseline; any other token is a
+	// value nobody filled in.
+	findingFingerprintRe = regexp.MustCompile(`^(?:[0-9a-f]{64}|[0-9a-f]{7,40}(?:[ ,]+[0-9a-f]{7,40})*|pending\b.*|\{\{FP_PARSE\}\})$`)
 )
 
 // unrecordedFingerprints are the Baseline values that visibly say "not recorded yet": the shipped
@@ -192,21 +198,23 @@ func ledgerProblems(ledger tableScan) (map[string]bool, []string) {
 	return ids, problems
 }
 
-// findingColumns are the four machine columns a finding row is read by, resolved by name so a column that
+// findingColumns are the machine columns a finding row is read by, resolved by name so a column that
 // moves does not move the reading with it.
 type findingColumns struct {
-	find     int
-	evidence int
-	pin      int
-	status   int
+	find        int
+	evidence    int
+	pin         int
+	status      int
+	fingerprint int
 }
 
 func columnsOf(header []string) findingColumns {
 	return findingColumns{
-		find:     columnIndex(header, "finding"),
-		evidence: columnIndex(header, "evidence"),
-		pin:      columnIndex(header, "pinning test"),
-		status:   columnIndex(header, "status"),
+		find:        columnIndex(header, "finding"),
+		evidence:    columnIndex(header, "evidence"),
+		pin:         columnIndex(header, "pinning test"),
+		status:      columnIndex(header, "status"),
+		fingerprint: columnIndex(header, "fingerprint"),
 	}
 }
 
@@ -227,9 +235,9 @@ func findingProblems(findings tableScan, ledgerIDs map[string]bool) []string {
 	return problems
 }
 
-// findingRowProblems reads one finding row against the four rules a row owes: the path:line that makes it
-// locatable, the evidence that has to be a ledger row, the closed status vocabulary, and the pinning test a
-// settled verdict names.
+// findingRowProblems reads one finding row against the five rules a row owes: the path:line that makes it
+// locatable, the evidence that has to be a ledger row, the closed status vocabulary, the pinning test a
+// settled verdict names, and the fingerprint cell that names what the verdict can be re-checked against.
 func findingRowProblems(r row, id string, cols findingColumns, ledgerIDs map[string]bool) []string {
 	var problems []string
 	if cols.find >= 0 && !pathCiteRe.MatchString(cell(r.cells, cols.find)) {
@@ -243,7 +251,23 @@ func findingRowProblems(r row, id string, cols findingColumns, ledgerIDs map[str
 	if settledStatus.MatchString(status) && (cols.pin < 0 || placeholder.MatchString(cell(r.cells, cols.pin))) {
 		problems = append(problems, fmt.Sprintf("line %d: finding %s is settled but names no pinning test", r.line, id))
 	}
+	if cols.fingerprint >= 0 {
+		if raw := cell(r.cells, cols.fingerprint); !ValidFindingFingerprint(raw) {
+			problems = append(problems, fmt.Sprintf("line %d: finding %s fingerprint %s is not %s", r.line, id, quote(raw), FindingFingerprintForms))
+		}
+	}
 	return problems
+}
+
+// FindingFingerprintForms names what a Findings fingerprint cell accepts, for a breach to quote.
+const FindingFingerprintForms = "a fingerprint.sh digest (64 lowercase hex), git SHAs (7-40 lowercase hex, separated by commas or spaces), a placeholder such as -, or pending"
+
+// ValidFindingFingerprint reports whether one Findings fingerprint cell, backticks stripped, is a value the
+// verdict can be re-checked against or a placeholder saying none is recorded yet. A plan whose Findings table
+// has no fingerprint column is never asked, so older plans keep passing.
+func ValidFindingFingerprint(raw string) bool {
+	v := strings.TrimSpace(strings.ReplaceAll(raw, "`", ""))
+	return placeholder.MatchString(v) || findingFingerprintRe.MatchString(v)
 }
 
 // evidenceProblems reads one finding's evidence cell against the ledger: a row that cites none is refused, and

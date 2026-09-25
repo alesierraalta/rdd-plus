@@ -122,7 +122,8 @@ func findingsTable(lines []string) (tableScan, error) {
 }
 
 // rowFor validates the values the caller supplied and renders the row they describe: the three checks a finding
-// owes, the placeholder an absent fingerprint has a spelling for, and the row itself.
+// owes, the placeholder an absent fingerprint has a spelling for, the fingerprint the checker accepts, and the
+// row itself.
 func rowFor(f Finding, header []string) (string, error) {
 	if err := f.checkValues(); err != nil {
 		return "", err
@@ -137,6 +138,9 @@ func rowFor(f Finding, header []string) (string, error) {
 	// An absent fingerprint has a spelling: the placeholder the template uses for a digest not computed.
 	if strings.TrimSpace(f.Fingerprint) == "" {
 		f.Fingerprint = "-"
+	}
+	if !ValidFindingFingerprint(f.Fingerprint) {
+		return "", usagef("--fingerprint %s is not %s", quote(f.Fingerprint), FindingFingerprintForms)
 	}
 	return f.row(header, status)
 }

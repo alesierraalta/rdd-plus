@@ -206,7 +206,7 @@ func compliantPlan(rows ...string) string {
 	return "## Findings\n\n" +
 		"| Id | Finding | Severity | Data safe? | Evidence id | Pinning test | Status | Verdict by / date | Reason | Fingerprint |\n" +
 		"|---|---|---|---|---|---|---|---|---|---|\n" +
-		"| F1 | `src/a.js:5` drops a quoted comma | data loss | yes | E1 | tests/a.test.js :: keeps a comma | fixed | me / 2026-09-10 | - | abc123 |\n" +
+		"| F1 | `src/a.js:5` drops a quoted comma | data loss | yes | E1 | tests/a.test.js :: keeps a comma | fixed | me / 2026-09-10 | - | abc1234 |\n" +
 		"\n## Evidence ledger\n\n" + ledgerHeader + strings.Join(rows, "")
 }
 
