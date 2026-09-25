@@ -181,7 +181,7 @@ func (c Comparison) Markdown() string {
 	if beforeProvenance.SuiteTools != afterProvenance.SuiteTools {
 		fmt.Fprintf(&w, "note: suite runtimes differed (%s → %s); weigh this when interpreting the comparison.\n", beforeProvenance.SuiteTools, afterProvenance.SuiteTools)
 	}
-	fmt.Fprintf(&w, "reported (defect-runs): %d/%d → %d/%d · reported (unique defects): %d/%d → %d/%d · pinned (defect-runs): %d → %d · caught (defect-runs): %d/%d → %d/%d · caught (unique defects): %d/%d → %d/%d · precision: %s → %s · pending count: %d → %d · inconclusive: %d runs → %d runs · false positives: %d finding rows → %d finding rows · cost (USD): $%.3f → $%.3f\n\n",
+	fmt.Fprintf(&w, "reported (defect-runs): %d/%d → %d/%d · reported (unique defects): %d/%d → %d/%d · pinned (defect-runs): %d → %d · caught (defect-runs): %d/%d → %d/%d · caught (unique defects): %d/%d → %d/%d · precision: %s → %s · pending count: %d → %d · inconclusive: %d runs → %d runs · false positives: %d finding rows → %d finding rows · light runs: %d → %d · micro runs: %d → %d · turns: %d → %d · cost (USD): $%.3f → $%.3f\n\n",
 		c.Before.Found, c.Before.Defects, c.After.Found, c.After.Defects,
 		c.Before.UniqueFound, c.Before.UniqueDefects, c.After.UniqueFound, c.After.UniqueDefects,
 		c.Before.ClaimedPinned, c.After.ClaimedPinned,
@@ -190,7 +190,9 @@ func (c Comparison) Markdown() string {
 		precisionSummary(c.Before.Precision, c.Before.AdjudicatedTrue, c.Before.AdjudicatedFalse, c.Before.PendingAdjudication),
 		precisionSummary(c.After.Precision, c.After.AdjudicatedTrue, c.After.AdjudicatedFalse, c.After.PendingAdjudication),
 		c.Before.PendingAdjudication, c.After.PendingAdjudication,
-		c.Before.Inconclusive, c.After.Inconclusive, c.Before.FalsePositives, c.After.FalsePositives, c.Before.CostUSD, c.After.CostUSD)
+		c.Before.Inconclusive, c.After.Inconclusive, c.Before.FalsePositives, c.After.FalsePositives,
+		c.Before.LightActivated, c.After.LightActivated, c.Before.MicroActivated, c.After.MicroActivated,
+		totalTurns(c.Before), totalTurns(c.After), c.Before.CostUSD, c.After.CostUSD)
 	w.WriteString("| case | reported before | reported after | pinned before | pinned after | caught before | caught after | note |\n|---|---|---|---|---|---|---|---|\n")
 	for _, r := range c.Rows {
 		var notes []string
@@ -207,6 +209,16 @@ func (c Comparison) Markdown() string {
 			cell(r.Before, r.Before.Caught), cell(r.After, r.After.Caught), strings.Join(notes, "; "))
 	}
 	return w.String()
+}
+
+// totalTurns sums the agent turns of every case-run, failed ones included: a failed run still spent its
+// turns, and a mode's cost has to be read in turns as well as dollars.
+func totalTurns(agg Aggregate) int {
+	turns := 0
+	for _, r := range agg.Cases {
+		turns += r.Turns
+	}
+	return turns
 }
 
 func writeProvenanceHeader(w *strings.Builder, before, after Provenance) {

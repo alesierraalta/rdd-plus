@@ -111,7 +111,7 @@ func TestHistoryAppendsAdjudicatedMetricsInDeclaredOrder(t *testing.T) {
 		Caught: 1, RecallCaught: 0.5, SkillVersion: "s", Scorer: "q", Runs: 2, MetricsVersion: MetricsVersion,
 		AgentConfig: ConfigBench, Environment: "linux/amd64",
 		UniqueDefects: 1, UniqueFound: 1, UniqueConfirmed: 0, UniqueCaught: 1, DefectRuns: 2, Controls: 1,
-		PendingAdjudication: 3, OutOfScope: 4, Inconclusive: 5,
+		PendingAdjudication: 3, OutOfScope: 4, Inconclusive: 5, MicroActivated: 6,
 	}
 	if err := AppendHistory(dir, entry); err != nil {
 		t.Fatal(err)
@@ -143,8 +143,8 @@ func TestHistoryAppendsAdjudicatedMetricsInDeclaredOrder(t *testing.T) {
 	if len(h) != len(r) {
 		t.Fatalf("header columns = %d, row columns = %d:\nheader %s\nrow %s", len(h), len(r), header, row)
 	}
-	wantHeaders := []string{"metrics version", "unique defects", "unique found", "unique confirmed", "unique caught", "defect runs", "controls", "precision", "pending", "out of scope", "inconclusive", "unstable", "agent config", "environment"}
-	wantValues := []string{"2", "1", "1", "0", "1", "2", "1", "-", "3", "4", "5", "-", "bench", "linux/amd64"}
+	wantHeaders := []string{"metrics version", "unique defects", "unique found", "unique confirmed", "unique caught", "defect runs", "controls", "precision", "pending", "out of scope", "inconclusive", "unstable", "agent config", "environment", "micro"}
+	wantValues := []string{"2", "1", "1", "0", "1", "2", "1", "-", "3", "4", "5", "-", "bench", "linux/amd64", "6"}
 	start := len(h) - len(wantHeaders)
 	for i := range wantHeaders {
 		if h[start+i] != wantHeaders[i] || r[start+i] != wantValues[i] {
