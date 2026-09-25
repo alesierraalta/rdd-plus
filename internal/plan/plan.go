@@ -61,7 +61,14 @@ var (
 	// start on the previous line would name the wrong line as its home.
 	lightLineRe  = regexp.MustCompile(`^[ \t]*Light:[ \t]*(.*)$`)
 	lightShapeRe = regexp.MustCompile(`^(.+?)[ \t]*·[ \t]*touches[ \t]*(.*)$`)
+
+	baselineFingerprintRe = regexp.MustCompile("^[ \t]*Baseline:.*fingerprint:[ \t]*`([^`]*)`")
+	fingerprintRe         = regexp.MustCompile(`^[0-9a-f]{64}$`)
 )
+
+// unrecordedFingerprints are the Baseline values that visibly say "not recorded yet": the shipped
+// template's placeholder and the token the eval harness substitutes when it scaffolds a fixture plan.
+var unrecordedFingerprints = map[string]bool{"<assets/fingerprint.sh output>": true, "{{FINGERPRINT}}": true}
 
 // findingsStatuses is the Findings status vocabulary the plan documents. It is the membership the
 // checker enforces; FindingsStatusList spells the same list for every message that has to offer it.
@@ -140,6 +147,22 @@ func CheckDocument(doc string) []string {
 	problems = append(problems, findingProblems(findings, ledgerIDs)...)
 	if lightProblems, declared := lightReport(lines); declared {
 		problems = append(problems, lightProblems...)
+	}
+	return append(problems, baselineProblems(lines)...)
+}
+
+// baselineProblems reads the fingerprint a `Baseline:` line records. Every resume compares the tree
+// against it, so a value fingerprint.sh could not have written (`pending`, a short hash) is refused
+// rather than read as a baseline. An unrecorded placeholder stays legal: it says what it is, and a plan
+// fresh from `plan init` has to pass.
+func baselineProblems(lines []string) []string {
+	var problems []string
+	for i, line := range lines {
+		m := baselineFingerprintRe.FindStringSubmatch(line)
+		if m == nil || unrecordedFingerprints[m[1]] || fingerprintRe.MatchString(m[1]) {
+			continue
+		}
+		problems = append(problems, fmt.Sprintf("line %d: the Baseline fingerprint \"%s\" is not assets/fingerprint.sh output (64 lowercase hex): record the baseline or keep the unrecorded placeholder", i+1, quote(m[1])))
 	}
 	return problems
 }
