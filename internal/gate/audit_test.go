@@ -368,3 +368,27 @@ func TestDecideNamesWhatItCouldNotReadOrPlan(t *testing.T) {
 		t.Fatalf("a plan with no layer matrix must not read as nothing owed: %s", res.Reason)
 	}
 }
+
+// A micro plan owes no layer sweep, so the Stop reads it as complete, and its wording never claims the layers
+// it did not sweep.
+func TestDecideReadsAMicroPlanAsCompleteWithoutClaimingEveryLayer(t *testing.T) {
+	r := auditRepo()
+	r.transcript = stamped(auditStart, `{"name":"Skill","input":{"skill":"test-strategy"}}`)
+	r.plan = microPlanDoc
+	res := Decide(Input{TranscriptPath: "t"}, r.deps(auditNow))
+	if !res.Audit || res.Unplanned {
+		t.Fatalf("audit = %v, unplanned = %v, want a complete micro plan:\n%s", res.Audit, res.Unplanned, res.Reason)
+	}
+	for _, text := range []string{res.Reason, auditLine(res)} {
+		if strings.Contains(text, "breadth owed") || strings.Contains(text, "every layer") || !strings.Contains(text, "micro") {
+			t.Fatalf("a micro plan is complete and says only what it swept: %q", text)
+		}
+	}
+}
+
+const microPlanDoc = "# Micro test plan\n\nMicro: internal/text/trim.go · touches none\n\n" +
+	"## Findings\n\n| Id | Finding | Severity | Data safe? | Evidence id | Pinning test | Status | Verdict by / date | Reason | Fingerprint |\n" +
+	"|---|---|---|---|---|---|---|---|---|---|\n\n" +
+	"## Evidence ledger\n\n| Id | Claim | Executed | Admit | Inputs and parameters | Observed | Digest | Normalize | Mode | Mutate | Expect | Mutation or negative control → result | Reproduction | Label |\n" +
+	"|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n" +
+	"| E1 | pinned | go test | go test ./internal/text | | ok | | | | strings.TrimSpace(s) => s @ internal/text/trim.go:7 | | edit → red | rerun | observado |\n"

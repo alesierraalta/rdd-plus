@@ -233,6 +233,8 @@ func auditLine(res Result, offerFeedback ...bool) string {
 		return fmt.Sprintf("rdd-plus: %d breadth table(s) could not be read to the end, so the rows under it were never counted.%s", res.Unreadable, suffix)
 	case res.Unplanned:
 		return "rdd-plus: the plan has no layer matrix, so the breadth sweep was never planned." + suffix
+	case res.Micro:
+		return "rdd-plus: the micro plan owes nothing; it owes no layer sweep." + suffix
 	default:
 		return "rdd-plus: the testing plan owes nothing." + suffix
 	}

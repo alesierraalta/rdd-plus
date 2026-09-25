@@ -766,6 +766,7 @@ func TestCheckAcceptsTheShippedPlans(t *testing.T) {
 		filepath.Join("..", "..", "docs", "testing", "test-plan.md"),
 		filepath.Join("..", "..", "assets", "skills", "test-strategy", "evals", "fixtures", "plans", "clean.md"),
 		filepath.Join("..", "..", "assets", "skills", "test-strategy", "evals", "fixtures", "plans", "rejected.md"),
+		filepath.Join("..", "..", "assets", "skills", MicroTemplatePath),
 	}
 	for _, f := range files {
 		t.Run(filepath.Base(f), func(t *testing.T) {

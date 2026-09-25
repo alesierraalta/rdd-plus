@@ -30,6 +30,15 @@ func BuildCompleteReason(planPath string, offerFeedback ...bool) string {
 	}, offerFeedback)
 }
 
+// BuildMicroCompleteReason is what the Stop says when a micro plan owes nothing. A micro plan owes no layer
+// sweep, so the sentence says that instead of claiming the layers were swept.
+func BuildMicroCompleteReason(planPath string, offerFeedback ...bool) string {
+	return joinReason([]string{
+		"This session ran the testing discipline and " + planPath + " owes nothing: it is a micro plan for",
+		"one small function, which owes no layer sweep, so no other surface was examined.",
+	}, offerFeedback)
+}
+
 // BuildDeclarationProblem is what the Stop says when the plan declaration cannot be read. It replaces
 // the silence: the gate cannot audit a plan it cannot resolve, and the operator is the one who can
 // repair the file. Removing the declaration falls back to the default plan, which is a decision.

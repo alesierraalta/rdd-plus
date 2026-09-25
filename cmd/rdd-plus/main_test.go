@@ -115,6 +115,22 @@ func TestCLIContract(t *testing.T) {
 	}
 }
 
+// `plan init --micro` writes the micro skeleton rather than the full plan.
+func TestPlanInitMicroWritesTheMicroTemplate(t *testing.T) {
+	bin := buildCLI(t)
+	p := filepath.Join(t.TempDir(), "plan.md")
+	if out, err := exec.Command(bin, "plan", "init", "--micro", "--path", p).CombinedOutput(); err != nil {
+		t.Fatalf("plan init --micro: %v\n%s", err, out)
+	}
+	got, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), "Micro: <file path> · touches none") || strings.Contains(string(got), "## Layer matrix") {
+		t.Fatalf("plan init --micro wrote the wrong skeleton:\n%s", got)
+	}
+}
+
 // The TUI needs a real terminal; on a pipe it must refuse before tui.Run and point at the
 // non-interactive equivalents instead of hanging on a loop no one can drive.
 func TestTUIRefusesWithoutATerminal(t *testing.T) {

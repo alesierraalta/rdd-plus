@@ -4,8 +4,8 @@ description: "Trigger: haz el testing, testea esto, prueba esto, test this, test
 license: Apache-2.0
 metadata:
   author: "alesierraalta"
-  version: "0.3.13"
-  requires_rdd_plus: "0.3.10"
+  version: "0.3.14"
+  requires_rdd_plus: "0.3.11"
   scope: [common]
   auto_invoke: "Any request to test something: infer scope and mode from repo state, build or resume the persisted plan, execute it through specialized testing skills"
 ---
@@ -23,18 +23,21 @@ This skill decides WHICH targets and routes; siblings do the work.
 
 ## Tooling
 
-This skill is written for `rdd-plus 0.3.10`, and `rdd-plus version` prints the build present.
+This skill is written for `rdd-plus 0.3.11`, and `rdd-plus version` prints the build present.
 Install it from the repository with `make build`, which writes `bin/rdd-plus`; put that on `PATH`,
 or use `go install github.com/alesierraalta/rdd-plus/cmd/rdd-plus@latest` once the module is
 published. Without the binary the run continues on documented fallbacks: `plan init` is replaced
 by copying [assets/test-plan-template.md](assets/test-plan-template.md) (rule 12); `plan check` by
-applying its checks by hand, as aligned with test-strategy 0.3.13 — the Findings section exists and is a
+applying its checks by hand, as aligned with test-strategy 0.3.14 — the Findings section exists and is a
 table, and a finding is a row carrying `path:line` and an evidence id that exists, with no finding or
 evidence id repeated and no `razonado` row inside the ledger; settled rows name a pinning test;
 statuses stay inside the closed vocabulary; a prose line closes a table, a fenced block is
 documentation and an unclosed fence fails closed, while a row's cells must match its header; the
 `Run` column exists and its cells hold valid run slugs; a `Light:` declaration validates, is
-corroborated by a ranked target or a `path:line` citation, and gives every layer it leaves out a reason — and saying in the report that the gate was
+corroborated by a ranked target or a `path:line` citation, and gives every layer it leaves out a reason;
+a `Micro:` declaration reads `touches none`, is corroborated the same way, sits in a plan with no
+Layer matrix and no `Light:` line, and its ledger holds an `observado` row and a row with a filled `Mutate`
+cell — and saying in the report that the gate was
 applied by hand, which is a weaker claim than the binary's; and `doctor` by deciding CodeGraph
 availability from `codegraph` and `git ls-files`
 instead of the capability probe.
@@ -121,6 +124,7 @@ automatic change to this skill.
 | State found | Action |
 |---|---|
 | No declared plan (`.rdd-plus.json` absent or has no `planPath`) | PLAN the blast radius when the change is bounded (a scoped run), the whole app when it is not, then EXECUTE the first rows, same run |
+| No declared plan, and the change is one small function eligible for Micro (below) | PLAN micro with `rdd-plus plan init --micro`, then EXECUTE its one pinning test and one mutation |
 | Plan exists but predates the template (missing sections or `Baseline:`) | Migrate it: add the missing sections empty, record the baseline (`assets/fingerprint.sh`), treat the tree as changed, then EXECUTE |
 | Plan exists, fingerprint unchanged | EXECUTE from the first `pending` row |
 | Plan exists, files differ from the plan baseline | Refresh rows in that diff's blast radius, rank first, EXECUTE |
@@ -143,6 +147,16 @@ authorization; secrets, credentials or PII; persistence, schema or migrations; m
 totals; or the public contract — a signature, a format, or documented semantics. A defect fix that
 restores the documented contract is eligible. Also refused for a structural diff (renames, a moved
 package, a changed interface) or a scope a plan already covers, which is resumed instead.
+
+**One small function plans micro.** When the change is a single function of about ten lines or fewer,
+its contract does not change, and it touches none of the refused classes above, the plan may be a micro
+plan: `rdd-plus plan init --micro` writes a header declaring `Micro: <file path> · touches none`, the
+Findings table and the Evidence ledger, nothing else. It keeps the vacuous-assertion check on the tests
+that already cover the function, one pinning test observed red then green, and one mutation that test
+kills. `plan check` refuses a `Micro:` plan whose file no `path:line` citation corroborates, whose classes
+are not `none`, that also declares `Light:`, that carries a Layer matrix, or whose ledger lacks an
+`observado` row or a row with a `Mutate` cell; only a plan that passes owes no breadth to `plan gaps`,
+`rdd-plus check` and the Stop gate. A refused declaration reads as a sweep never planned.
 
 Scope: a diff means its blast radius first, closed by the regression gate (rule 9); a clean
 tree on main means the whole app. A scope may keep its own plan beside another scope's — for

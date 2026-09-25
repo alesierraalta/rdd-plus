@@ -89,6 +89,9 @@ func Run(cwd string, d Deps) Result {
 	if err != nil {
 		return Result{Exit: 1, Files: files, Text: warn + changedLine(files) + "\nthe plan could not be read: " + err.Error()}
 	}
+	if !gaps.Any() && gaps.Micro != "" {
+		return Result{Files: files, Text: warn + changedLine(files) + "\n" + planRelPath + " owes nothing: it is a micro plan for one small function, which owes no layer sweep"}
+	}
 	if !gaps.Any() {
 		return Result{Files: files, Text: warn + changedLine(files) + "\n" + planRelPath + " owes nothing: every assigned layer was swept and every ranked target is done"}
 	}

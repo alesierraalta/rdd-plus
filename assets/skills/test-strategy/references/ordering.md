@@ -111,6 +111,16 @@ whether the consequence classes were judged correctly; those stay with the opera
 reader. That is the point of writing the declaration down — one half is machine-checked, and the half
 that cannot be is named where the next reader will find it.
 
+A single small function is the one case where the record costs more than the finding. On a one-function
+target the plan template, the layer sweep and the admit ceremony outweigh what they find; the value comes
+from the vacuous-assertion check, one pinning test and one mutation. A `Micro:` plan keeps exactly those:
+a header declaring `Micro: <file path> · touches none`, the Findings table, and an Evidence ledger with an
+`observado` row and a row whose `Mutate` cell names the mutation the pinning test kills. It carries no
+Layer matrix, so `plan gaps` owes no breadth for it. Eligibility is Light's, narrowed: one function of about
+ten lines or fewer, its contract unchanged, and none of the refused classes. `plan check` enforces the
+shape, the corroborated file, the absence of a Layer matrix and of a `Light:` line, and the two ledger
+rows; whether the function was really that small stays, as with `Light:`, with the operator and the reader.
+
 ---
 
 ## Central Routing to Sibling Skills
