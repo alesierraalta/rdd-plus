@@ -66,9 +66,10 @@ var (
 	fingerprintRe         = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	// A Findings fingerprint cell names what the verdict can be re-checked against: a `fingerprint.sh` digest,
 	// or one or more git SHAs separated by commas and spaces. A cell starting with `pending` says the value is
-	// owed, the way the placeholder vocabulary says it is absent. A whole-cell `{{TOKEN}}` is the value the eval
-	// harness substitutes when it scaffolds a fixture plan, as `{{FINGERPRINT}}` is for the Baseline.
-	findingFingerprintRe = regexp.MustCompile(`^(?:[0-9a-f]{64}|[0-9a-f]{7,40}(?:[ ,]+[0-9a-f]{7,40})*|pending\b.*|\{\{[A-Z][A-Z0-9_]*\}\})$`)
+	// owed, the way the placeholder vocabulary says it is absent. `{{FP_PARSE}}` is the one token the eval harness
+	// substitutes into a fixture plan's Findings, as `{{FINGERPRINT}}` is for the Baseline; any other token is a
+	// value nobody filled in.
+	findingFingerprintRe = regexp.MustCompile(`^(?:[0-9a-f]{64}|[0-9a-f]{7,40}(?:[ ,]+[0-9a-f]{7,40})*|pending\b.*|\{\{FP_PARSE\}\})$`)
 )
 
 // unrecordedFingerprints are the Baseline values that visibly say "not recorded yet": the shipped

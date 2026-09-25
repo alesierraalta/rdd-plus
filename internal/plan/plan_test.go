@@ -206,6 +206,7 @@ func TestCheckReadsTheFindingsFingerprintCell(t *testing.T) {
 		{"pending commit", true},
 		{"", true},
 		{"`{{FP_PARSE}}`", true},
+		{"{{TODO}}", false},
 		{"TestFoo", false},
 		{"pilot fingerprint", false},
 		{"abc12", false},
