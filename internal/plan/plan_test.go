@@ -120,8 +120,8 @@ func TestCheckAcceptsACompliantPlan(t *testing.T) {
 		"| Id | Finding (path:line, one line) | Severity (consequence class) | Data safe? | Evidence id | Pinning test (suite path :: test name) | Status | Verdict by / date | Reason | Cited-files fingerprint at verdict |\n|---|---|---|---|---|---|---|---|---|---|\n",
 		"| F1 | `src/a.js:5` drops a quoted comma | data loss | yes | E1 | tests/a.test.js :: keeps a quoted comma | fixed | me / 2026-09-10 | - | abc123 |\n")
 	plan = replaceFixture(t, plan, "the Evidence ledger header",
-		"| Id | Claim | Executed | Admit | Inputs and parameters | Observed | Digest | Normalize | Mode | Mutate | Mutation or negative control → result | Reproduction | Label (`observado` / `razonado`, literal) |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|\n",
-		"| E1 | it drops the comma | `node --test` | node --test | `a,\"b,c\"` | 3 fields | sha256:7eada7a897497315d39d2541f5058a9631e80828245781b3c9c96205d9d759ed | | | | reverted → red | same input | observado |\n")
+		"| Id | Claim | Executed | Admit | Inputs and parameters | Observed | Digest | Normalize | Mode | Mutate | Expect | Mutation or negative control → result | Reproduction | Label (`observado` / `razonado`, literal) |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n",
+		"| E1 | it drops the comma | `node --test` | node --test | `a,\"b,c\"` | 3 fields | sha256:7eada7a897497315d39d2541f5058a9631e80828245781b3c9c96205d9d759ed | | | | | reverted → red | same input | observado |\n")
 	if plan == string(body) {
 		t.Fatal("the fixture replaced nothing, so this test would read the untouched template as a compliant plan")
 	}
@@ -1695,5 +1695,19 @@ func TestColumnRunDoesNotResolveToTargetRung(t *testing.T) {
 	}
 	if got := columnIndex([]string{"Target rung"}, "run"); got != -1 {
 		t.Fatalf("run resolved to Target rung at %d, want -1", got)
+	}
+}
+
+// The Expect column is resolved by name on the shipped header and shares its substring with no other column,
+// so `Executed` never reads as it; the old header without the column leaves it empty (see
+// TestLedgerOnTheOldHeaderLeavesTheNewColumnsEmpty).
+func TestLedgerResolvesTheExpectColumnByName(t *testing.T) {
+	doc := "## Evidence ledger\n\n" +
+		"| Id | Claim | Executed | Admit | Inputs and parameters | Observed | Digest | Normalize | Mode | Mutate | Expect | Mutation or negative control → result | Reproduction | Label (`observado` / `razonado`, literal) |\n" +
+		"|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n" +
+		"| E1 | c | prose | go test ./a | i | o | sha256:aa | | host | | fail | m | r | observado |\n"
+	rows := Ledger(doc)
+	if len(rows) != 1 || rows[0].Expect != "fail" || rows[0].Executed != "prose" || rows[0].Mutation != "m" {
+		t.Fatalf("ledger = %#v, want the Expect cell read as its own column", rows)
 	}
 }
