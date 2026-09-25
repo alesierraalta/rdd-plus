@@ -4,7 +4,7 @@ description: "Trigger: versionar, version bump, release, subir versión, install
 license: Apache-2.0
 metadata:
   author: "alesierraalta"
-  version: "1.0"
+  version: "1.1"
 ---
 
 ## Activation Contract
@@ -19,8 +19,10 @@ ship, when the operator asks to version or release, or to install the latest bui
 - Binary version lives only in `internal/buildinfo/buildinfo.go` (`var Version`). Bump the patch
   (`0.3.8` → `0.3.9`); a minor bump is the operator's call.
 - A skill whose `SKILL.md`, `assets/` or `references/` changed bumps its own `metadata.version` patch.
-- Set a skill's `requires_rdd_plus` to the new binary version only when the skill relies on behaviour
-  that version introduced; otherwise leave it.
+- test-strategy's `requires_rdd_plus` and its "written for `rdd-plus X`" line always equal the binary
+  version (`TestSkillNamesTheRddPlusVersionItRequires` enforces it), so every binary bump also bumps
+  test-strategy's `metadata.version` patch. Other skills (e.g. breakcheck) change `requires_rdd_plus` only
+  when they rely on behaviour that version introduced.
 - Never rewrite historical records: `docs/testing/test-plan.md` rows, `bench/history.md`, fixture reports.
 - No git tags or GitHub releases unless the operator asks; this repo does not use them.
 - `main` is protected: ship through a PR whose `test` check passes, merged with a merge commit.
@@ -31,9 +33,8 @@ ship, when the operator asks to version or release, or to install the latest bui
 
 | Changed | Bump |
 |---|---|
-| Binary only | `buildinfo.Version` patch |
+| Binary (any) | `buildinfo.Version` patch + test-strategy `metadata.version` patch + its `requires_rdd_plus` |
 | Skill text/assets only | that skill's `metadata.version` patch |
-| Skill uses new binary behaviour | both, plus `requires_rdd_plus` |
 | Tests, CI, `odd/`, `.claude/` only | nothing |
 
 ## Execution Steps
