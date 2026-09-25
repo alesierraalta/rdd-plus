@@ -13,9 +13,11 @@ cd "$ROOT"
 if [[ $# -eq 0 ]]; then
   PLAN="docs/testing/test-plan.md"
   if [[ -f .rdd-plus.json ]]; then
-    declared="$(sed -n 's/.*"planPath"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' .rdd-plus.json | head -n1)"
+    declared="$(tr -d '\r\n' < .rdd-plus.json | sed -n 's/.*"planPath"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
     [[ -n "$declared" ]] && PLAN="$declared"
   fi
+  while [[ "$PLAN" == ./* ]]; do PLAN="${PLAN#./}"; done
+  [[ -f "$PLAN" ]] || echo "fingerprint.sh: plan $PLAN not found, nothing excluded" >&2
   git ls-files -co --exclude-standard -z | { grep -zvxF -- "$PLAN" || [[ $? -eq 1 ]]; }
 else
   printf '%s\0' "$@"
