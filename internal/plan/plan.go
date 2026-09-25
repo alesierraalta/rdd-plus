@@ -735,17 +735,22 @@ func LightActivated(doc string) bool {
 	return declared && len(problems) == 0
 }
 
-// MicroActivated reports whether a plan declares a micro plan that passes every Micro-specific rule. Only an
+// MicroActivated reports whether a plan declares a micro plan and passes plan check as a whole. Only an
 // activated micro plan owes no breadth: a declaration that dropped its evidence is a label, not a plan.
 func MicroActivated(doc string) bool {
 	_, ok := microTarget(strings.Split(doc, "\n"))
 	return ok
 }
 
-// microTarget returns the file an activated micro plan names, and whether the plan is one.
+// microTarget returns the file an activated micro plan names, and whether the plan is one. A micro plan
+// trades the layer sweep for a well-formed record, so any breach plan check names, not only a Micro one,
+// keeps the plan owing breadth: a plan the checker refuses must not silence the gate.
 func microTarget(lines []string) (string, bool) {
 	problems, target, declared := microReport(lines)
-	return target, declared && len(problems) == 0
+	if !declared || len(problems) != 0 {
+		return target, false
+	}
+	return target, len(CheckDocument(strings.Join(lines, "\n"))) == 0
 }
 
 // microReport returns every breach a declared micro plan owes, the target it names, and whether the plan

@@ -86,6 +86,21 @@ func TestMicroPlanRefusesEveryBreach(t *testing.T) {
 	}
 }
 
+// A micro plan trades the layer sweep for a well-formed record, so a plan check refuses for any reason is not a
+// micro plan either: a razonado mutation row breaks the ledger contract, and it must not silence the gate.
+func TestMicroPlanThatPlanCheckRefusesIsNotActivated(t *testing.T) {
+	doc := microPlan(t, microDecl, microObserved+strings.Replace(microMutated, "| observado |", "| razonado |", 1), "")
+	if len(CheckDocument(doc)) == 0 {
+		t.Fatal("a razonado ledger row must be refused by plan check")
+	}
+	if MicroActivated(doc) {
+		t.Fatal("a micro plan that plan check refuses must not be activated")
+	}
+	if g, _ := GapsIn(doc); !g.NoLayerMatrix || !g.Any() {
+		t.Fatalf("a refused micro plan must keep owing breadth: %+v", g)
+	}
+}
+
 func TestGapsOweNoBreadthForAMicroPlan(t *testing.T) {
 	doc := microPlan(t, microDecl, microObserved+microMutated, "")
 	for _, run := range []string{"", "fix-trim"} {
