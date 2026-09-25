@@ -1174,6 +1174,53 @@ func TestPlanUpgradeCLIOnALegacyPlan(t *testing.T) {
 	}
 }
 
+// A reviewer keeps the plan outside the author's checkout, so export has to read an absolute path anywhere,
+// name the commit it covers (HEAD of the repository it runs in, unless --commit says otherwise), and never
+// print the directory the plan lives in.
+func TestPlanExportCLI(t *testing.T) {
+	bin := buildCLI(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pr-42.md")
+	doc := "## Findings\n\n| Id | Finding (path:line, one line) | Severity | Data safe? | Evidence id | Pinning test | Status | Verdict by / date | Reason | Fingerprint |\n|---|---|---|---|---|---|---|---|---|---|\n" +
+		"| F1 | internal/text/trim.go:7 trims inner spaces | correctness | yes | E1 | - | open | reviewer / 2026-09-25 | seen red | - |\n\n" +
+		"## Evidence ledger\n\n| Id | Claim | Admit | Digest | Expect | Label |\n|---|---|---|---|---|---|\n" +
+		"| E1 | red | `go test ./internal/text` | | fail | observado |\n"
+	if err := os.WriteFile(path, []byte(doc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, code := runCLI(t, bin, "plan", "export", "--path", path, "--commit", "deadbee")
+	if code != 0 {
+		t.Fatalf("plan export exit = %d\n%s", code, out)
+	}
+	for _, want := range []string{"deadbee", "pr-42.md", "| `F1` |", "E1: go test ./internal/text · Expect: fail"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("export lacks %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, dir) {
+		t.Errorf("the export must not name the directory the plan lives in:\n%s", out)
+	}
+
+	head, err := exec.Command("git", "rev-parse", "--short", "HEAD").Output()
+	if err != nil {
+		t.Skipf("no git HEAD to compare with: %v", err)
+	}
+	out, code = runCLI(t, bin, "plan", "export", "--path", path)
+	if code != 0 || !strings.Contains(out, strings.TrimSpace(string(head))) {
+		t.Fatalf("without --commit the export names HEAD %s, got exit %d:\n%s", head, code, out)
+	}
+
+	bare := filepath.Join(dir, "bare.md")
+	if err := os.WriteFile(bare, []byte("# Plan\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, code = runCLI(t, bin, "plan", "export", "--path", bare, "--commit", "deadbee")
+	if code != 1 || !strings.Contains(out, "plan export:") {
+		t.Fatalf("a plan without Findings exits 1, got %d:\n%s", code, out)
+	}
+}
+
 func runCLIAt(t *testing.T, dir, bin string, args ...string) (string, int) {
 	t.Helper()
 	cmd := exec.Command(bin, args...)

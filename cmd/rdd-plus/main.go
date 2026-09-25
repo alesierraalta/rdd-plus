@@ -100,6 +100,9 @@ plan init [--path <path>] [--force] [--micro]
 plan check [--path <path>]
 plan gaps [--run <slug>] [--all] [--path <path>]
 plan upgrade [--run <slug>] [--path <path>]
+plan export [--path <path>] [--commit <sha>]
+           (prints the Findings as Markdown for a pull request comment, naming the commit covered,
+            default the short HEAD, and the plan's base name; it never posts anything)
 plan add-finding --id <id> --location <path:line> --severity <class> --data-safe <yes|no> --evidence <ids>
            --status <open|confirmed|fixed|gap-closed|rejected|wontfix> [--test <suite :: name>] --verdict-by <who / date>
            --reason <why> [--fingerprint <digest>] [--path <path>]
@@ -826,6 +829,7 @@ func runPlan(args []string) int {
 	record := fs.String("record", "", "comma-separated evidence ids whose freshly observed digest is written into the plan (admit only; requires --execute)")
 	sandbox := fs.Bool("sandbox", false, "observe each command inside a container instead of on this machine (admit only; requires --execute and docker)")
 	sandboxImage := fs.String("sandbox-image", sandboxImageDefault, "image the sandbox runs in (admit only; see --sandbox); the default is pulled on first use")
+	commit := fs.String("commit", "", "commit the export covers; the default is the short HEAD of the repository (export only)")
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
 	}
@@ -901,6 +905,23 @@ func runPlan(args []string) int {
 			return 1
 		}
 		fmt.Printf("wrote %s\n", effectivePath)
+		return 0
+	case "export":
+		covered := *commit
+		if !flagSet(fs, "commit") {
+			out, err := exec.Command("git", "-C", root, "rev-parse", "--short", "HEAD").Output()
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "plan export: no commit to name: pass --commit <sha>")
+				return 1
+			}
+			covered = strings.TrimSpace(string(out))
+		}
+		out, err := plan.ExportFile(effectivePath, covered)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "plan export:", err)
+			return 1
+		}
+		fmt.Print(out)
 		return 0
 	case "check":
 		problems, err := plan.Check(effectivePath)
