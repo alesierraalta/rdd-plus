@@ -1,10 +1,12 @@
 # Test plan — <app / module>
 
 Created: <date> · Last updated: <date> · Plan path: `docs/testing/test-plan.md` · Sandbox: <worktree / container / scratchpad> · Findings precision: <confirmed+fixed> / <rows with a verdict>
-Baseline: `<git rev>` · untracked files: <count> · fingerprint: `<assets/fingerprint.sh output>` (a change is anything that differs from this fingerprint, not raw `git status`)
+Baseline: `<git rev>` · untracked files: <count> · fingerprint: `<assets/fingerprint.sh output>` (a change is anything that differs from this fingerprint, not raw `git status`; the plan itself is excluded)
 
 Tables are the format: prose never replaces a row.
-A finding is a row whose cell opens with `path:line` and one line of finding.
+A finding is a row whose cell opens with `path:line` and one line of finding. The path is a file with an
+extension (`src/a.js:5`), a dotfile (`.gitignore:1`) or a conventional build file (`Makefile:3`); a
+directory or a `host:port` is not a location.
 A finding that lives only in prose does not exist for the scorer.
 
 ## Inventory
@@ -46,7 +48,11 @@ The `Run` column identifies which bounded run owns each layer and target row; le
 Statuses: pending · in progress · done · blocked · n/a. `plan gaps` counts a row as swept when its
 status cell reads `done`, `fixed` or `closed`, and drops `n/a`, `na`, `none` and `skipped` from the
 denominator entirely; the `Skill` cell only labels the rows still owed. In a plan that declares
-`Light:`, every `n/a` row also states its reason in the `Scope` cell.
+`Light:`, every `n/a` row also states its reason in the `Scope` cell, and the declared blast radius
+(`Light: <blast radius> · touches <classes>`) must be corroborated by the plan: either it equals a
+`Target` cell in Ranked targets exactly (a directory works this way), or it is a file path the plan
+cites somewhere as `path:line`. Write the path without `:line` in the declaration; the check compares
+it with the part of each citation before the colon.
 
 ## Not testing, on purpose
 
@@ -114,6 +120,11 @@ knows, the command must fail there, the file is put back and its bytes verified,
 A row whose command survives the edit, or whose restored half fails, is refused; outside `--sandbox` there is no
 copy to edit and put back, so the claim is refused rather than admitted unchecked. `Mutation or negative control →
 result` stays prose for a human to read; `Mutate` is the part a binary can act on and undo.
+
+Every row carries exactly one cell per header column (13 here); an empty cell stays as `| |`. A literal
+`|` inside a cell is written `\|`, or it splits the cell and `plan check` refuses the row. Add the ledger
+row before `rdd-plus plan add-finding` names it: that command writes the Findings row only and refuses
+an Evidence id the ledger does not carry.
 
 | Id | Claim | Executed | Admit | Inputs and parameters | Observed | Digest | Normalize | Mode | Mutate | Mutation or negative control → result | Reproduction | Label (`observado` / `razonado`, literal) |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
