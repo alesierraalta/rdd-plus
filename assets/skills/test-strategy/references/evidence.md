@@ -75,7 +75,13 @@ findings. This contract applies to every testing skill routed by `test-strategy`
     instead of admitted unchecked. Two limits are stated rather than hidden: the copy carries what git knows and
     no `.git`, and only the file the edit names is restored, so a row whose command needs repository metadata or
     an ignored input fails its own replay — a refusal, never an admission. `Mutation or negative control →
-    result` stays prose for a human; `Mutate` is the part a binary can act on, and undo.
+    result` stays prose for a human; `Mutate` is the part a binary can act on, and undo. One cell may carry a
+    survey: edits separated by ` ;; `, every one checked before any runs and each replayed on its own copy. An
+    edit prefixed `~ ` is declared equivalent, so the command must stay green under it; one that goes red is
+    refused (`mutation-not-equivalent`), because a test told it apart. The first edit that breaks its
+    declaration refuses the row and is named by its position (`edit 2 of 3`); an admitted survey reports
+    `N killed, M equivalent`, and the restored half of its last replay is the second run. An edit whose own text
+    contains ` ;; ` cannot be expressed in a cell.
 11. **An expected failure is declared, not smuggled.** The optional `Expect` cell is empty or `pass` (the
     command must exit zero, as before) or `fail` (a FAIL_TO_PASS test observed red). Any other value is refused
     (`expect-invalid`) before anything runs, and so is `fail` beside a `Mutate` cell (`expect-with-mutate`),

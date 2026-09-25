@@ -144,7 +144,13 @@ func reportVerdicts(results []evidence.RowResult, deps Deps) (admitted, wouldRun
 		switch r.Verdict {
 		case evidence.VerdictAdmitted:
 			admitted++
-			fmt.Fprintf(deps.Out, "%s  %s  %s  %s  %d lines\n", r.ID, r.Verdict, r.Command, r.Digest, r.Lines)
+			// An admitted row carries a sentence only when it earned more than its pin, such as a mutation survey's
+			// tally, so a row that did not keeps the line it always printed.
+			if r.Detail != "" {
+				fmt.Fprintf(deps.Out, "%s  %s  %s  %s  %d lines  %s\n", r.ID, r.Verdict, r.Command, r.Digest, r.Lines, r.Detail)
+			} else {
+				fmt.Fprintf(deps.Out, "%s  %s  %s  %s  %d lines\n", r.ID, r.Verdict, r.Command, r.Digest, r.Lines)
+			}
 		case evidence.VerdictWouldRun:
 			wouldRun++
 			fmt.Fprintf(deps.Out, "%s  %s  %s\n", r.ID, r.Verdict, r.Command)

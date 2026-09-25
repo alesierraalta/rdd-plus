@@ -123,6 +123,13 @@ A row whose command survives the edit, or whose restored half fails, is refused;
 copy to edit and put back, so the claim is refused rather than admitted unchecked. `Mutation or negative control →
 result` stays prose for a human to read; `Mutate` is the part a binary can act on and undo.
 
+A `Mutate` cell may also hold a survey: several edits separated by ` ;; ` (space, two semicolons, space), each
+checked before any runs and each replayed on its own copy. An edit prefixed `~ ` is declared equivalent, so the
+command must stay green under it instead of going red; one that goes red is refused as `mutation-not-equivalent`.
+The first edit that breaks its declaration refuses the row and is named by its position (`edit 2 of 3`), and an
+admitted survey reports its tally (`2 killed, 1 equivalent`). An edit whose own text contains ` ;; ` cannot be
+written in a cell.
+
 `Expect` says which way the command must exit: empty or `pass` for zero, `fail` for a FAIL_TO_PASS test
 observed red. With `fail` only an exit from 1 to 125 qualifies (126, 127 and signals mean the command never
 ran as a test, a timeout or a sandbox refusal keeps its own reason, and a zero exit is refused as
