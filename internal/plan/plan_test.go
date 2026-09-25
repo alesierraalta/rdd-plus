@@ -1042,7 +1042,7 @@ func TestCheckNamesAStatusOutsideTheFindingsVocabulary(t *testing.T) {
 			name:   "a status the vocabulary does not carry",
 			status: "resolved",
 			pin:    "",
-			want:   `line 5: finding F1 status "resolved" is not one of: open, confirmed, fixed, rejected, wontfix`,
+			want:   `line 5: finding F1 status "resolved" is not one of: open, confirmed, fixed, gap-closed, rejected, wontfix`,
 			// The breach is the vocabulary's. An unknown status is neither valid nor read as a settled one
 			// that owes a pinning test, so the row is judged once and on the rule it actually broke.
 			wantNot: "names no pinning test",
@@ -1051,7 +1051,7 @@ func TestCheckNamesAStatusOutsideTheFindingsVocabulary(t *testing.T) {
 			name:   "a row with no status at all",
 			status: "",
 			pin:    "",
-			want:   "line 5: finding F1 has no status: one of open, confirmed, fixed, rejected, wontfix",
+			want:   "line 5: finding F1 has no status: one of open, confirmed, fixed, gap-closed, rejected, wontfix",
 		},
 		{
 			name:   "a documented settled status still owes its pinning test",

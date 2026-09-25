@@ -100,7 +100,7 @@ plan check [--path <path>]
 plan gaps [--run <slug>] [--all] [--path <path>]
 plan upgrade [--run <slug>] [--path <path>]
 plan add-finding --id <id> --location <path:line> --severity <class> --data-safe <yes|no> --evidence <ids>
-           --status <open|confirmed|fixed|rejected|wontfix> [--test <suite :: name>] --verdict-by <who / date>
+           --status <open|confirmed|fixed|gap-closed|rejected|wontfix> [--test <suite :: name>] --verdict-by <who / date>
            --reason <why> [--fingerprint <digest>] [--path <path>]
            (writes one Findings row; refuses a row plan check would reject, and never writes an
             evidence row. A bad value exits 2; a plan that refuses the row exits 1)

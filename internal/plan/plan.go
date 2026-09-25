@@ -52,8 +52,8 @@ var (
 	// extensionless build file (Makefile:3). A bare word:digits stays out, so localhost:8080 is no cite.
 	pathCiteRe  = regexp.MustCompile(`(?:[A-Za-z0-9_./\\-]*\.[A-Za-z][A-Za-z0-9]*|(?:[A-Za-z0-9_./\\-]*/)?\b(?i:Makefile|GNUmakefile|Dockerfile|Containerfile|Jenkinsfile|Justfile|Procfile|Gemfile|Rakefile|Vagrantfile|Brewfile|Tiltfile|Caddyfile)):\d+`)
 	placeholder = regexp.MustCompile(`^(?i)(|-|—|n/?a|none|\(none\)|tbd)$`)
-	// A finding whose verdict asserts the defect is real owes a test that holds it.
-	settledStatus = regexp.MustCompile(`(?i)\b(confirmed|fixed)\b`)
+	// A finding whose verdict settles it (a real defect, or a missing test now added) owes the test that holds it.
+	settledStatus = regexp.MustCompile(`(?i)\b(confirmed|fixed|gap-closed)\b`)
 	// A scoped run declares itself in one plan-header line, `Light: <blast radius> · touches
 	// <classes>`. The declaration is the cheap half of the decision: a binary can read its shape and
 	// whether the plan corroborates the target it names, never whether the change was really bounded.
@@ -61,18 +61,25 @@ var (
 	// start on the previous line would name the wrong line as its home.
 	lightLineRe  = regexp.MustCompile(`^[ \t]*Light:[ \t]*(.*)$`)
 	lightShapeRe = regexp.MustCompile(`^(.+?)[ \t]*·[ \t]*touches[ \t]*(.*)$`)
+
+	baselineFingerprintRe = regexp.MustCompile("^[ \t]*Baseline:.*fingerprint:[ \t]*`([^`]*)`")
+	fingerprintRe         = regexp.MustCompile(`^[0-9a-f]{64}$`)
 )
+
+// unrecordedFingerprints are the Baseline values that visibly say "not recorded yet": the shipped
+// template's placeholder and the token the eval harness substitutes when it scaffolds a fixture plan.
+var unrecordedFingerprints = map[string]bool{"<assets/fingerprint.sh output>": true, "{{FINGERPRINT}}": true}
 
 // findingsStatuses is the Findings status vocabulary the plan documents. It is the membership the
 // checker enforces; FindingsStatusList spells the same list for every message that has to offer it.
 var findingsStatuses = map[string]bool{
-	"open": true, "confirmed": true, "fixed": true, "rejected": true, "wontfix": true,
+	"open": true, "confirmed": true, "fixed": true, "gap-closed": true, "rejected": true, "wontfix": true,
 }
 
 // FindingsStatusList is the closed Findings vocabulary in one string, so the list a reader is shown is
 // the list the checker enforces: a status the vocabulary does not carry (`resolved`) is answered rather
 // than silently read as `open`.
-const FindingsStatusList = "open, confirmed, fixed, rejected, wontfix"
+const FindingsStatusList = "open, confirmed, fixed, gap-closed, rejected, wontfix"
 
 // Check reads a plan and returns everything that breaks the contract, most structural first.
 // Every breach that names a row or a cell carries its file line, so the reader opens the plan at the row
@@ -140,6 +147,22 @@ func CheckDocument(doc string) []string {
 	problems = append(problems, findingProblems(findings, ledgerIDs)...)
 	if lightProblems, declared := lightReport(lines); declared {
 		problems = append(problems, lightProblems...)
+	}
+	return append(problems, baselineProblems(lines)...)
+}
+
+// baselineProblems reads the fingerprint a `Baseline:` line records. Every resume compares the tree
+// against it, so a value fingerprint.sh could not have written (`pending`, a short hash) is refused
+// rather than read as a baseline. An unrecorded placeholder stays legal: it says what it is, and a plan
+// fresh from `plan init` has to pass.
+func baselineProblems(lines []string) []string {
+	var problems []string
+	for i, line := range lines {
+		m := baselineFingerprintRe.FindStringSubmatch(line)
+		if m == nil || unrecordedFingerprints[m[1]] || fingerprintRe.MatchString(m[1]) {
+			continue
+		}
+		problems = append(problems, fmt.Sprintf("line %d: the Baseline fingerprint \"%s\" is not assets/fingerprint.sh output (64 lowercase hex): record the baseline or keep the unrecorded placeholder", i+1, quote(m[1])))
 	}
 	return problems
 }

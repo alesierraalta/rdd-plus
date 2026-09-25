@@ -81,7 +81,9 @@ test and says so in its name. A finding that never got a test stays `open`, reas
 | Id | Finding (path:line, one line) | Severity (consequence class) | Data safe? | Evidence id | Pinning test (suite path :: test name) | Status | Verdict by / date | Reason | Cited-files fingerprint at verdict |
 |---|---|---|---|---|---|---|---|---|---|
 
-Statuses: open · confirmed · fixed · rejected · wontfix.
+Statuses: open · confirmed · fixed · gap-closed · rejected · wontfix.
+`gap-closed` is a behaviour that was correct but untested, now held by the promoted test it names; like
+`confirmed` and `fixed` it owes that test.
 
 ## Evidence ledger
 

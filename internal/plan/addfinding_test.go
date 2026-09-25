@@ -78,7 +78,7 @@ func TestAddFindingRefusesWithoutMovingTheFile(t *testing.T) {
 		usage   bool // the value refusals the CLI maps to exit 2
 	}{
 		{"a status outside the vocabulary", addPlan(), edited(func(f *Finding) { f.Status = "resolved" }),
-			"open, confirmed, fixed, rejected, wontfix", true},
+			"open, confirmed, fixed, gap-closed, rejected, wontfix", true},
 		{"a settled status with no pinning test", addPlan(), edited(func(f *Finding) { f.Status = "confirmed" }),
 			"test", true},
 		{"a location that is not path:line", addPlan(), edited(func(f *Finding) { f.Location = "src/a.js" }),
