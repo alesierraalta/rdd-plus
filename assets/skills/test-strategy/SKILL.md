@@ -134,7 +134,9 @@ module to test, or the diff is confined to one or two files — and it touches n
 below, the run may plan the blast radius instead of the whole app and say so in the plan header:
 `Light: <blast radius> · touches <classes>`. Skipped layers keep their row with `n/a` and a reason
 in the `Scope` cell; the "Not testing, on purpose" table names what a full run would have added;
-and inside the scope nothing is reduced ([references/ordering.md](references/ordering.md)).
+and inside the scope nothing is reduced ([references/ordering.md](references/ordering.md)). The blast
+radius must equal a Ranked-targets `Target` cell exactly, or be a file path (no `:line`) the plan cites
+as `path:line`; anything else fails `plan check`.
 
 Refused, and planned in full, when the trigger is unbounded or touches authentication or
 authorization; secrets, credentials or PII; persistence, schema or migrations; money, rounding or
