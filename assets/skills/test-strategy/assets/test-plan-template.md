@@ -124,8 +124,9 @@ copy to edit and put back, so the claim is refused rather than admitted unchecke
 result` stays prose for a human to read; `Mutate` is the part a binary can act on and undo.
 
 `Expect` says which way the command must exit: empty or `pass` for zero, `fail` for a FAIL_TO_PASS test
-observed red. With `fail` only a plain non-zero exit qualifies (a timeout or a sandbox refusal keeps its own
-reason, and a zero exit is refused as `expected-failure-passed`), and the output is pinned exactly as a passing
+observed red. With `fail` only an exit from 1 to 125 qualifies (126, 127 and signals mean the command never
+ran as a test, a timeout or a sandbox refusal keeps its own reason, and a zero exit is refused as
+`expected-failure-passed`), and the output is pinned exactly as a passing
 command's is, so it should show the failing test's name: a compile error must not be able to stand in for the red
 test. Prefer it over `! cmd`, which also passes on a compile failure. `Expect` beside `Mutate` is refused, because
 a mutation already defines its own red and green runs.

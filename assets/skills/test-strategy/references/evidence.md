@@ -79,7 +79,7 @@ findings. This contract applies to every testing skill routed by `test-strategy`
 11. **An expected failure is declared, not smuggled.** The optional `Expect` cell is empty or `pass` (the
     command must exit zero, as before) or `fail` (a FAIL_TO_PASS test observed red). Any other value is refused
     (`expect-invalid`) before anything runs, and so is `fail` beside a `Mutate` cell (`expect-with-mutate`),
-    because a mutation already defines its own red and green runs. With `fail`, only a plain non-zero exit is the
+    because a mutation already defines its own red and green runs. With `fail`, only an exit from 1 to 125 is the
     observation, on both runs: a zero exit is refused (`expected-failure-passed`), and a timeout or a sandbox
     refusal keeps its own reason. The output is pinned like any other, so it must name the failing test: a
     compile error must not be able to stand in for the red test. Prefer it over `! cmd`, which passes on a

@@ -1059,6 +1059,10 @@ func TestAdmitPinsAnExpectedRedCommand(t *testing.T) {
 		{name: "a runner refusal keeps its reason", errs: []error{Refusal{Reason: ReasonNoNetwork, Detail: "no network"}}, reason: ReasonNoNetwork},
 		{name: "a timeout keeps its reason", errs: []error{fmt.Errorf("run: %w", context.DeadlineExceeded)}, reason: ReasonTimeout},
 		{name: "a command that never ran is not a red run", errs: []error{errors.New("exec: sh: not found")}, reason: ReasonCommandFailed},
+		{name: "a shell that could not find the command is not a red run", errs: []error{exitStatus(127)}, reason: ReasonCommandFailed},
+		{name: "a shell that could not execute the command is not a red run", errs: []error{exitStatus(126)}, reason: ReasonCommandFailed},
+		{name: "a command killed by a signal is not a red run", errs: []error{exitStatus(137)}, reason: ReasonCommandFailed},
+		{name: "a test runner's usage exit is still a red run", errs: []error{exitStatus(2)}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

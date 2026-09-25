@@ -375,7 +375,9 @@ func admitRow(row plan.LedgerRow, opts Options, deps Deps, record bool) RowResul
 		}
 		var exit interface{ ExitCode() int }
 		var refusal Refusal
-		if !errors.As(err, &refusal) && !errors.Is(err, context.DeadlineExceeded) && errors.As(err, &exit) && exit.ExitCode() > 0 {
+		// 126 and 127 are the shell saying the command could not be executed or found, and 128 and above a
+		// signal: none of them is the test failing, so a typo in the Admit cell is never pinned as a red run.
+		if !errors.As(err, &refusal) && !errors.Is(err, context.DeadlineExceeded) && errors.As(err, &exit) && exit.ExitCode() > 0 && exit.ExitCode() < 126 {
 			return result, true
 		}
 		return runFailure(err, suffix), false
