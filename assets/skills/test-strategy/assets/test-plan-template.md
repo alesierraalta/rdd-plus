@@ -1,7 +1,7 @@
 # Test plan — <app / module>
 
 Created: <date> · Last updated: <date> · Plan path: `docs/testing/test-plan.md` · Sandbox: <worktree / container / scratchpad> · Findings precision: <confirmed+fixed> / <rows with a verdict>
-Baseline: `<git rev>` · untracked files: <count> · fingerprint: `<assets/fingerprint.sh output>` (a change is anything that differs from this fingerprint, not raw `git status`)
+Baseline: `<git rev>` · untracked files: <count> · fingerprint: `<assets/fingerprint.sh output>` (a change is anything that differs from this fingerprint, not raw `git status`; the plan itself is excluded)
 
 Tables are the format: prose never replaces a row.
 A finding is a row whose cell opens with `path:line` and one line of finding.
