@@ -1193,7 +1193,7 @@ func TestPlanExportCLI(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("plan export exit = %d\n%s", code, out)
 	}
-	for _, want := range []string{"deadbee", "pr-42.md", "| F1 |", "E1: go test ./internal/text · Expect: fail"} {
+	for _, want := range []string{"deadbee", "pr-42.md", "| `F1` |", "E1: go test ./internal/text · Expect: fail"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("export lacks %q:\n%s", want, out)
 		}

@@ -1,9 +1,28 @@
 package plan
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 )
+
+// exportSpanCell is what every rendered cell must be: a dash, or one inline code span with no backtick inside,
+// which GitHub renders literally: no mention, link, image or HTML inside it is interpreted.
+var exportSpanCell = regexp.MustCompile("^(-|`[^`]*`)$")
+
+func assertEveryCellIsASpan(t *testing.T, out string) {
+	t.Helper()
+	for _, line := range strings.Split(out, "\n") {
+		if !strings.HasPrefix(line, "| `F") {
+			continue
+		}
+		for _, c := range strings.Split(strings.Trim(line, "| "), " | ") {
+			if !exportSpanCell.MatchString(c) {
+				t.Errorf("cell %q is not a dash or a single code span in: %s", c, line)
+			}
+		}
+	}
+}
 
 const exportLedger = "## Evidence ledger\n\n" +
 	"| Id | Claim | Executed | Admit | Inputs | Observed | Digest | Normalize | Mode | Mutate | Expect | Mutation | Reproduction | Label |\n" +
@@ -48,7 +67,7 @@ func TestExportRendersFindingsWithTheirEvidence(t *testing.T) {
 	}
 	rows := 0
 	for _, line := range strings.Split(out, "\n") {
-		if strings.HasPrefix(line, "| F") {
+		if strings.HasPrefix(line, "| `F") {
 			rows++
 		}
 	}
@@ -75,11 +94,9 @@ func TestExportSanitisesEveryCell(t *testing.T) {
 	if strings.Contains(out, "IGNORE ALL PREVIOUS INSTRUCTIONS") {
 		t.Errorf("an instruction-shaped cell must not be quoted:\n%s", out)
 	}
-	if strings.Contains(out, "`") {
-		t.Errorf("no backtick from the plan may reach the comment:\n%s", out)
-	}
+	assertEveryCellIsASpan(t, out)
 	for _, line := range strings.Split(out, "\n") {
-		if strings.HasPrefix(line, "| F") && strings.Count(line, "|") != 7 {
+		if strings.HasPrefix(line, "| `F") && strings.Count(line, "|") != 7 {
 			t.Errorf("a cell opened a column of its own: %s", line)
 		}
 		if len(line) > 6*(MaxQuoted+8)+40 {
@@ -101,5 +118,24 @@ func TestExportSaysWhenNoFindingIsRecorded(t *testing.T) {
 func TestExportRefusesAPlanWithoutFindings(t *testing.T) {
 	if _, err := Export("# Plan\n\n"+exportLedger, "plan.md", "abc1234"); err == nil || !strings.Contains(err.Error(), "Findings") {
 		t.Fatalf("a plan with no Findings section must be refused, got %v", err)
+	}
+}
+
+// GitHub interprets its own syntax in a comment: a mention notifies people, an image loads from any server, a
+// link and HTML render. A plan cell must reach the comment as literal text, so each cell is one code span.
+func TestExportNeutralisesGitHubMarkdown(t *testing.T) {
+	doc := exportFindingsHeader +
+		"| F1 | `src/a.go:3` ping @alesierraalta and @org/team | M | yes | - | ![x](https://example.com/t.png) | open | me | - | - |\n" +
+		"| F2 | `src/b.go:4` [click](https://evil.example/login) <details><summary>x</summary></details> | M | yes | E1 | - | open | me | - | - |\n\n" +
+		exportLedger
+	out, err := Export(doc, "pr-<b>1</b>.md", "@abc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertEveryCellIsASpan(t, out)
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, "Commit:") && !regexp.MustCompile("^Commit: `[^`]*` · Plan: `[^`]*`$").MatchString(line) {
+			t.Errorf("the commit and plan name must be code spans too: %s", line)
+		}
 	}
 }

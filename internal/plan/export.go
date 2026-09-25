@@ -31,7 +31,7 @@ func Export(doc, planName, commit string) (string, error) {
 	}
 	var b strings.Builder
 	b.WriteString("## rdd-plus findings\n\n")
-	fmt.Fprintf(&b, "Commit: %s · Plan: %s\n\n", quote(commit), quote(planName))
+	fmt.Fprintf(&b, "Commit: %s · Plan: %s\n\n", span(quote(commit)), span(quote(planName)))
 	if len(scan.rows) == 0 {
 		b.WriteString("No findings recorded.\n")
 		return b.String(), nil
@@ -63,7 +63,15 @@ func exportCell(s string) string {
 	if placeholder.MatchString(s) {
 		return "-"
 	}
-	return quote(s)
+	return span(quote(s))
+}
+
+// span renders already sanitised text as one inline code span. GitHub interprets its own syntax in a comment:
+// a mention notifies people, an image loads from any server, a link and HTML render. Inside a code span none of
+// that happens, and the text cannot close the span because the sanitiser has already turned every backtick into
+// a quote.
+func span(sanitised string) string {
+	return "`" + sanitised + "`"
 }
 
 // exportEvidence joins each evidence id a finding cites to what re-observes it. Each part is sanitised on its
@@ -97,5 +105,5 @@ func exportEvidence(ev string, ledger map[string]LedgerRow) string {
 		}
 		parts = append(parts, part)
 	}
-	return strings.Join(parts, "; ")
+	return span(strings.Join(parts, "; "))
 }
