@@ -34,6 +34,10 @@ func TestDecode(t *testing.T) {
 		{name: "split arrow down", in: []byte("\x1b"), want: nil, next: []byte("[B"), nextWant: []key{keyDown}},
 		{name: "split after bracket", in: []byte("\x1b["), want: nil, next: []byte("A"), nextWant: []key{keyUp}},
 		{name: "split esc then byte", in: []byte("\x1b"), want: nil, next: []byte("x"), nextWant: []key{keyEsc, keyUnknown}},
+		{name: "application up arrow", in: []byte("\x1bOA"), want: []key{keyUp}},
+		{name: "page up", in: []byte("\x1b[5~"), want: []key{keyPgUp}},
+		{name: "page down", in: []byte("\x1b[6~"), want: []key{keyPgDn}},
+		{name: "split page down", in: []byte("\x1b[6"), want: nil, next: []byte("~"), nextWant: []key{keyPgDn}},
 		{name: "pending cleared", in: []byte("\x1b[A"), want: []key{keyUp}, next: []byte("q"), nextWant: []key{keyQ}},
 	}
 	for _, tt := range cases {

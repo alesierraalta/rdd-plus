@@ -36,10 +36,10 @@ func TestRenderStatus(t *testing.T) {
 		"Installed version: 1.4.0\n" +
 		"Available version: unknown (no update check yet)\n" +
 		"\n" +
-		"ID\tTitle\tState\n" +
-		"feedback\tFeedback\tdisabled\n" +
+		"ID        Title     State\n" +
+		"feedback  Feedback  disabled\n" +
 		"\n" +
-		"esc back | q quit"
+		"up/down scroll | pgup/pgdn page | esc back | q quit"
 	if got := renderStatus(fixture, nil); got != want {
 		t.Errorf("renderStatus ok =\n%q\nwant\n%q", got, want)
 	}
@@ -48,7 +48,7 @@ func TestRenderStatus(t *testing.T) {
 		"\n" +
 		"error: status unavailable\n" +
 		"\n" +
-		"esc back | q quit"
+		"up/down scroll | pgup/pgdn page | esc back | q quit"
 	if got := renderStatus(StatusView{}, errors.New("status unavailable")); got != wantErr {
 		t.Errorf("renderStatus err =\n%q\nwant\n%q", got, wantErr)
 	}
@@ -61,8 +61,8 @@ func TestRenderFeatures(t *testing.T) {
 	}
 	want := "rdd-plus tui: features\n" +
 		"\n" +
-		"> feedback\tFeedback\tdisabled\n" +
-		"  logging\tLogging\tenabled\n" +
+		"> feedback  Feedback  disabled\n" +
+		"  logging   Logging   enabled\n" +
 		"\n" +
 		"space toggle | enter preview | esc back | q quit"
 	if got := renderFeatures(rows, 0, ""); got != want {
@@ -71,8 +71,8 @@ func TestRenderFeatures(t *testing.T) {
 
 	wantDetail := "rdd-plus tui: features\n" +
 		"\n" +
-		"  feedback\tFeedback\tdisabled\n" +
-		"> logging\tLogging\tenabled\n" +
+		"  feedback  Feedback  disabled\n" +
+		"> logging   Logging   enabled\n" +
 		"\n" +
 		"Preview text.\n" +
 		"\n" +
@@ -88,7 +88,7 @@ func TestRenderPlan(t *testing.T) {
 		"line1\n" +
 		"line2\n" +
 		"\n" +
-		"esc back | q quit"
+		"up/down scroll | pgup/pgdn page | esc back | q quit"
 	if got := renderPlan("line1\nline2\n", nil); got != want {
 		t.Errorf("renderPlan ok =\n%q\nwant\n%q", got, want)
 	}
@@ -97,7 +97,7 @@ func TestRenderPlan(t *testing.T) {
 		"\n" +
 		"error: plan failed\n" +
 		"\n" +
-		"esc back | q quit"
+		"up/down scroll | pgup/pgdn page | esc back | q quit"
 	if got := renderPlan("", errors.New("plan failed")); got != wantErr {
 		t.Errorf("renderPlan err =\n%q\nwant\n%q", got, wantErr)
 	}

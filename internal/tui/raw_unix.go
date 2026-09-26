@@ -3,6 +3,7 @@
 package tui
 
 import (
+	"os"
 	"syscall"
 	"unsafe"
 )
@@ -26,4 +27,14 @@ func ioctlTermios(fd uintptr, req uintptr, t *syscall.Termios) error {
 		return errno
 	}
 	return nil
+}
+
+// termSize reports the terminal's rows and columns, or zeros when f is not a terminal.
+func termSize(f *os.File) (rows, cols int) {
+	var ws struct{ Row, Col, X, Y uint16 }
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), uintptr(syscall.TIOCGWINSZ), uintptr(unsafe.Pointer(&ws)))
+	if errno != 0 {
+		return 0, 0
+	}
+	return int(ws.Row), int(ws.Col)
 }

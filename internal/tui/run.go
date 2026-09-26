@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 )
 
 // Deps is what the CLI injects; tests fake it. The tui package never imports cmd.
@@ -49,23 +50,33 @@ const (
 )
 
 type app struct {
-	deps        Deps
-	out         io.Writer
-	view        view
-	menuSel     int
-	featureSel  int
-	status      StatusView
-	statusErr   error
-	rows        []FeatureRow
-	detail      string
-	planReport  string
-	planErr     error
-	prevLineCnt int
+	deps       Deps
+	out        io.Writer
+	view       view
+	menuSel    int
+	featureSel int
+	status     StatusView
+	statusErr  error
+	rows       []FeatureRow
+	detail     string
+	planReport string
+	planErr    error
+	scroll     int // first body line shown when a frame is taller than the terminal
+	page       int // body lines that fit on screen at the last redraw
+}
+
+// escWait is how long a held partial escape sequence waits for its continuation before it is
+// flushed; a lone Esc press arrives alone, while an arrow's bytes arrive together.
+const escWait = 50 * time.Millisecond
+
+type readResult struct {
+	b   []byte
+	err error
 }
 
 // Run drives the menu until quit. It enters raw mode only when in and out are terminal files
-// (per-OS helpers; anything else — bytes.Buffer in tests, pipes — skips it), hides the cursor
-// for the loop, and restores the terminal on every exit path via defer.
+// (per-OS helpers; anything else — bytes.Buffer in tests, pipes — skips it), draws on the
+// alternate screen with the cursor hidden, and restores the terminal on every exit path via defer.
 func Run(in io.Reader, out io.Writer, deps Deps) error {
 	restore, err := beginRaw(in, out)
 	if err != nil {
@@ -74,22 +85,35 @@ func Run(in io.Reader, out io.Writer, deps Deps) error {
 	if restore != nil {
 		defer func() { _ = restore() }()
 	}
-	if _, err := io.WriteString(out, "\x1b[?25l"); err != nil {
+	if _, err := io.WriteString(out, "\x1b[?1049h\x1b[?25l"); err != nil {
 		return err
 	}
-	defer func() { _, _ = io.WriteString(out, "\x1b[?25h") }()
+	defer func() { _, _ = io.WriteString(out, "\x1b[?25h\x1b[?1049l") }()
 
 	a := &app{deps: deps, out: out}
 	if err := a.redraw(); err != nil {
 		return err
 	}
-	buf := make([]byte, 256)
+	done := make(chan struct{})
+	defer close(done)
+	reads := readLoop(in, done)
 	var dec decoder
 	for {
-		n, readErr := in.Read(buf)
-		keys := dec.decode(buf[:n])
-		if readErr != nil {
-			keys = append(keys, dec.flush()...)
+		var wait <-chan time.Time
+		if dec.holding() {
+			wait = time.After(escWait)
+		}
+		var keys []key
+		var readErr error
+		select {
+		case r := <-reads:
+			readErr = r.err
+			keys = dec.decode(r.b)
+			if readErr != nil {
+				keys = append(keys, dec.flush()...)
+			}
+		case <-wait:
+			keys = dec.flush()
 		}
 		for _, k := range keys {
 			if a.handle(k) {
@@ -103,6 +127,27 @@ func Run(in io.Reader, out io.Writer, deps Deps) error {
 			return readErr
 		}
 	}
+}
+
+// readLoop reads in on its own goroutine so the loop can time out a held escape sequence; it
+// stops after the first read error or once Run returns.
+func readLoop(in io.Reader, done <-chan struct{}) <-chan readResult {
+	reads := make(chan readResult)
+	go func() {
+		for {
+			buf := make([]byte, 256)
+			n, err := in.Read(buf)
+			select {
+			case reads <- readResult{b: buf[:n], err: err}:
+			case <-done:
+				return
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+	return reads
 }
 
 // beginRaw enters raw mode when both streams are terminal files; plain readers and non-terminal
@@ -138,10 +183,25 @@ func (a *app) handle(k key) bool {
 	case viewFeatures:
 		return a.handleFeatures(k)
 	default:
-		if k == keyEsc {
-			a.view = viewMenu
-		}
+		a.handleScroll(k)
 		return false
+	}
+}
+
+// handleScroll moves the read-only views (status, sync plan) through a body taller than the
+// screen; redraw clamps the offset to what the frame actually has.
+func (a *app) handleScroll(k key) {
+	switch k {
+	case keyEsc:
+		a.view = viewMenu
+	case keyUp:
+		a.scroll--
+	case keyDown:
+		a.scroll++
+	case keyPgUp:
+		a.scroll -= max(a.page, 1)
+	case keyPgDn, keySpace:
+		a.scroll += max(a.page, 1)
 	}
 }
 
@@ -158,6 +218,7 @@ func (a *app) handleMenu(k key) bool {
 	case keyEsc:
 		return true
 	case keyEnter:
+		a.scroll = 0
 		switch a.menuSel {
 		case 0:
 			a.view = viewStatus
@@ -166,6 +227,8 @@ func (a *app) handleMenu(k key) bool {
 			a.enterFeatures()
 		case 2:
 			a.view = viewPlan
+			// The dry run walks every managed file; acknowledge the key before it blocks.
+			_ = writeFrame(a.out, []string{planTitle, "", "computing the sync plan..."})
 			a.planReport, a.planErr = a.deps.SyncPlan()
 		default:
 			return true
@@ -238,34 +301,61 @@ func (a *app) frame() string {
 }
 
 func (a *app) redraw() error {
-	return writeFrame(a.out, a.frame(), &a.prevLineCnt)
+	rows, cols := 0, 0
+	if f, ok := a.out.(*os.File); ok {
+		rows, cols = termSize(f)
+	}
+	lines := strings.Split(a.frame(), "\n")
+	lines, a.scroll, a.page = viewport(lines, a.scroll, rows)
+	return writeFrame(a.out, clip(lines, cols))
 }
 
-// writeFrame repaints the region the previous frame occupied: cursor-up to its first line,
-// clear each rewritten line, then clear any lines a taller previous frame left behind.
-func writeFrame(out io.Writer, frame string, prev *int) error {
-	lines := strings.Split(frame, "\n")
-	var b strings.Builder
-	if *prev > 1 {
-		fmt.Fprintf(&b, "\x1b[%dA", *prev-1)
+// viewport keeps a frame within rows terminal lines: the last line (the key help) stays pinned
+// and the body above it shows from offset scroll, with the visible range appended to the help.
+// rows <= 0 means the size is unknown and the frame is returned whole. It returns the lines to
+// draw, the clamped offset, and how many body lines fit.
+func viewport(lines []string, scroll, rows int) ([]string, int, int) {
+	if rows <= 0 || len(lines) <= rows {
+		return lines, 0, len(lines)
 	}
-	if *prev > 0 {
-		b.WriteString("\r")
+	body, help := lines[:len(lines)-1], lines[len(lines)-1]
+	page := max(rows-1, 1)
+	scroll = min(max(scroll, 0), len(body)-page)
+	shown := append(append([]string(nil), body[scroll:scroll+page]...),
+		fmt.Sprintf("%s | lines %d-%d of %d", help, scroll+1, scroll+page, len(body)))
+	return shown, scroll, page
+}
+
+// clip cuts each line to cols runes so a long line never wraps and pushes the frame off screen;
+// cols <= 0 means the width is unknown.
+func clip(lines []string, cols int) []string {
+	if cols <= 0 {
+		return lines
 	}
+	out := make([]string, len(lines))
 	for i, line := range lines {
-		b.WriteString("\x1b[K")
+		if r := []rune(line); len(r) >= cols {
+			line = string(r[:cols-1])
+		}
+		out[i] = line
+	}
+	return out
+}
+
+// writeFrame repaints the whole screen from the top-left corner. Raw mode turns off output
+// post-processing, so every line break is an explicit CRLF: a bare LF would only move down and
+// draw each line further right than the last.
+func writeFrame(out io.Writer, lines []string) error {
+	var b strings.Builder
+	b.WriteString("\x1b[H")
+	for i, line := range lines {
+		if i > 0 {
+			b.WriteString("\r\n")
+		}
 		b.WriteString(line)
-		if i < len(lines)-1 {
-			b.WriteString("\n")
-		}
+		b.WriteString("\x1b[K")
 	}
-	if *prev > len(lines) {
-		for i := len(lines); i < *prev; i++ {
-			b.WriteString("\n\x1b[K")
-		}
-		fmt.Fprintf(&b, "\x1b[%dA", *prev-len(lines))
-	}
-	*prev = len(lines)
+	b.WriteString("\x1b[J")
 	_, err := io.WriteString(out, b.String())
 	return err
 }
