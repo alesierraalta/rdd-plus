@@ -4,8 +4,8 @@ description: "Trigger: haz el testing, testea esto, prueba esto, test this, test
 license: Apache-2.0
 metadata:
   author: "alesierraalta"
-  version: "0.3.16"
-  requires_rdd_plus: "0.3.13"
+  version: "0.3.17"
+  requires_rdd_plus: "0.3.14"
   scope: [common]
   auto_invoke: "Any request to test something: infer scope and mode from repo state, build or resume the persisted plan, execute it through specialized testing skills"
 ---
@@ -23,12 +23,12 @@ This skill decides WHICH targets and routes; siblings do the work.
 
 ## Tooling
 
-This skill is written for `rdd-plus 0.3.13`, and `rdd-plus version` prints the build present.
+This skill is written for `rdd-plus 0.3.14`, and `rdd-plus version` prints the build present.
 Install it from the repository with `make build`, which writes `bin/rdd-plus`; put that on `PATH`,
 or use `go install github.com/alesierraalta/rdd-plus/cmd/rdd-plus@latest` once the module is
 published. Without the binary the run continues on documented fallbacks: `plan init` is replaced
 by copying [assets/test-plan-template.md](assets/test-plan-template.md) (rule 12); `plan check` by
-applying its checks by hand, as aligned with test-strategy 0.3.16 — the Findings section exists and is a
+applying its checks by hand, as aligned with test-strategy 0.3.17 — the Findings section exists and is a
 table, and a finding is a row carrying `path:line` and an evidence id that exists, with no finding or
 evidence id repeated and no `razonado` row inside the ledger; settled rows name a pinning test;
 statuses stay inside the closed vocabulary; a prose line closes a table, a fenced block is
