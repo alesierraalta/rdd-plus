@@ -16,12 +16,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alesierraalta/rdd-plus/internal/assets"
-	"github.com/alesierraalta/rdd-plus/internal/buildinfo"
-	"github.com/alesierraalta/rdd-plus/internal/hookcmd"
-	"github.com/alesierraalta/rdd-plus/internal/manifest"
-	"github.com/alesierraalta/rdd-plus/internal/skilltree"
-	"github.com/alesierraalta/rdd-plus/internal/state"
+	"github.com/alesierraalta/tpp/internal/assets"
+	"github.com/alesierraalta/tpp/internal/buildinfo"
+	"github.com/alesierraalta/tpp/internal/hookcmd"
+	"github.com/alesierraalta/tpp/internal/manifest"
+	"github.com/alesierraalta/tpp/internal/skilltree"
+	"github.com/alesierraalta/tpp/internal/state"
 )
 
 // Options controls a sync run.
@@ -137,7 +137,7 @@ func (r Report) String() string {
 				fmt.Fprintf(&b, "%sorphan: %s (not removed)\n", prefix, path)
 			}
 			if len(host.Foreign) > 0 {
-				fmt.Fprintf(&b, "%sskip-user: %d files not managed by rdd-plus (left untouched)\n", prefix, len(host.Foreign))
+				fmt.Fprintf(&b, "%sskip-user: %d files not managed by tpp (left untouched)\n", prefix, len(host.Foreign))
 			}
 			for _, h := range host.RemovedHooks {
 				fmt.Fprintf(&b, "%sremoved previous gate hook: %s\n", prefix, h)
@@ -610,7 +610,7 @@ func payloadMode(source string) os.FileMode {
 }
 
 // wireHook makes settings carry exactly one gate hook: previous gate entries (the Node hook,
-// the pre-repo binary, or an older rdd-plus or tpp path) are dropped, and the desired command is added
+// the pre-repo binary, or an older tpp or tpp path) are dropped, and the desired command is added
 // only when absent. It returns whether settings changed and which commands were removed.
 func wireHook(settings map[string]any, command string) (bool, []string) {
 	hooks, _ := settings["hooks"].(map[string]any)
@@ -636,7 +636,7 @@ func wireHook(settings map[string]any, command string) (bool, []string) {
 	return true, removed
 }
 
-// unwireHook drops every rdd-plus gate command from Stop and leaves every other hook alone; it
+// unwireHook drops every tpp gate command from Stop and leaves every other hook alone; it
 // answers whether settings changed and which commands it removed.
 func unwireHook(settings map[string]any) (bool, []string) {
 	changed, removed, _ := filterStopGates(settings, func(string) bool { return false })

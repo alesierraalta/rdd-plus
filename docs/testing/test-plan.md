@@ -1,4 +1,4 @@
-# Test plan — rdd-plus
+# Test plan — tpp
 
 Created: 2026-09-09 · Last updated: 2026-09-22 · Plan path: `docs/testing/test-plan.md` · Sandbox: `t.TempDir()` repositories and temp config dirs under `/tmp`, created and removed by the suites · Light: comment-minimality and contribution-boundary premises · touches comments, test suite layout
 Baseline: `initial working tree, no commits` · untracked files: 122 · fingerprint: `44b3914aa4c1db70c6de01824eabd20d783e3a824942069b70bdf31c1410014d` (`assets/skills/test-strategy/assets/fingerprint.sh --root .`)
@@ -10,7 +10,7 @@ Inferred: new repository, no plan; whole-project PLAN then EXECUTE, same run. Th
 
 | Surface | Entry points | Owner module | Notes |
 |---|---|---|---|
-| CLI | `rdd-plus gate\|sync\|doctor\|version`, `--config-dir`, `--dry-run`, `--json` | `cmd/rdd-plus/main.go` | exit 2 on no/unknown command; no test files of its own yet |
+| CLI | `tpp gate\|sync\|doctor\|version`, `--config-dir`, `--dry-run`, `--json` | `cmd/tpp/main.go` | exit 2 on no/unknown command; no test files of its own yet |
 | Gate (Stop hook) | stdin JSON → decision → telemetry log → stdout | `internal/gate/` | moved from `~/.claude/hooks/testing-gate/`; `Decide(Input, Deps)` with injected git, stat, transcript, clock |
 | Sync | embedded skills → `<config>/skills/<name>/`; Stop hook merged into `<config>/settings.json` | `internal/sync/` | backs up a differing existing skill dir; removes pre-repo gate entries; refuses invalid settings JSON |
 | Doctor | installed skills, hook wiring, PATH capabilities, degradation notes | `internal/doctor/` | exit 1 when git, a skill, or the hook is missing |
@@ -34,7 +34,7 @@ Rows are never removed by budget; budget changes order and status only.
 | 9. Benchmark dataset: 15 cases / 27 planted defects, every suite green with the defect present, every trigger reproduces the wrong output | the number every future comparison rests on | new | silently wrong answer (a defect that does not reproduce inflates recall for free) | E8 (my re-execution of 6 triggers + all 15 suites), E9 (dry-run through the runner) | process | L2 | `exploit-testing` | Probe | done | |
 | 10. Bench runner and scorer (`bench run\|score\|history`): scaffold never copies the key, suite must be green, scorer matches by file and line or keyword, history is append-only | every benchmark number | new | silently wrong answer (a lenient scorer rewards prose) | unit 20 tests incl. wrong-file and placeholder negatives; E9; E49 (the baseline reading, on the corpus the digest names) | unit + process | L2 | `exploit-testing` | Probe | done | |
 | 8. `evidence verify` subcommand: re-execute a ledger row's command, compare the observed digest, re-apply the declared mutation and require red | the falsifiability of every finding | — | silently wrong answer | E28 (a pin recorded in sandbox and re-checked, with the mutated half required to go red) and the evidence, replay and plan suites; the promise is served by `plan admit --execute [--sandbox]`, not by a command of its own | unit + process | L3 | `exploit-testing` | Probe | done | |
-| 11. Plan diagnostics tell the truth about what was read | `internal/plan/plan.go` (Check, table, lightReport) + `internal/plan/gaps.go` (GapsIn, Report) + `cmd/rdd-plus/main.go` (usage) + the plan rows of this run | 3 past fixes on the same contract (F15, F18, F23) | silently wrong answer (a plan the checker cannot read reports as compliant: an unrecognized status silently stops owing a pinning test, and a blank line inside a table drops every row after it) | E25, E30, E33-E41 | contract of the deterministic checker, over real plan files | L4 (+ L5: the same write applied twice) | `real-run-validation` (the CLI against shipped plans) + `no-excess-tests` (promotion) | probe | done | |
+| 11. Plan diagnostics tell the truth about what was read | `internal/plan/plan.go` (Check, table, lightReport) + `internal/plan/gaps.go` (GapsIn, Report) + `cmd/tpp/main.go` (usage) + the plan rows of this run | 3 past fixes on the same contract (F15, F18, F23) | silently wrong answer (a plan the checker cannot read reports as compliant: an unrecognized status silently stops owing a pinning test, and a blank line inside a table drops every row after it) | E25, E30, E33-E41 | contract of the deterministic checker, over real plan files | L4 (+ L5: the same write applied twice) | `real-run-validation` (the CLI against shipped plans) + `no-excess-tests` (promotion) | probe | done | |
 | 12. Concurrent plan row writes preserve every finding | `internal/plan/addfinding.go` and `writePlan`; multiple native processes share one plan | new (post-review probe) | silently wrong answer (four success messages left one of four rows) | E42, E44, E46 | process + filesystem | L5 (concurrent writes and replay) | `runtime-reliability-testing` + `database-persistence-testing` | probe | done | |
 | 13. ###-shaped table interruptions are never silent | `internal/plan/plan.go` `scanTable` and `sectionRegion`; Findings, Ranked targets and Layer matrix | new (post-review probe) | silently wrong answer (a row after `###` is skipped and `plan check` says `well formed`) | E43, E45, E46 | parser seam | L4 (hostile Markdown) | `real-run-validation` + `exploit-testing` | probe | done | |
 
@@ -42,10 +42,10 @@ Rows are never removed by budget; budget changes order and status only.
 
 | Journey | Start command | Data setup | Sample requests | Expected observable |
 |---|---|---|---|---|
-| Install into a fresh config | `bin/rdd-plus sync --config-dir <tmp>` then `bin/rdd-plus doctor --config-dir <tmp>` | empty temp dir, optionally a copy of a real `settings.json` | `--dry-run` first | doctor prints 12 skills ok, `Stop gate wired`, capabilities, `verdict: healthy`, exit 0; a copy of the real settings keeps its gentle-ai hooks |
+| Install into a fresh config | `bin/tpp sync --config-dir <tmp>` then `bin/tpp doctor --config-dir <tmp>` | empty temp dir, optionally a copy of a real `settings.json` | `--dry-run` first | doctor prints 12 skills ok, `Stop gate wired`, capabilities, `verdict: healthy`, exit 0; a copy of the real settings keeps its gentle-ai hooks |
 | Gate inside a real session | see `~/.claude/docs/testing/test-plan.md` (E12): two `claude -p` arms | scratch repo under `/tmp` | edit without the skill; edit after reading it | telemetry lines `fired:true` and `fired:false` with `skills_loaded` |
 | Concurrent plan writes and subheading cuts | built `/tmp/rddval/final-hardening` with a template plan and one seeded evidence row | eight processes with distinct `TMPDIR` values and one stable cache namespace; symlinked 0600 plan; Findings and breadth tables with `### Notes` cuts | add distinct ids, race one id, write through the symlink, run `plan check` and `plan gaps` on prose and blank-line cuts | every distinct id survives exactly once; same id yields one success and one duplicate refusal; symlink and mode survive; `###` cuts exit 1 with both lines; shipped plans remain `well formed` |
-| Plan diagnostics on real plans | `go build -o /tmp/rdd-wt ./cmd/rdd-plus` then `/tmp/rdd-wt plan check --path <plan>`; `/tmp/rdd-wt plan add-finding --path <plan> ...`; `/tmp/rdd-wt check --cwd <repo>` | copies of `assets/skills/test-strategy/evals/fixtures/plans/clean.md`, `rejected.md` and this plan under `/tmp/rddval/plans`, plus hostile variants: status `resolved`, a missing pipe, a blank line inside the table, prose inside the table | the commands above | `plan check` names the breach by line (`<plan>: line N: ...`) and exits 1; both shipped fixtures and this plan still print `well formed` and exit 0; `check` names an unrecognized status instead of silently counting it |
+| Plan diagnostics on real plans | `go build -o /tmp/rdd-wt ./cmd/tpp` then `/tmp/rdd-wt plan check --path <plan>`; `/tmp/rdd-wt plan add-finding --path <plan> ...`; `/tmp/rdd-wt check --cwd <repo>` | copies of `assets/skills/test-strategy/evals/fixtures/plans/clean.md`, `rejected.md` and this plan under `/tmp/rddval/plans`, plus hostile variants: status `resolved`, a missing pipe, a blank line inside the table, prose inside the table | the commands above | `plan check` names the breach by line (`<plan>: line N: ...`) and exits 1; both shipped fixtures and this plan still print `well formed` and exit 0; `check` names an unrecognized status instead of silently counting it |
 
 ## Layer matrix
 
@@ -179,7 +179,7 @@ of its cited files changed; when a run skips it, it cites the row.
 
 ## Evidence ledger
 
-One row per `observado` conclusion (`references/evidence.md`). `razonado` items go under Hypotheses. The machine columns (`Admit`, `Digest`, `Normalize`, `Mode`, `Mutate`) are the half a binary can check; an empty one is a state rather than a claim — no admitted command, no pin, the host, no declared edit — and `rdd-plus plan admit --execute --record <id>` writes the pin.
+One row per `observado` conclusion (`references/evidence.md`). `razonado` items go under Hypotheses. The machine columns (`Admit`, `Digest`, `Normalize`, `Mode`, `Mutate`) are the half a binary can check; an empty one is a state rather than a claim — no admitted command, no pin, the host, no declared edit — and `tpp plan admit --execute --record <id>` writes the pin.
 
 | Id | Claim | Executed | Admit | Inputs and parameters | Observed | Digest | Normalize | Mode | Mutate | Mutation or negative control → result | Reproduction | Label (`observado` / `razonado`, literal) |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -316,7 +316,7 @@ Skill versions before 2026-09-10 used the `3.N` scheme; the same releases are `0
 
 1. Baseline benchmark run with the current skill and the final runner (reported and caught per defect); then install the upgraded skill content and run again
 2. Target 6: Go port of the eval harness, self-test, calibration seeding, and fingerprint
-3. Candidate 3.4: the plan is initialised with `rdd-plus plan init` and `plan check` passes before the final message; measure whether that recovers reporting without costing catching
+3. Candidate 3.4: the plan is initialised with `tpp plan init` and `plan check` passes before the final message; measure whether that recovers reporting without costing catching
 4. Cut the non-testing turns from a benchmark case: 82 memory and tool-loading calls across 15 cases, roughly a fifth of the turns and $2 of the $10.74
 5. Extend the machine columns row by row, the way E28 was extended: it is the only row that carries an `Admit` command, a pin and a `Mutate` claim, so the rest of the ledger is still prose and no finding cites a row whose falsifiability a replay could check
 6. Target 7: install journey after publishing

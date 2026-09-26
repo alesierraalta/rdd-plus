@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/alesierraalta/rdd-plus/internal/assets"
+	"github.com/alesierraalta/tpp/internal/assets"
 )
 
 const (

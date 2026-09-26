@@ -1,4 +1,4 @@
-// Package assets carries the skill files that rdd-plus installs; go:embed only reaches
+// Package assets carries the skill files that tpp installs; go:embed only reaches
 // files below the package directory, so the skills live here rather than under internal/.
 package assets
 

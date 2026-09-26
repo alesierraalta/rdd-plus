@@ -14,7 +14,7 @@ import (
 // rule reads one field. It also reports whether the command was well formed: a quote left open is not a
 // command anyone can read, so the caller that executes the words must refuse it, while a caller that only
 // inspects a command reads the words either way. Splitting on whitespace alone, a hook wired as
-// `"/opt/Program Files/rdd-plus" gate` reads as three words whose first is a truncated path: the wiring
+// `"/opt/Program Files/tpp" gate` reads as three words whose first is a truncated path: the wiring
 // check misses the subcommand, the comparison resolves nothing, and doctor stays quiet about a hook it is
 // there to judge.
 func ShellWords(command string) ([]string, error) {

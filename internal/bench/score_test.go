@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	plancheck "github.com/alesierraalta/rdd-plus/internal/plan"
+	plancheck "github.com/alesierraalta/tpp/internal/plan"
 )
 
 const findingsHeader = "| Id | Finding (path:line, one line) | Severity | Data safe? | Evidence id | Status | Verdict | Reason | Fingerprint |\n|---|---|---|---|---|---|---|---|---|\n"
@@ -181,7 +181,7 @@ func TestScoreWorkspaceReadsThePlanFile(t *testing.T) {
 	}
 }
 
-// A run that delivers its plan at the path its .rdd-plus.json declares is scored from that path; a
+// A run that delivers its plan at the path its .tpp.json declares is scored from that path; a
 // declaration that escapes is refused with a note and the default path is read instead; and a
 // workspace with no plan anywhere keeps today's result and note.
 // A plan path that exists but cannot be read as a plan is not a missing plan. Both scorers name the

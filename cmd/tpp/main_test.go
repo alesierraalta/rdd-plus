@@ -13,12 +13,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alesierraalta/rdd-plus/internal/admit"
-	"github.com/alesierraalta/rdd-plus/internal/bench"
-	"github.com/alesierraalta/rdd-plus/internal/buildinfo"
-	"github.com/alesierraalta/rdd-plus/internal/evidence"
-	plancheck "github.com/alesierraalta/rdd-plus/internal/plan"
-	"github.com/alesierraalta/rdd-plus/internal/sanitize"
+	"github.com/alesierraalta/tpp/internal/admit"
+	"github.com/alesierraalta/tpp/internal/bench"
+	"github.com/alesierraalta/tpp/internal/buildinfo"
+	"github.com/alesierraalta/tpp/internal/evidence"
+	plancheck "github.com/alesierraalta/tpp/internal/plan"
+	"github.com/alesierraalta/tpp/internal/sanitize"
 )
 
 // buildCLI compiles the command once per test binary; the contract under test is the process's,
@@ -28,7 +28,7 @@ func buildCLI(t *testing.T) string {
 	if testing.Short() {
 		t.Skip("builds a binary")
 	}
-	bin := filepath.Join(t.TempDir(), "rdd-plus")
+	bin := filepath.Join(t.TempDir(), "tpp")
 	out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput()
 	if err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
@@ -63,10 +63,10 @@ func TestCLIContract(t *testing.T) {
 		wantExit int
 		wantOut  string // substring expected on stdout or stderr
 	}{
-		{name: "no command prints usage and exits 2", wantExit: 2, wantOut: "usage: rdd-plus"},
-		{name: "unknown command prints usage and exits 2", args: []string{"bogus"}, wantExit: 2, wantOut: "usage: rdd-plus"},
-		{name: "bench with no subcommand exits 2", args: []string{"bench"}, wantExit: 2, wantOut: "usage: rdd-plus"},
-		{name: "bench with an unknown subcommand exits 2", args: []string{"bench", "bogus"}, wantExit: 2, wantOut: "usage: rdd-plus"},
+		{name: "no command prints usage and exits 2", wantExit: 2, wantOut: "usage: tpp"},
+		{name: "unknown command prints usage and exits 2", args: []string{"bogus"}, wantExit: 2, wantOut: "usage: tpp"},
+		{name: "bench with no subcommand exits 2", args: []string{"bench"}, wantExit: 2, wantOut: "usage: tpp"},
+		{name: "bench with an unknown subcommand exits 2", args: []string{"bench", "bogus"}, wantExit: 2, wantOut: "usage: tpp"},
 		// A runner the bench cannot spawn must be refused before it scaffolds or spawns anything.
 		{name: "bench run with an unknown runner exits 2", args: []string{"bench", "run", "--runner", "gemini"}, wantExit: 2, wantOut: "use pi or claude"},
 		{name: "bench score without arguments exits 2", args: []string{"bench", "score"}, wantExit: 2, wantOut: "needs --case"},
@@ -78,8 +78,8 @@ func TestCLIContract(t *testing.T) {
 		{name: "an unknown flag on a subcommand exits 2", args: []string{"doctor", "--nope"}, wantExit: 2, wantOut: "flag provided but not defined"},
 		{name: "check refuses a path outside the repository", args: []string{"check", "--path", "../outside.md"}, wantExit: 2, wantOut: "--path"},
 		{name: "check refuses an absolute path", args: []string{"check", "--path", "/abs.md"}, wantExit: 2, wantOut: "--path"},
-		{name: "plan with no subcommand exits 2", args: []string{"plan"}, wantExit: 2, wantOut: "usage: rdd-plus"},
-		{name: "plan with an unknown subcommand exits 2", args: []string{"plan", "bogus"}, wantExit: 2, wantOut: "usage: rdd-plus"},
+		{name: "plan with no subcommand exits 2", args: []string{"plan"}, wantExit: 2, wantOut: "usage: tpp"},
+		{name: "plan with an unknown subcommand exits 2", args: []string{"plan", "bogus"}, wantExit: 2, wantOut: "usage: tpp"},
 		{name: "plan check on a missing file exits 1", args: []string{"plan", "check", "--path", "/nonexistent/plan.md"}, wantExit: 1, wantOut: "plan check:"},
 		{name: "plan gaps on a missing file exits 1", args: []string{"plan", "gaps", "--path", "/nonexistent/plan.md"}, wantExit: 1, wantOut: "plan gaps:"},
 		{name: "plan gaps run and all are mutually exclusive", args: []string{"plan", "gaps", "--run", "redis-pool", "--all"}, wantExit: 2, wantOut: "cannot combine"},
@@ -134,7 +134,7 @@ func TestPlanInitMicroWritesTheMicroTemplate(t *testing.T) {
 // The TUI needs a real terminal; on a pipe it must refuse before tui.Run and point at the
 // non-interactive equivalents instead of hanging on a loop no one can drive.
 func TestTUIRefusesWithoutATerminal(t *testing.T) {
-	t.Setenv("RDD_PLUS_HOME", t.TempDir())
+	t.Setenv("TPP_HOME", t.TempDir())
 	bin := buildCLI(t)
 	cmd := exec.Command(bin, "tui")
 	cmd.Stdin = strings.NewReader("")
@@ -160,7 +160,7 @@ func TestTUIRefusesWithoutATerminal(t *testing.T) {
 // /dev/null is a character device, so a mode-bit guard let it through and tui.Run drew a frame
 // before failing. The refusal must come first, with no ANSI reaching stdout.
 func TestTUIRefusesNullDeviceStdinWithoutDrawing(t *testing.T) {
-	t.Setenv("RDD_PLUS_HOME", t.TempDir())
+	t.Setenv("TPP_HOME", t.TempDir())
 	bin := buildCLI(t)
 	null, err := os.Open("/dev/null")
 	if err != nil {
@@ -513,7 +513,7 @@ func TestFeedbackCLIRequiresOptInThenRecords(t *testing.T) {
 		t.Fatal(err)
 	}
 	out, code := runCLIWithHomeEnv(t, home, bin, "feedback", "--config-dir", configDir, "--file", report)
-	wantRefusal := "feedback is disabled; enable it with: rdd-plus feature enable feedback"
+	wantRefusal := "feedback is disabled; enable it with: tpp feature enable feedback"
 	if code == 0 || !strings.Contains(out, wantRefusal) {
 		t.Fatalf("disabled feedback = %d %q", code, out)
 	}
@@ -797,7 +797,7 @@ func TestFeedbackCLISanitizesPersistedSecretsAndFailsClosed(t *testing.T) {
 
 func runCLIWithHomeEnv(t *testing.T, home, bin string, args ...string) (string, int) {
 	t.Helper()
-	return runCLIEnv(t, bin, []string{"RDD_PLUS_HOME=" + home}, args...)
+	return runCLIEnv(t, bin, []string{"TPP_HOME=" + home}, args...)
 }
 
 // runCLIEnv runs the binary with extra environment entries; the last entry for a key wins, so a
@@ -918,7 +918,7 @@ func TestVersionNamesTheBuild(t *testing.T) {
 // must not become an attempt to execute the fragment. The split-rule cases that used to live here belong
 // to the one splitter, hookcmd.ShellWords, and are tested in internal/doctor.
 func TestProbeHookRefusesACommandItCannotRead(t *testing.T) {
-	for _, command := range []string{"", "   \t", `"unbalanced`, `'unbalanced`, `/h/bin/rdd-plus "gate`} {
+	for _, command := range []string{"", "   \t", `"unbalanced`, `'unbalanced`, `/h/bin/tpp "gate`} {
 		err := probeHook(command)
 		if err == nil {
 			t.Fatalf("probeHook(%q) must refuse the command rather than run a fragment", command)
@@ -1254,7 +1254,7 @@ func TestPlanScopedCLIRealRun(t *testing.T) {
 
 	out, code := runCLIAt(t, dir, bin, "plan", "check", "--path", "plan.md")
 	t.Logf("$ %s plan check --path plan.md\n%s", bin, out)
-	if code != 1 || !strings.Contains(out, "rdd-plus plan upgrade") {
+	if code != 1 || !strings.Contains(out, "tpp plan upgrade") {
 		t.Fatalf("legacy plan check = %d\n%s", code, out)
 	}
 	out, code = runCLIAt(t, dir, bin, "plan", "upgrade", "--path", "plan.md")
@@ -1301,7 +1301,7 @@ func TestPlanGapsUsesTheDeclaredRun(t *testing.T) {
 	if out, err := git.CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v\n%s", err, out)
 	}
-	if err := os.WriteFile(filepath.Join(dir, ".rdd-plus.json"), []byte(`{"planPath":"plan.md","run":"redis-pool"}`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, ".tpp.json"), []byte(`{"planPath":"plan.md","run":"redis-pool"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	doc := "## Findings\n\n| Id | Finding | Severity | Data safe? | Evidence id | Pinning test | Status | Verdict by / date | Reason | Fingerprint |\n|---|---|---|---|---|---|---|---|---|---|\n" +
@@ -1527,8 +1527,8 @@ func TestSyncDryRunNamesEveryHost(t *testing.T) {
 }
 
 func TestSyncForceReplacesAModifiedFileWithABackup(t *testing.T) {
-	t.Setenv("RDD_PLUS_HOME", t.TempDir())
-	home := os.Getenv("RDD_PLUS_HOME")
+	t.Setenv("TPP_HOME", t.TempDir())
+	home := os.Getenv("TPP_HOME")
 	bin := buildCLI(t)
 	configDir := t.TempDir()
 	skillPath := filepath.Join(configDir, "skills", "test-strategy", "SKILL.md")

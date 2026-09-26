@@ -16,8 +16,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alesierraalta/rdd-plus/internal/assets"
-	"github.com/alesierraalta/rdd-plus/internal/buildinfo"
+	"github.com/alesierraalta/tpp/internal/assets"
+	"github.com/alesierraalta/tpp/internal/buildinfo"
 )
 
 // Provenance is the instrument a reading was taken with. Two numbers are comparable only when

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/alesierraalta/rdd-plus/internal/state"
+	"github.com/alesierraalta/tpp/internal/state"
 )
 
 func TestAllReturnsOneOptInFeature(t *testing.T) {
@@ -27,7 +27,7 @@ func TestAllReturnsOneOptInFeature(t *testing.T) {
 }
 
 func TestEnabledAnswersDefaultOnEmptyState(t *testing.T) {
-	t.Setenv("RDD_PLUS_HOME", t.TempDir())
+	t.Setenv("TPP_HOME", t.TempDir())
 
 	enabled, err := Enabled("feedback")
 	if err != nil {
@@ -39,7 +39,7 @@ func TestEnabledAnswersDefaultOnEmptyState(t *testing.T) {
 }
 
 func TestSetRoundTripsTheToggle(t *testing.T) {
-	t.Setenv("RDD_PLUS_HOME", t.TempDir())
+	t.Setenv("TPP_HOME", t.TempDir())
 
 	updatedAt, err := Set("feedback", true)
 	if err != nil {
@@ -69,7 +69,7 @@ func TestSetRoundTripsTheToggle(t *testing.T) {
 }
 
 func TestEnabledFailsOnCorruptState(t *testing.T) {
-	t.Setenv("RDD_PLUS_HOME", t.TempDir())
+	t.Setenv("TPP_HOME", t.TempDir())
 	path, err := state.Path()
 	if err != nil {
 		t.Fatalf("state.Path: %v", err)
@@ -88,7 +88,7 @@ func TestEnabledFailsOnCorruptState(t *testing.T) {
 }
 
 func TestPreviewDoesNotPersistAnything(t *testing.T) {
-	t.Setenv("RDD_PLUS_HOME", t.TempDir())
+	t.Setenv("TPP_HOME", t.TempDir())
 
 	preview, err := Preview("feedback")
 	if err != nil {
@@ -107,7 +107,7 @@ func TestPreviewDoesNotPersistAnything(t *testing.T) {
 }
 
 func TestSetSameValueDoesNotChurnStateBytes(t *testing.T) {
-	t.Setenv("RDD_PLUS_HOME", t.TempDir())
+	t.Setenv("TPP_HOME", t.TempDir())
 
 	if _, err := Set("feedback", true); err != nil {
 		t.Fatalf("first Set: %v", err)

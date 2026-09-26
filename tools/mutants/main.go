@@ -87,7 +87,7 @@ func main() {
 	survivors := []string{}
 	applied := 0
 	for _, m := range mutants {
-		work, err := os.MkdirTemp("", "rdd-plus-mutant-")
+		work, err := os.MkdirTemp("", "tpp-mutant-")
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(2)

@@ -1,7 +1,7 @@
 .PHONY: build test mutants vet
 
 build:
-	go build -o bin/rdd-plus ./cmd/rdd-plus
+	go build -o bin/tpp ./cmd/tpp
 
 test:
 	go test ./... -count=1

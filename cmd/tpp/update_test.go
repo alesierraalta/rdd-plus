@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/alesierraalta/rdd-plus/internal/buildinfo"
-	"github.com/alesierraalta/rdd-plus/internal/update"
+	"github.com/alesierraalta/tpp/internal/buildinfo"
+	"github.com/alesierraalta/tpp/internal/update"
 )
 
 // statusAvailable decodes the one field this suite cares about from `status --json`.
@@ -38,7 +38,7 @@ func TestStatusAvailableVersionComesFromTheUpdateCache(t *testing.T) {
 		t.Fatalf("availableVersion without a check = %q, want %q", got, unknownAvailableVersion)
 	}
 
-	t.Setenv("RDD_PLUS_HOME", home)
+	t.Setenv("TPP_HOME", home)
 	if _, err := update.SaveCache(update.Cache{AvailableVersion: "v9.9.9", CheckedAt: "2026-09-22T12:00:00Z"}); err != nil {
 		t.Fatalf("seed cache: %v", err)
 	}
@@ -68,8 +68,8 @@ func TestUpdateWithoutGoPrintsTheInstallCommand(t *testing.T) {
 	srv := fakeProxy(t, "v99.0.0")
 	home := t.TempDir()
 	out, code := runCLIEnv(t, bin, []string{
-		"RDD_PLUS_HOME=" + home,
-		"RDD_PLUS_UPDATE_BASE_URL=" + srv.URL,
+		"TPP_HOME=" + home,
+		"TPP_UPDATE_BASE_URL=" + srv.URL,
 		"PATH=" + t.TempDir(), // an empty directory: there is no go to find
 	}, "update")
 	if code != 0 {
@@ -83,7 +83,7 @@ func TestUpdateWithoutGoPrintsTheInstallCommand(t *testing.T) {
 	if hint := "GOBIN='" + dir + "' go install"; !strings.Contains(out, hint) {
 		t.Fatalf("the hint must name the running binary's directory, shell-quoted (%q):\n%s", hint, out)
 	}
-	t.Setenv("RDD_PLUS_HOME", home)
+	t.Setenv("TPP_HOME", home)
 	cache, err := update.LoadCache()
 	if err != nil {
 		t.Fatalf("load cache after update: %v", err)
@@ -107,8 +107,8 @@ func TestUpdateWithAFakeGoRunsTheInstallArgv(t *testing.T) {
 		t.Fatalf("write fake go: %v", err)
 	}
 	out, code := runCLIEnv(t, bin, []string{
-		"RDD_PLUS_HOME=" + home,
-		"RDD_PLUS_UPDATE_BASE_URL=" + srv.URL,
+		"TPP_HOME=" + home,
+		"TPP_UPDATE_BASE_URL=" + srv.URL,
 		"PATH=" + fakeBin,
 	}, "update")
 	if code != 0 {
@@ -118,13 +118,12 @@ func TestUpdateWithAFakeGoRunsTheInstallArgv(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fake go was never run: %v", err)
 	}
-	// The project was renamed: the bridge release updates into the tpp module and binary.
 	want := "install\ngithub.com/alesierraalta/tpp/cmd/tpp@v99.0.0\n"
 	if string(argv) != want {
 		t.Fatalf("install argv = %q, want %q", argv, want)
 	}
-	if !strings.Contains(out, "tpp version") || !strings.Contains(out, "tpp sync") {
-		t.Fatalf("success must point at the renamed binary: confirm with tpp version and move hooks with tpp sync:\n%s", out)
+	if !strings.Contains(out, "tpp version") {
+		t.Fatalf("success must point at confirming in a new shell:\n%s", out)
 	}
 	// The release must replace the binary that is running, not land in a GOBIN that PATH or the Stop hook
 	// never reach (issue #144).
@@ -148,8 +147,8 @@ func TestUpdateProxyFailureExitsOneAndRecordsTheFailure(t *testing.T) {
 	defer srv.Close()
 	home := t.TempDir()
 	out, code := runCLIEnv(t, bin, []string{
-		"RDD_PLUS_HOME=" + home,
-		"RDD_PLUS_UPDATE_BASE_URL=" + srv.URL,
+		"TPP_HOME=" + home,
+		"TPP_UPDATE_BASE_URL=" + srv.URL,
 		"PATH=" + t.TempDir(),
 	}, "update")
 	if code != 1 {
@@ -158,7 +157,7 @@ func TestUpdateProxyFailureExitsOneAndRecordsTheFailure(t *testing.T) {
 	if !strings.Contains(out, "update:") {
 		t.Fatalf("the failure must be reported with the update: prefix:\n%s", out)
 	}
-	t.Setenv("RDD_PLUS_HOME", home)
+	t.Setenv("TPP_HOME", home)
 	cache, err := update.LoadCache()
 	if err != nil {
 		t.Fatalf("load cache after a failed check: %v", err)
@@ -181,8 +180,8 @@ func TestUpdateReportsWhenAlreadyUpToDate(t *testing.T) {
 	srv := fakeProxy(t, "v"+buildinfo.Version)
 	home := t.TempDir()
 	out, code := runCLIEnv(t, bin, []string{
-		"RDD_PLUS_HOME=" + home,
-		"RDD_PLUS_UPDATE_BASE_URL=" + srv.URL,
+		"TPP_HOME=" + home,
+		"TPP_UPDATE_BASE_URL=" + srv.URL,
 		"PATH=" + t.TempDir(),
 	}, "update")
 	if code != 0 {
@@ -202,8 +201,8 @@ func TestUpdateDoesNotCallAnUncomparableVersionUpToDate(t *testing.T) {
 	bin := buildCLI(t)
 	srv := fakeProxy(t, "v0.0.0-20260925221235-11e300da863b")
 	out, code := runCLIEnv(t, bin, []string{
-		"RDD_PLUS_HOME=" + t.TempDir(),
-		"RDD_PLUS_UPDATE_BASE_URL=" + srv.URL,
+		"TPP_HOME=" + t.TempDir(),
+		"TPP_UPDATE_BASE_URL=" + srv.URL,
 		"PATH=" + t.TempDir(),
 	}, "update", "--check")
 	if code != 0 {
@@ -220,8 +219,8 @@ func TestUpdateCheckOnlyNeverInstalls(t *testing.T) {
 	srv := fakeProxy(t, "v99.0.0")
 	home := t.TempDir()
 	out, code := runCLIEnv(t, bin, []string{
-		"RDD_PLUS_HOME=" + home,
-		"RDD_PLUS_UPDATE_BASE_URL=" + srv.URL,
+		"TPP_HOME=" + home,
+		"TPP_UPDATE_BASE_URL=" + srv.URL,
 		"PATH=" + t.TempDir(),
 	}, "update", "--check")
 	if code != 0 {
@@ -233,7 +232,7 @@ func TestUpdateCheckOnlyNeverInstalls(t *testing.T) {
 	if !strings.Contains(out, "update available") {
 		t.Fatalf("--check must report the available update:\n%s", out)
 	}
-	t.Setenv("RDD_PLUS_HOME", home)
+	t.Setenv("TPP_HOME", home)
 	cache, err := update.LoadCache()
 	if err != nil {
 		t.Fatalf("load cache after --check: %v", err)
@@ -251,7 +250,7 @@ func TestUpdateRefusesWhenTheRunningBinaryDirIsNotWritable(t *testing.T) {
 	}
 	src := buildCLI(t)
 	roDir := t.TempDir()
-	bin := filepath.Join(roDir, "rdd-plus")
+	bin := filepath.Join(roDir, "tpp")
 	data, err := os.ReadFile(src)
 	if err != nil {
 		t.Fatal(err)
@@ -270,8 +269,8 @@ func TestUpdateRefusesWhenTheRunningBinaryDirIsNotWritable(t *testing.T) {
 		t.Fatal(err)
 	}
 	out, code := runCLIEnv(t, bin, []string{
-		"RDD_PLUS_HOME=" + t.TempDir(),
-		"RDD_PLUS_UPDATE_BASE_URL=" + srv.URL,
+		"TPP_HOME=" + t.TempDir(),
+		"TPP_UPDATE_BASE_URL=" + srv.URL,
 		"PATH=" + fakeBin,
 	}, "update")
 	if code != 1 || !strings.Contains(out, "not writable") {

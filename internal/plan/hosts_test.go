@@ -34,15 +34,15 @@ func TestShippedHostAdaptersAreUsable(t *testing.T) {
 	if len(stop) != 1 || len(stop[0].Hooks) != 1 {
 		t.Fatalf("pi settings must wire exactly one Stop hook: %+v", stop)
 	}
-	if got := stop[0].Hooks[0].Command; got != "rdd-plus gate" {
+	if got := stop[0].Hooks[0].Command; got != "tpp gate" {
 		t.Fatalf("pi hook command = %q; the binary needs its subcommand", got)
 	}
-	oc, err := os.ReadFile(filepath.Join(root, "opencode", "rdd-plus.ts"))
+	oc, err := os.ReadFile(filepath.Join(root, "opencode", "tpp.ts"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	body := string(oc)
-	for _, want := range []string{"session.idle", "rdd-plus check", "exitCode"} {
+	for _, want := range []string{"session.idle", "tpp check", "exitCode"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("the opencode plugin must use %q", want)
 		}

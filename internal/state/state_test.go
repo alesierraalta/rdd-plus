@@ -12,8 +12,8 @@ import (
 
 func useHome(t *testing.T) string {
 	t.Helper()
-	home := filepath.Join(t.TempDir(), "rdd-plus")
-	t.Setenv("RDD_PLUS_HOME", home)
+	home := filepath.Join(t.TempDir(), "tpp")
+	t.Setenv("TPP_HOME", home)
 	return home
 }
 
@@ -224,7 +224,7 @@ func TestRoundTripPreservesHostsAndFeatures(t *testing.T) {
 			"claude": {
 				ConfigDir:  "/home/test/.claude",
 				Components: []string{"appsec-adversarial-auditor", "stop-gate"},
-				Hook:       &HookState{Command: "/opt/rdd-plus gate", Wired: true},
+				Hook:       &HookState{Command: "/opt/tpp gate", Wired: true},
 				Assets: map[string]AssetRecord{
 					"skills/a/SKILL.md":   {SHA256: "aaa", Mode: 0o644, FromVersion: "1.0.0"},
 					"skills/a/bin/run.sh": {SHA256: "bbb", Mode: 0o755, FromVersion: "1.1.0"},

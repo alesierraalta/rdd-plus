@@ -11,8 +11,8 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/alesierraalta/rdd-plus/internal/manifest"
-	"github.com/alesierraalta/rdd-plus/internal/state"
+	"github.com/alesierraalta/tpp/internal/manifest"
+	"github.com/alesierraalta/tpp/internal/state"
 )
 
 // ActionClass names what the synchronizer would do with one path.

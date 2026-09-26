@@ -26,7 +26,7 @@ func TestCLIUninstallDryRunExitsZeroThenARealRunRemoves(t *testing.T) {
 	bin := buildCLI(t)
 	home := t.TempDir()
 	cfg := t.TempDir()
-	if out, code := runCLIEnv(t, bin, []string{"RDD_PLUS_HOME=" + home}, "sync", "--config-dir", cfg); code != 0 {
+	if out, code := runCLIEnv(t, bin, []string{"TPP_HOME=" + home}, "sync", "--config-dir", cfg); code != 0 {
 		t.Fatalf("sync = %d\n%s", code, out)
 	}
 	foreign := filepath.Join(cfg, "skills", "unrelated", "README.md")
@@ -51,7 +51,7 @@ func TestCLIUninstallDryRunExitsZeroThenARealRunRemoves(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, code := runCLIEnv(t, bin, []string{"RDD_PLUS_HOME=" + home}, "uninstall", "--config-dir", cfg, "--dry-run")
+	out, code := runCLIEnv(t, bin, []string{"TPP_HOME=" + home}, "uninstall", "--config-dir", cfg, "--dry-run")
 	if code != 0 {
 		t.Fatalf("uninstall --dry-run = %d, want 0\n%s", code, out)
 	}
@@ -75,7 +75,7 @@ func TestCLIUninstallDryRunExitsZeroThenARealRunRemoves(t *testing.T) {
 		}
 	}
 
-	out, code = runCLIEnv(t, bin, []string{"RDD_PLUS_HOME=" + home}, "uninstall", "--config-dir", cfg)
+	out, code = runCLIEnv(t, bin, []string{"TPP_HOME=" + home}, "uninstall", "--config-dir", cfg)
 	if code != 0 {
 		t.Fatalf("uninstall = %d, want 0\n%s", code, out)
 	}
@@ -121,7 +121,7 @@ func TestCLIUninstallRefusesAModifiedSkillWithoutForce(t *testing.T) {
 	bin := buildCLI(t)
 	home := t.TempDir()
 	cfg := t.TempDir()
-	if out, code := runCLIEnv(t, bin, []string{"RDD_PLUS_HOME=" + home}, "sync", "--config-dir", cfg); code != 0 {
+	if out, code := runCLIEnv(t, bin, []string{"TPP_HOME=" + home}, "sync", "--config-dir", cfg); code != 0 {
 		t.Fatalf("sync = %d\n%s", code, out)
 	}
 	skills, err := os.ReadDir(filepath.Join(cfg, "skills"))
@@ -133,7 +133,7 @@ func TestCLIUninstallRefusesAModifiedSkillWithoutForce(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, code := runCLIEnv(t, bin, []string{"RDD_PLUS_HOME=" + home}, "uninstall", "--config-dir", cfg)
+	out, code := runCLIEnv(t, bin, []string{"TPP_HOME=" + home}, "uninstall", "--config-dir", cfg)
 	if code != 1 {
 		t.Fatalf("uninstall on a modified skill = %d, want 1\n%s", code, out)
 	}

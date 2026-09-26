@@ -1,12 +1,12 @@
 {
-  "_comment": "rdd-plus for Pi. Pi's command hooks (npm:@hsingjui/pi-hooks) carry Claude Code's payload shape: session_id, transcript_path, cwd, hook_event_name, stop_hook_active. Merge this into .pi/settings.json (project) or the global equivalent; do not replace the file.",
+  "_comment": "tpp for Pi. Pi's command hooks (npm:@hsingjui/pi-hooks) carry Claude Code's payload shape: session_id, transcript_path, cwd, hook_event_name, stop_hook_active. Merge this into .pi/settings.json (project) or the global equivalent; do not replace the file.",
   "hooks": {
     "Stop": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "rdd-plus gate",
+            "command": "tpp gate",
             "timeout": 30
           }
         ]

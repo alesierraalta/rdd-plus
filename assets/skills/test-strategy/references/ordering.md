@@ -73,7 +73,7 @@ negligence, and writing it down is what distinguishes the two.
 
 The plan lives at `docs/testing/test-plan.md` by default (or the path the user names), built from
 `assets/test-plan-template.md`. When it is not the default path, declare it at the worktree root in
-`.rdd-plus.json`; the Stop hook and `rdd-plus check` read that declared plan:
+`.tpp.json`; the Stop hook and `tpp check` read that declared plan:
 
 ```json
 {"planPath": "docs/testing/<name>.md"}
@@ -96,7 +96,7 @@ it touched, and a reason for every layer it skipped, which a plan that swept eve
 
 What the trigger does not change is the depth: execution inside the scope is not reduced. The target it
 reaches climbs to its rung through its sibling, leaves a pinning test and an evidence row, and the run
-closes on `rdd-plus plan check` like any other. A bounded request and a bounded diff are the same
+closes on `tpp plan check` like any other. A bounded request and a bounded diff are the same
 decision reached from two sides: one names the surface, the other shows it.
 
 - Eligible: "test the reservation math in `src/inventory.js`"; a two-file fix to a pure function whose
@@ -121,7 +121,7 @@ ten lines or fewer, its contract unchanged, and none of the refused classes. `pl
 shape, the corroborated file, the absence of a Layer matrix and of a `Light:` line, and the two ledger
 rows; whether the function was really that small stays, as with `Light:`, with the operator and the reader.
 
-Whether Micro is cheaper is not established. One A/B on 2026-09-26 (rdd-plus 0.3.13, test-strategy
+Whether Micro is cheaper is not established. One A/B on 2026-09-26 (tpp 0.3.13, test-strategy
 0.3.16, runner pi, `openai-codex/gpt-5.6-luna`, twenty cases at three runs each, corpus
 `sha256:61d78d07b4779295`) compared the shipped skill with the same build whose SKILL.md dropped the Micro
 route. Detection did not move (caught 65 of 93 defect-runs on both sides), and the side with the route cost

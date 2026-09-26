@@ -759,6 +759,6 @@ func findingsHeaderLine(t *testing.T, lines []string) string {
 
 // The two variables the process-level tests hand to the child they re-execute.
 const (
-	addFindingChildPlan = "RDD_PLUS_TEST_ADD_FINDING_PLAN"
-	addFindingChildID   = "RDD_PLUS_TEST_ADD_FINDING_ID"
+	addFindingChildPlan = "TPP_TEST_ADD_FINDING_PLAN"
+	addFindingChildID   = "TPP_TEST_ADD_FINDING_ID"
 )

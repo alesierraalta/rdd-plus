@@ -14,9 +14,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/alesierraalta/rdd-plus/internal/assets"
-	"github.com/alesierraalta/rdd-plus/internal/feature"
-	"github.com/alesierraalta/rdd-plus/internal/sanitize"
+	"github.com/alesierraalta/tpp/internal/assets"
+	"github.com/alesierraalta/tpp/internal/feature"
+	"github.com/alesierraalta/tpp/internal/sanitize"
 )
 
 // Verdicts are the three honest answers to "did the method earn its keep".
@@ -146,9 +146,9 @@ func Template(r Report) string {
 		plan = NotGiven
 	}
 	return strings.Join([]string{
-		"# rdd-plus run feedback — what the method cost and what it paid.",
+		"# tpp run feedback — what the method cost and what it paid.",
 		"# Fill in paid, cost, reason and verdict. verdict is one of: " + strings.Join(Verdicts, ", ") + ".",
-		"# Submit with: rdd-plus feedback --file <this file>",
+		"# Submit with: tpp feedback --file <this file>",
 		"ts: " + r.TS,
 		"repo: " + r.Repo,
 		"plan: " + plan,
@@ -165,7 +165,7 @@ func Template(r Report) string {
 
 // markdownHeader opens the rendering. It is written only when the file is missing; a report that
 // already landed is never rewritten.
-const markdownHeader = "# Run feedback\n\nOne section per `rdd-plus feedback` report; never rewritten. Each report grades the method\nitself: what paid off, what was ceremony, and where a rule had to be reverse-engineered.\n\n"
+const markdownHeader = "# Run feedback\n\nOne section per `tpp feedback` report; never rewritten. Each report grades the method\nitself: what paid off, what was ceremony, and where a rule had to be reverse-engineered.\n\n"
 
 // Record appends one report to the ledger and one section to the markdown file. Both files are
 // append-only.
@@ -173,9 +173,9 @@ func Record(configDir string, r Report) error {
 	enabled, err := feature.Enabled("feedback")
 	if err != nil || !enabled {
 		if err != nil {
-			return fmt.Errorf("feedback is disabled; enable it with: rdd-plus feature enable feedback: %w", err)
+			return fmt.Errorf("feedback is disabled; enable it with: tpp feature enable feedback: %w", err)
 		}
-		return fmt.Errorf("feedback is disabled; enable it with: rdd-plus feature enable feedback")
+		return fmt.Errorf("feedback is disabled; enable it with: tpp feature enable feedback")
 	}
 
 	telemetryDir := sanitize.TelemetryDir(configDir)
@@ -330,7 +330,7 @@ func Summary(configDir string) (string, error) {
 		return "", err
 	}
 	if len(reports) == 0 {
-		return "no reports yet: run `rdd-plus feedback --template` after a run to start the ledger\n", nil
+		return "no reports yet: run `tpp feedback --template` after a run to start the ledger\n", nil
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "run feedback: %d report(s)\n", len(reports))

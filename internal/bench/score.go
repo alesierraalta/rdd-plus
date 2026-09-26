@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	plancheck "github.com/alesierraalta/rdd-plus/internal/plan"
+	plancheck "github.com/alesierraalta/tpp/internal/plan"
 )
 
 // PlanPath is where the skill persists its plan inside a workspace.
@@ -98,7 +98,7 @@ type planPathResolution struct {
 	declaredPath string
 }
 
-// resolvePlanPath returns the workspace-relative plan a run delivered: the path its .rdd-plus.json
+// resolvePlanPath returns the workspace-relative plan a run delivered: the path its .tpp.json
 // declares, else PlanPath. DeclaredPath only ever returns a validated repository-relative path: an
 // absolute or escaping declaration is refused there, not returned, and the fallback to PlanPath carries a
 // note naming it. Whatever path will be read then has to resolve inside the workspace; a path that cannot

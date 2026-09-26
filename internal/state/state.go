@@ -1,4 +1,4 @@
-// Package state is what rdd-plus actually installed: per host, which components and files, with the
+// Package state is what tpp actually installed: per host, which components and files, with the
 // digest it wrote, plus the feature toggles that survive updates.
 package state
 

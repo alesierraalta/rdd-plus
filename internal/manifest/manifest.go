@@ -1,4 +1,4 @@
-// Package manifest is the source of truth for what rdd-plus may write: the components it can
+// Package manifest is the source of truth for what tpp may write: the components it can
 // install and the payload behind each one, hashed from the embedded filesystem. A path that is not
 // in here is never ours to touch.
 package manifest
@@ -11,7 +11,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/alesierraalta/rdd-plus/internal/assets"
+	"github.com/alesierraalta/tpp/internal/assets"
 )
 
 // Kind classifies what a component installs.
@@ -23,7 +23,7 @@ const (
 	KindInstruction Kind = "instruction"
 )
 
-// Component is one thing rdd-plus can install.
+// Component is one thing tpp can install.
 type Component struct {
 	ID      string
 	Kind    Kind

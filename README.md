@@ -1,8 +1,8 @@
-# rdd-plus
+# tpp
 
 A deterministic companion for the testing discipline in Claude Code. It complements gentle-ai; it
 does not replace it. gentle-ai owns the review lifecycle (frozen candidate, refuter, receipts).
-rdd-plus owns what happens before that: a testing flow the model runs and a set of Go binaries
+tpp owns what happens before that: a testing flow the model runs and a set of Go binaries
 that keep it honest.
 
 The split is deliberate. The model does the creative work: enumerating the classes of a contract,
@@ -21,13 +21,13 @@ the output line behind every claim, and rehearses into a throwaway configuration
 touches yours.
 
 ````text
-Install rdd-plus on this machine and leave it working. Answer in the language the operator wrote to
+Install tpp on this machine and leave it working. Answer in the language the operator wrote to
 you in, and prove every step with the command you ran, its exit code, and the output line that
 carries the claim.
 
 Rules:
 - Never write "installed", "wired" or "working" without the exit code and the output that shows it.
-- Never edit ~/.claude/settings.json by hand. `rdd-plus sync` owns that merge: it preserves every
+- Never edit ~/.claude/settings.json by hand. `tpp sync` owns that merge: it preserves every
   existing setting and hook, adds the gate once, and refuses a file it cannot parse.
 - Decide where the binary will live before the first `sync`. The hook records the absolute path of
   the binary that ran sync, so run sync from the binary you intend to keep, after it is on PATH.
@@ -35,22 +35,22 @@ Rules:
 
 1. Prerequisites. `git --version` and `go version`; go.mod declares `go 1.26`, and the module has no
    third-party dependencies, so Go and git are the whole requirement. docker, node, python3, claude,
-   codegraph, rtk, gentle-ai and engram are optional. `rdd-plus doctor` names what each one's absence
+   codegraph, rtk, gentle-ai and engram are optional. `tpp doctor` names what each one's absence
    degrades, and that report is the authority rather than a list here.
 
 2. Install the binary. Pick one:
-   a. Published: `go install github.com/alesierraalta/rdd-plus/cmd/rdd-plus@latest`, which lands in
+   a. Published: `go install github.com/alesierraalta/tpp/cmd/tpp@latest`, which lands in
       `$(go env GOPATH)/bin`. Ensure that directory is on PATH, then confirm with
-      `command -v rdd-plus`.
+      `command -v tpp`.
    b. From a source checkout, which is what running the tests and the mutants requires:
-      `git clone https://github.com/alesierraalta/rdd-plus.git && cd rdd-plus && make build` writes
-      `bin/rdd-plus`. `make test` runs the suite, `make vet` runs gofmt and go vet, and
+      `git clone https://github.com/alesierraalta/tpp.git && cd tpp && make build` writes
+      `bin/tpp`. `make test` runs the suite, `make vet` runs gofmt and go vet, and
       `go run ./tools/mutants` applies 23 literal mutations to a copy of the tree and requires every
       one killed. That last one copies the whole working tree file by file, so a checkout carrying
       local tool state — a `.codegraph/daemon.sock`, for instance — fails before it applies
       anything: report that, and do not delete the directory to get past it.
 
-3. Prove the binary runs: `rdd-plus version` prints the version and the revision it was built from —
+3. Prove the binary runs: `tpp version` prints the version and the revision it was built from —
    `unknown` for a `go install` build, a commit hash for a build from a checkout, with `+dirty` when
    that checkout has uncommitted changes.
 
@@ -59,27 +59,27 @@ Rules:
 
    ```sh
    tmp=$(mktemp -d)
-   rdd-plus sync --config-dir "$tmp/cfg" --dry-run     # the plan, writing nothing
-   rdd-plus sync --config-dir "$tmp/cfg"               # $tmp/cfg/skills plus settings.json
-   rdd-plus doctor --config-dir "$tmp/cfg"             # must exit 0
+   tpp sync --config-dir "$tmp/cfg" --dry-run     # the plan, writing nothing
+   tpp sync --config-dir "$tmp/cfg"               # $tmp/cfg/skills plus settings.json
+   tpp doctor --config-dir "$tmp/cfg"             # must exit 0
    ```
 
    The report carries one line per embedded skill, the command the wired hook runs, whether that
    command answered, and the capabilities; the line that decides is `verdict: healthy` with exit 0.
    `doctor --json` prints the same report as a machine reads it.
 
-5. Install for real: `rdd-plus sync` with no `--config-dir` (default `~/.claude`; `--hosts` narrows
-   the run to named hosts), then `rdd-plus doctor`, which must exit 0. A skill you edited locally is
+5. Install for real: `tpp sync` with no `--config-dir` (default `~/.claude`; `--hosts` narrows
+   the run to named hosts), then `tpp doctor`, which must exit 0. A skill you edited locally is
    moved to `<config root>/backups/<timestamp>/` before it is replaced, so the run
    is reversible. Read doctor's warning about the binaries, not only its verdict: doctor compares the
-   binary the hook invokes with the `rdd-plus` on PATH, and when they are different files it says the
+   binary the hook invokes with the `tpp` on PATH, and when they are different files it says the
    two would give different verdicts. If it warns, run sync again from the PATH binary and re-check. A machine where no host is installed yet (no `~/.claude`, `~/.config/opencode`, `~/.gemini` or
    `~/.codex`) gets exit 1 from `sync`, naming where it looked: nothing was installed, so install the host
    first or pass `--config-dir`.
 
 6. Two hosts cannot be wired from here. Pi takes `assets/hosts/pi/settings.stop-hook.json` merged
    into its settings (Pi reads the same `~/.claude/skills`, so it already has the skills), and OpenCode
-   takes `assets/hosts/opencode/rdd-plus.ts` as a plugin. Both shapes were read from their
+   takes `assets/hosts/opencode/tpp.ts` as a plugin. Both shapes were read from their
    documentation and nobody has watched them fire here: install them if asked, and say plainly that
    they are unverified instead of reporting them as working.
 
@@ -89,16 +89,16 @@ Rules:
 
    ```sh
    printf '%s' "{\"session_id\":\"install-check\",\"transcript_path\":\"$tmp/transcript.jsonl\",\"cwd\":\"$tmp/repo\",\"hook_event_name\":\"Stop\",\"stop_hook_active\":false}" \
-     | TESTING_GATE_LOG="$tmp/gate.jsonl" rdd-plus gate
+     | TESTING_GATE_LOG="$tmp/gate.jsonl" tpp gate
    ```
 
    Expected: exit 0, a Stop payload naming the changed file, and one line in `$tmp/gate.jsonl` reading
-   `"fired":true`. A payload the gate cannot read (`printf '{ broken' | rdd-plus gate`) also exits 0
+   `"fired":true`. A payload the gate cannot read (`printf '{ broken' | tpp gate`) also exits 0
    and leaves one line reading `"skipped":"unreadable_payload"`. Exit 0 is the contract: the gate
    grades the turn, it never breaks it, so a non-zero exit is a defect and not a refusal.
 
-8. To leave a project under the discipline and not only the machine: `rdd-plus plan init` writes
-   `docs/testing/test-plan.md`, and `rdd-plus check` exits 1 naming what the repository still owes,
+8. To leave a project under the discipline and not only the machine: `tpp plan init` writes
+   `docs/testing/test-plan.md`, and `tpp check` exits 1 naming what the repository still owes,
    layer by layer, from git and the plan alone — no hook payload, no transcript, no host, which is
    also what makes it usable from CI.
 
@@ -107,15 +107,15 @@ verify and why. If doctor does not exit 0 with `verdict: healthy`, the install i
 which problem line it printed.
 ````
 
-A correct run ends with `rdd-plus doctor` exiting 0, `verdict: healthy`, one line per embedded skill,
+A correct run ends with `tpp doctor` exiting 0, `verdict: healthy`, one line per embedded skill,
 and the Stop hook wired to the binary you kept. The section below is the same install, for a person.
 
 ## Install
 
 ```sh
-go install github.com/alesierraalta/rdd-plus/cmd/rdd-plus@latest
-rdd-plus sync      # installs skills into every discovered host; wires the Stop hook only for Claude
-rdd-plus doctor    # verifies the install and lists optional capabilities
+go install github.com/alesierraalta/tpp/cmd/tpp@latest
+tpp sync      # installs skills into every discovered host; wires the Stop hook only for Claude
+tpp doctor    # verifies the install and lists optional capabilities
 ```
 
 `sync` installs the embedded skills into every host it finds: `~/.claude/skills`,
@@ -123,25 +123,43 @@ rdd-plus doctor    # verifies the install and lists optional capabilities
 where its transport is known—Claude Code's `~/.claude/settings.json`; OpenCode, Gemini, and Codex
 receive skills but their transports are documented rather than wired. Claude's sync merges into
 `~/.claude/settings.json`: every existing hook and setting is preserved, the gate is added once,
-and running it again changes nothing. A file modified after rdd-plus installed it is not replaced
-by default; pass `--force` to replace it after rdd-plus snapshots the edited file in the central
+and running it again changes nothing. A file modified after tpp installed it is not replaced
+by default; pass `--force` to replace it after tpp snapshots the edited file in the central
 backup store described below. An unparseable `settings.json` aborts the run before anything is
 written. Use `--config-dir` to target another Claude directory, `--hosts` to narrow installation,
 and `--dry-run` to see the plan. Without an explicit `--config-dir`, commands resolve the directory
 in this order: `CLAUDE_CONFIG_DIR`, then `PI_CODING_AGENT_DIR`, then `~/.claude`; empty values are
 ignored, and a ledger that lives under a different directory is reached with `--config-dir`.
 
+### Upgrading from rdd-plus
+
+tpp (test planning process) was called rdd-plus until 0.4.0. The old names keep working, and the new
+ones win when both are present:
+
+- An rdd-plus 0.3.x install reaches tpp through `rdd-plus update`: the 0.3.20 bridge release installs
+  `tpp` beside it. From then on, run `tpp`.
+- `tpp sync` rewrites a Stop hook wired to `"<dir>/rdd-plus" gate` into `"<dir>/tpp" gate`, with no
+  duplicate entry; `tpp uninstall` removes either.
+- The first run moves `~/.config/rdd-plus` (state, backups, update cache) to `~/.config/tpp`; if the
+  move fails, the old directory stays in use.
+- `.rdd-plus.json` is still read when `.tpp.json` is absent; a repository carrying both is refused
+  until one is removed. tpp never renames your file.
+- `RDD_PLUS_HOME` and `RDD_PLUS_UPDATE_BASE_URL` are read when `TPP_HOME` and `TPP_UPDATE_BASE_URL`
+  are unset.
+- The OpenCode and Pi snippets are copies, not managed files: re-copy `assets/hosts/opencode/tpp.ts`
+  and the `tpp gate` hook from `assets/hosts/pi/settings.stop-hook.json`.
+
 ### State and safety
 
-Keep the local state at `<config root>/state.json`; the default is `~/.config/rdd-plus/state.json`,
-and `RDD_PLUS_HOME` overrides it. It records installed hosts, components, and files. Keep it local-only.
-Classify paths as managed (installed by rdd-plus), modified-by-the-user (never overwrite without
+Keep the local state at `<config root>/state.json`; the default is `~/.config/tpp/state.json`,
+and `TPP_HOME` overrides it. It records installed hosts, components, and files. Keep it local-only.
+Classify paths as managed (installed by tpp), modified-by-the-user (never overwrite without
 `--force`; always snapshot first), or foreign (never write or delete). Store backups at
 `<config root>/backups/<timestamp>/{manifest.json, files/…}`.
 
-Opt into feedback with `rdd-plus feature enable feedback`. Use `--preview` to see one anonymized
+Opt into feedback with `tpp feature enable feedback`. Use `--preview` to see one anonymized
 record and the two local-only files never publishable. While feedback is off, `feedback --file`
-refuses and the Stop hook stops offering it. The interactive TUI now exists as `rdd-plus tui`,
+refuses and the Stop hook stops offering it. The interactive TUI now exists as `tpp tui`,
 and the lifecycle commands `update`, `uninstall`, `restore`, and `repair` are documented in the
 Commands table below.
 
@@ -149,21 +167,21 @@ Commands table below.
 
 | Command | What it does |
 |---|---|
-| `rdd-plus gate` | The Stop hook. Reads the hook payload on stdin, decides, logs one line, and emits Stop feedback when a session changed production source without loading the adversarial testing discipline. Always exits 0. |
-| `rdd-plus sync [--dry-run] [--force]` | Installs the embedded skills into discovered hosts and wires Claude's Stop hook. `--dry-run` prints the plan and writes nothing; `--force` replaces modified managed files after snapshotting them. Idempotent. |
-| `rdd-plus doctor` | Reports installed skills (and whether they drift from the embedded version), whether the hook is wired, and which optional tools are on PATH with what degrades without each. `--json` for machines. Exit 1 when git, a skill, or the hook is missing. |
-| `rdd-plus status [--json]` | Reports local installation state, features, and available version — the cached result after `update` has checked, or `unknown (no update check yet)` before the first check. |
-| `rdd-plus feature list\|enable\|disable <id> [--preview]` | Lists or toggles optional features; preview without changing state. |
-| `rdd-plus tui` | Interactive menu over the status report, feature toggles (list, enable/disable, preview), and the sync dry-run plan. Needs an interactive terminal on Linux or macOS; elsewhere it refuses and points at `status`, `feature`, and `sync --dry-run`. |
-| `rdd-plus update [--check]` | Checks the Go module proxy for a newer release and installs it with `go install github.com/alesierraalta/rdd-plus/cmd/rdd-plus@<tag>` (prints the command when `go` is absent); `--check` only refreshes the offline cache. |
-| `rdd-plus uninstall [--dry-run] [--orphans] [--force] [--config-dir <dir>]` | Removes managed assets and unwires the Stop hook; never touches foreign files. Modified content needs `--force` (snapshot first); `--orphans` also removes assets the manifest no longer ships; `--dry-run` writes nothing. |
-| `rdd-plus restore [--id <backup-id>] [--dry-run]` | Copies a backup store entry back onto its original paths (default: the latest backup). |
-| `rdd-plus repair [--config-dir <dir>] [--dry-run] [--force]` | Brings a broken install back to what `doctor` reports healthy (missing/drifted managed skills and Stop hook re-wire); a healthy install is a no-op. |
-| `rdd-plus plan` | Writes the plan skeleton, checks the contract, names the breadth still owed, and records one Findings row from flags. `add-finding` writes that row only: it refuses a row the checker would reject and never writes an evidence row. |
-| `rdd-plus plan admit` | Reads the plan's Evidence ledger and decides every row. A dry run by default: `--execute` runs each admitted row's one command through `sh -c` twice, so a pin is only recorded over an output that held still, `--sandbox` observes it in a container with the tree mounted read-only and no network (it needs docker, and the default image is pulled on first use) and replays a declared `Mutate` edit against a writable copy of the tree, where the command must go red under the edit and green once the file is put back (a cell may hold a survey of edits separated by ` ;; `, each replayed on its own copy; an edit prefixed `~ ` is declared equivalent and must stay green, or the row is refused as `mutation-not-equivalent`; an admitted survey prints `N killed, M equivalent`; an edit whose own text contains ` ;; ` cannot be expressed), a row whose `Expect` cell is `fail` pins a test observed red (only an exit from 1 to 125 qualifies, so a missing command (127) is never pinned as red; a zero exit is refused as `expected-failure-passed`), `--only <ids>` narrows the run, `--timeout` bounds one command, and `--record <ids>` writes the observed digest into the plan together with the mode it was observed in. Exit 1 when a row is refused. |
-| `rdd-plus plan export [--path <plan>] [--commit <sha>]` | Prints the plan's Findings as Markdown for a pull request comment: one row per finding with its location, severity, status, pinning test and the evidence that re-observes it (the Admit command, the digest shortened to 12 hex, and `Expect: fail` when declared), headed by the commit covered (default the short HEAD) and the plan's base name, never its directory. Every cell is sanitised like the gaps report's quotes. It never posts: `rdd-plus plan export --path <plan> \| gh pr comment <n> -F -` is the operator's call. |
-| `rdd-plus feedback` | Records one honest process report about the testing method itself, or reads the reports back. `--template` prints a fillable skeleton, `--file <path>` records it, `--summary` (the default) answers whether the method is earning its keep. |
-| `rdd-plus version` | Prints the version. |
+| `tpp gate` | The Stop hook. Reads the hook payload on stdin, decides, logs one line, and emits Stop feedback when a session changed production source without loading the adversarial testing discipline. Always exits 0. |
+| `tpp sync [--dry-run] [--force]` | Installs the embedded skills into discovered hosts and wires Claude's Stop hook. `--dry-run` prints the plan and writes nothing; `--force` replaces modified managed files after snapshotting them. Idempotent. |
+| `tpp doctor` | Reports installed skills (and whether they drift from the embedded version), whether the hook is wired, and which optional tools are on PATH with what degrades without each. `--json` for machines. Exit 1 when git, a skill, or the hook is missing. |
+| `tpp status [--json]` | Reports local installation state, features, and available version — the cached result after `update` has checked, or `unknown (no update check yet)` before the first check. |
+| `tpp feature list\|enable\|disable <id> [--preview]` | Lists or toggles optional features; preview without changing state. |
+| `tpp tui` | Interactive menu over the status report, feature toggles (list, enable/disable, preview), and the sync dry-run plan. Needs an interactive terminal on Linux or macOS; elsewhere it refuses and points at `status`, `feature`, and `sync --dry-run`. |
+| `tpp update [--check]` | Checks the Go module proxy for a newer release and installs it with `go install github.com/alesierraalta/tpp/cmd/tpp@<tag>` (prints the command when `go` is absent); `--check` only refreshes the offline cache. |
+| `tpp uninstall [--dry-run] [--orphans] [--force] [--config-dir <dir>]` | Removes managed assets and unwires the Stop hook; never touches foreign files. Modified content needs `--force` (snapshot first); `--orphans` also removes assets the manifest no longer ships; `--dry-run` writes nothing. |
+| `tpp restore [--id <backup-id>] [--dry-run]` | Copies a backup store entry back onto its original paths (default: the latest backup). |
+| `tpp repair [--config-dir <dir>] [--dry-run] [--force]` | Brings a broken install back to what `doctor` reports healthy (missing/drifted managed skills and Stop hook re-wire); a healthy install is a no-op. |
+| `tpp plan` | Writes the plan skeleton, checks the contract, names the breadth still owed, and records one Findings row from flags. `add-finding` writes that row only: it refuses a row the checker would reject and never writes an evidence row. |
+| `tpp plan admit` | Reads the plan's Evidence ledger and decides every row. A dry run by default: `--execute` runs each admitted row's one command through `sh -c` twice, so a pin is only recorded over an output that held still, `--sandbox` observes it in a container with the tree mounted read-only and no network (it needs docker, and the default image is pulled on first use) and replays a declared `Mutate` edit against a writable copy of the tree, where the command must go red under the edit and green once the file is put back (a cell may hold a survey of edits separated by ` ;; `, each replayed on its own copy; an edit prefixed `~ ` is declared equivalent and must stay green, or the row is refused as `mutation-not-equivalent`; an admitted survey prints `N killed, M equivalent`; an edit whose own text contains ` ;; ` cannot be expressed), a row whose `Expect` cell is `fail` pins a test observed red (only an exit from 1 to 125 qualifies, so a missing command (127) is never pinned as red; a zero exit is refused as `expected-failure-passed`), `--only <ids>` narrows the run, `--timeout` bounds one command, and `--record <ids>` writes the observed digest into the plan together with the mode it was observed in. Exit 1 when a row is refused. |
+| `tpp plan export [--path <plan>] [--commit <sha>]` | Prints the plan's Findings as Markdown for a pull request comment: one row per finding with its location, severity, status, pinning test and the evidence that re-observes it (the Admit command, the digest shortened to 12 hex, and `Expect: fail` when declared), headed by the commit covered (default the short HEAD) and the plan's base name, never its directory. Every cell is sanitised like the gaps report's quotes. It never posts: `tpp plan export --path <plan> \| gh pr comment <n> -F -` is the operator's call. |
+| `tpp feedback` | Records one honest process report about the testing method itself, or reads the reports back. `--template` prints a fillable skeleton, `--file <path>` records it, `--summary` (the default) answers whether the method is earning its keep. |
+| `tpp version` | Prints the version. |
 
 ## How the gate decides
 
@@ -202,7 +220,7 @@ evidence record; anything not executed is a hypothesis.
 ```sh
 go test ./...           # unit, integration (real git repositories), and differential tests
 go run ./tools/mutants  # 23 literal mutants on the gate; every one must be killed
-make build              # bin/rdd-plus
+make build              # bin/tpp
 ```
 
 Integration tests build the CLI once and drive it with real repositories in temporary
@@ -230,10 +248,10 @@ template.
 
 For both `check` and `plan`, a relative `--path` is resolved against the worktree root. An absolute
 `--path` is taken as given, except in `check`, which refuses it as a usage error. This is the same
-relative resolution and containment rule used for the `planPath` declaration in `.rdd-plus.json`.
+relative resolution and containment rule used for the `planPath` declaration in `.tpp.json`.
 
 The effective plan path follows one precedence rule: an explicit `--path` wins, then `planPath` in
-`.rdd-plus.json` at the worktree root, then `docs/testing/test-plan.md`. Declare a scoped plan like
+`.tpp.json` at the worktree root, then `docs/testing/test-plan.md`. Declare a scoped plan like
 this:
 
 ```json
@@ -241,12 +259,12 @@ this:
 ```
 
 A malformed, unreadable or unusable declaration fails closed; it never silently falls back to the
-default. `rdd-plus check`, the Stop-hook gate and every `plan *` command honor the same declaration.
+default. `tpp check`, the Stop-hook gate and every `plan *` command honor the same declaration.
 
 ```
-rdd-plus plan init                # write the skeleton, tables and all; never overwrites silently
-rdd-plus plan check               # exit 1 and name every breach of the contract
-rdd-plus plan add-finding ...     # write one Findings row; refuses a row the checker would reject
+tpp plan init                # write the skeleton, tables and all; never overwrites silently
+tpp plan check               # exit 1 and name every breach of the contract
+tpp plan add-finding ...     # write one Findings row; refuses a row the checker would reject
 ```
 
 `check` reports a Findings section that is not a table, a finding that cites no `path:line`, a
@@ -270,7 +288,7 @@ The decisions live in Go; only the transport is per host. That split is what let
 serve more than one agent, and it is why `check` exists:
 
 ```
-rdd-plus check          # exit 1 and say what this repository owes, from git and the plan alone
+tpp check          # exit 1 and say what this repository owes, from git and the plan alone
 ```
 
 It reads no hook payload, no transcript and no host configuration, so anything that can run a
@@ -300,7 +318,7 @@ owner and a status: `Security | appsec-adversarial-auditor | ... | pending` afte
 assigned and never invoked.
 
 ```
-rdd-plus plan gaps                # exit 1 and name every layer still owed, with its owner
+tpp plan gaps                # exit 1 and name every layer still owed, with its owner
 ```
 
 `plan gaps` reads the layer matrix's status cells. A row counts as swept when its status reads
@@ -330,10 +348,10 @@ only a brief acknowledgment after a successful write; the summary groups by proj
 verdict it could not classify.
 
 ```sh
-rdd-plus feedback --template          # a fillable skeleton with the run's identity already filled
-rdd-plus feedback --file report.md    # record one report; refusals exit 2 and write nothing
-rdd-plus feedback --summary           # counts per verdict and per skill version, plus the guesses
-rdd-plus feedback                     # no flags: the summary, the cheapest path to the answer
+tpp feedback --template          # a fillable skeleton with the run's identity already filled
+tpp feedback --file report.md    # record one report; refusals exit 2 and write nothing
+tpp feedback --summary           # counts per verdict and per skill version, plus the guesses
+tpp feedback                     # no flags: the summary, the cheapest path to the answer
 ```
 
 One report is `paid`, `cost`, `reason`, and a `verdict` of `paid`, `partly`, or `ceremony`; `guess`
@@ -357,17 +375,17 @@ worktree root, while the gate ledger seals the repository directory name.
 
 ## Benchmark
 
-`rdd-plus bench` measures whether the testing skill finds defects it was never told about. Each
+`tpp bench` measures whether the testing skill finds defects it was never told about. Each
 case under `bench/cases/<id>/` is a fixture project whose own suite is green plus a sealed
 `KEY.json` listing the planted defects (file, line, class, keywords, trigger). The key is never
 copied into a workspace.
 
 ```
-rdd-plus bench run --cases 'bench/cases/*' --model sonnet --runs 1 --max-cost-usd 20
-rdd-plus bench score --case bench/cases/<id> --workspace <ws>     # re-score after grader changes
-rdd-plus bench history                                            # every run, never rewritten
-rdd-plus bench rescore bench/results/<run>                        # re-read a finished run with today's rules
-rdd-plus bench compare bench/results/<before> bench/results/<after>   # per-case reported and caught, side by side
+tpp bench run --cases 'bench/cases/*' --model sonnet --runs 1 --max-cost-usd 20
+tpp bench score --case bench/cases/<id> --workspace <ws>     # re-score after grader changes
+tpp bench history                                            # every run, never rewritten
+tpp bench rescore bench/results/<run>                        # re-read a finished run with today's rules
+tpp bench compare bench/results/<before> bench/results/<after>   # per-case reported and caught, side by side
 ```
 
 `bench run` scaffolds `<out>/<case>/<run>/ws` (default `bench/results/<timestamp>/`), commits the

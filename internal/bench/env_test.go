@@ -74,7 +74,7 @@ func TestBenchConfigWithoutCredentials(t *testing.T) {
 	}
 }
 
-// The skill now tells the flow to run `rdd-plus plan init`, so the agent has to be able to find
+// The skill now tells the flow to run `tpp plan init`, so the agent has to be able to find
 // the binary that is under test, not whichever one happens to be installed.
 func TestAgentEnvPutsTheRunningBinaryFirstOnPath(t *testing.T) {
 	env := agentEnv([]string{"PATH=/bin:/usr/bin"}, "/cfg", "/repo/bin")

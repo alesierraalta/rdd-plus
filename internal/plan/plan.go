@@ -13,7 +13,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/alesierraalta/rdd-plus/internal/assets"
+	"github.com/alesierraalta/tpp/internal/assets"
 )
 
 // TemplatePath is where the skeleton lives inside the embedded skills.
@@ -1342,7 +1342,7 @@ func runColumnProblems(name string, scan tableScan) []string {
 	}
 	iRun := columnIndex(scan.header, "run")
 	if iRun < 0 {
-		return []string{fmt.Sprintf("the %s table has no Run column: run rdd-plus plan upgrade to add it", name)}
+		return []string{fmt.Sprintf("the %s table has no Run column: run tpp plan upgrade to add it", name)}
 	}
 	var problems []string
 	for _, r := range scan.rows {

@@ -17,7 +17,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/alesierraalta/rdd-plus/internal/buildinfo"
+	"github.com/alesierraalta/tpp/internal/buildinfo"
 )
 
 // Prompt is the whole instruction the agent receives: the skill must infer everything else.
@@ -74,7 +74,7 @@ type Options struct {
 	SuiteTimeout time.Duration
 	ConfigDir    string  // agent config directory (Claude config dir, or Pi agent dir); empty inherits the operator's
 	ConfigMode   string  // agent config mode: ConfigBench, ConfigInherited, or ConfigCustom
-	BinDir       string  // put first on the agent's PATH, so `rdd-plus plan init` is the build under test
+	BinDir       string  // put first on the agent's PATH, so `tpp plan init` is the build under test
 	Workers      int     // cases run side by side; below 1 means one at a time
 	MaxCostUSD   float64 // 0 means no ceiling
 	Out          string

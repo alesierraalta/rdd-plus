@@ -15,18 +15,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alesierraalta/rdd-plus/internal/buildinfo"
-	"github.com/alesierraalta/rdd-plus/internal/state"
+	"github.com/alesierraalta/tpp/internal/buildinfo"
+	"github.com/alesierraalta/tpp/internal/state"
 )
 
 const (
 	// DefaultBaseURL is the public Go module proxy the check queries.
 	DefaultBaseURL = "https://proxy.golang.org"
-	// The project was renamed to tpp: this last rdd-plus release checks and installs the tpp module, so an
-	// existing install reaches the new name through update.
-	modulePath    = "github.com/alesierraalta/tpp"
-	cacheFileName = "update-check.json"
-	checkTimeout  = 5 * time.Second
+	modulePath     = "github.com/alesierraalta/tpp"
+	cacheFileName  = "update-check.json"
+	checkTimeout   = 5 * time.Second
 )
 
 // ErrCheck marks every failure to learn the latest version from the proxy, so the CLI can tell
@@ -209,7 +207,7 @@ func SaveCache(entry Cache) (bool, error) {
 	return true, nil
 }
 
-// cachePath is the cache file beside state.json: same root, same TPP_HOME/RDD_PLUS_HOME/XDG resolution.
+// cachePath is the cache file beside state.json: same root, same TPP_HOME/TPP_HOME/XDG resolution.
 func cachePath() (string, error) {
 	statePath, err := state.Path()
 	if err != nil {

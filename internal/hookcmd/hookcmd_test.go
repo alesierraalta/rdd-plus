@@ -16,18 +16,18 @@ func TestShellWordsSplitsLikeAShell(t *testing.T) {
 		want    []string
 		wantErr bool
 	}{
-		{"plain command", `/h/bin/rdd-plus gate`, []string{"/h/bin/rdd-plus", "gate"}, false},
-		{"double quoted path with a space", `"/h/my bin/rdd-plus" gate`, []string{"/h/my bin/rdd-plus", "gate"}, false},
-		{"single quoted path with a space", `'/h/my bin/rdd-plus' gate`, []string{"/h/my bin/rdd-plus", "gate"}, false},
+		{"plain command", `/h/bin/tpp gate`, []string{"/h/bin/tpp", "gate"}, false},
+		{"double quoted path with a space", `"/h/my bin/tpp" gate`, []string{"/h/my bin/tpp", "gate"}, false},
+		{"single quoted path with a space", `'/h/my bin/tpp' gate`, []string{"/h/my bin/tpp", "gate"}, false},
 		{"tabs and newlines separate words", "a\tb\r\nc", []string{"a", "b", "c"}, false},
 		{"leading and repeated whitespace", "  spaced   out  ", []string{"spaced", "out"}, false},
 		{"one quoted word alone", `"/h/gate"`, []string{"/h/gate"}, false},
 		{"whitespace only", "   \t\n", nil, false},
 		{"empty", "", nil, false},
 		// A quote left open is not a command: the probe must not run "unbalanced" as a program.
-		{"unterminated double quote", `"/h/my bin/rdd-plus gate`, []string{"/h/my bin/rdd-plus gate"}, true},
-		{"unterminated single quote", `'/h/my bin/rdd-plus`, []string{"/h/my bin/rdd-plus"}, true},
-		{"unterminated quote after a word", `/h/bin/rdd-plus "gate`, []string{"/h/bin/rdd-plus", "gate"}, true},
+		{"unterminated double quote", `"/h/my bin/tpp gate`, []string{"/h/my bin/tpp gate"}, true},
+		{"unterminated single quote", `'/h/my bin/tpp`, []string{"/h/my bin/tpp"}, true},
+		{"unterminated quote after a word", `/h/bin/tpp "gate`, []string{"/h/bin/tpp", "gate"}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

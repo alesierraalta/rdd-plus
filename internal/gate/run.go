@@ -14,8 +14,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/alesierraalta/rdd-plus/internal/feature"
-	"github.com/alesierraalta/rdd-plus/internal/sanitize"
+	"github.com/alesierraalta/tpp/internal/feature"
+	"github.com/alesierraalta/tpp/internal/sanitize"
 )
 
 const gitTimeout = 10 * time.Second
@@ -224,18 +224,18 @@ func auditLine(res Result, offerFeedback ...bool) string {
 	}
 	switch {
 	case res.Owed > 0 && res.Pending > 0:
-		return fmt.Sprintf("rdd-plus: %d layer(s) assigned and never invoked, %d ranked target(s) still pending.%s", res.Owed, res.Pending, suffix)
+		return fmt.Sprintf("tpp: %d layer(s) assigned and never invoked, %d ranked target(s) still pending.%s", res.Owed, res.Pending, suffix)
 	case res.Owed > 0:
-		return fmt.Sprintf("rdd-plus: %d layer(s) assigned and never invoked.%s", res.Owed, suffix)
+		return fmt.Sprintf("tpp: %d layer(s) assigned and never invoked.%s", res.Owed, suffix)
 	case res.Pending > 0:
-		return fmt.Sprintf("rdd-plus: %d ranked target(s) still pending.%s", res.Pending, suffix)
+		return fmt.Sprintf("tpp: %d ranked target(s) still pending.%s", res.Pending, suffix)
 	case res.Unreadable > 0:
-		return fmt.Sprintf("rdd-plus: %d breadth table(s) could not be read to the end, so the rows under it were never counted.%s", res.Unreadable, suffix)
+		return fmt.Sprintf("tpp: %d breadth table(s) could not be read to the end, so the rows under it were never counted.%s", res.Unreadable, suffix)
 	case res.Unplanned:
-		return "rdd-plus: the plan has no layer matrix, so the breadth sweep was never planned." + suffix
+		return "tpp: the plan has no layer matrix, so the breadth sweep was never planned." + suffix
 	case res.Micro:
-		return "rdd-plus: the micro plan owes nothing; it owes no layer sweep." + suffix
+		return "tpp: the micro plan owes nothing; it owes no layer sweep." + suffix
 	default:
-		return "rdd-plus: the testing plan owes nothing." + suffix
+		return "tpp: the testing plan owes nothing." + suffix
 	}
 }

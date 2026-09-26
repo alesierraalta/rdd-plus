@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/alesierraalta/rdd-plus/internal/feature"
-	"github.com/alesierraalta/rdd-plus/internal/sanitize"
+	"github.com/alesierraalta/tpp/internal/feature"
+	"github.com/alesierraalta/tpp/internal/sanitize"
 )
 
 // validText is the shape --template prints, filled in: one key per line, the run's identity in
@@ -157,20 +157,20 @@ func TestTemplateFillsTheIdentityAndNamesTheSubmitCommand(t *testing.T) {
 // Record is append-only: the header is written once and a second report never rewrites the first.
 func enableFeedbackForTest(t *testing.T) {
 	t.Helper()
-	t.Setenv("RDD_PLUS_HOME", t.TempDir())
+	t.Setenv("TPP_HOME", t.TempDir())
 	if _, err := feature.Set("feedback", true); err != nil {
 		t.Fatalf("enable feedback: %v", err)
 	}
 }
 
 func TestRecordRefusesWhileFeedbackIsDisabled(t *testing.T) {
-	t.Setenv("RDD_PLUS_HOME", t.TempDir())
+	t.Setenv("TPP_HOME", t.TempDir())
 	dir := t.TempDir()
 	r := Report{TS: "t", Repo: "/repo", Plan: NotGiven, Skill: "skill", Build: "build",
 		Paid: "paid", Cost: "one hour", Reason: "reason", Verdict: VerdictPaid}
 
 	err := Record(dir, r)
-	const want = "feedback is disabled; enable it with: rdd-plus feature enable feedback"
+	const want = "feedback is disabled; enable it with: tpp feature enable feedback"
 	if err == nil || err.Error() != want {
 		t.Fatalf("Record error = %v, want %q", err, want)
 	}

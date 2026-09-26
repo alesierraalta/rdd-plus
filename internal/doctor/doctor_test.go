@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/alesierraalta/rdd-plus/internal/assets"
-	"github.com/alesierraalta/rdd-plus/internal/sync"
+	"github.com/alesierraalta/tpp/internal/assets"
+	"github.com/alesierraalta/tpp/internal/sync"
 )
 
 func allPresent(name string) (string, error) { return "/usr/bin/" + name, nil }
@@ -17,7 +17,7 @@ func allPresent(name string) (string, error) { return "/usr/bin/" + name, nil }
 func synced(t *testing.T) string {
 	t.Helper()
 	cfg := t.TempDir()
-	if _, err := sync.Sync(cfg, "/opt/tools/rdd-plus", sync.Options{}); err != nil {
+	if _, err := sync.Sync(cfg, "/opt/tools/tpp", sync.Options{}); err != nil {
 		t.Fatal(err)
 	}
 	return cfg
@@ -170,8 +170,8 @@ func TestHookWiredRecognisesAStandaloneGateBinary(t *testing.T) {
 		command  string
 		wantKind string
 	}{
-		{"rdd-plus subcommand", `"/home/u/go/bin/rdd-plus" gate`, HookRddPlus},
-		{"rdd-plus with flags", `/home/u/go/bin/rdd-plus gate --config-dir /home/u/.claude`, HookRddPlus},
+		{"tpp subcommand", `"/home/u/go/bin/tpp" gate`, HookTpp},
+		{"tpp with flags", `/home/u/go/bin/tpp gate --config-dir /home/u/.claude`, HookTpp},
 		{"standalone binary", `"/home/u/.claude/hooks/bin/testing-gate"`, HookStandalone},
 		{"standalone node script", `node /home/u/.claude/hooks/testing-gate.mjs`, HookStandalone},
 		{"an unrelated hook", `gentle-ai review stop-hook --agent claude-code`, HookNone},
@@ -230,7 +230,7 @@ func writeSettings(t *testing.T, dir, command string) {
 	}
 }
 
-// binary writes a stand-in for the rdd-plus executable.
+// binary writes a stand-in for the tpp executable.
 func binary(t *testing.T, dir, name string) string {
 	t.Helper()
 	p := filepath.Join(dir, name)
@@ -243,8 +243,8 @@ func binary(t *testing.T, dir, name string) string {
 // Today's real layout points the hook and PATH at the same binary through different paths, one of
 // them a symlink. Two paths, one file, one verdict: this must stay quiet.
 func TestHookBinaryMatchingPathBinaryIsQuiet(t *testing.T) {
-	real := binary(t, t.TempDir(), "rdd-plus")
-	link := filepath.Join(t.TempDir(), "rdd-plus-link")
+	real := binary(t, t.TempDir(), "tpp")
+	link := filepath.Join(t.TempDir(), "tpp-link")
 	if err := os.Symlink(real, link); err != nil {
 		t.Fatal(err)
 	}
@@ -262,7 +262,7 @@ func TestHookBinaryMatchingPathBinaryIsQuiet(t *testing.T) {
 			dir := t.TempDir()
 			writeSettings(t, dir, `"`+tc.hook+`" gate`)
 			r := Run(dir, func(name string) (string, error) {
-				if name == "rdd-plus" {
+				if name == "tpp" {
 					return tc.path, nil
 				}
 				return "/usr/bin/" + name, nil
@@ -280,11 +280,11 @@ func TestHookBinaryMatchingPathBinaryIsQuiet(t *testing.T) {
 // Two real binaries can give two verdicts: the hook must run the same file the user gets from PATH.
 func TestDoctorFlagsAHookBinaryThatDiffersFromPATH(t *testing.T) {
 	dir := t.TempDir()
-	hookBin := binary(t, t.TempDir(), "rdd-plus")
-	pathBin := binary(t, t.TempDir(), "rdd-plus")
+	hookBin := binary(t, t.TempDir(), "tpp")
+	pathBin := binary(t, t.TempDir(), "tpp")
 	writeSettings(t, dir, `"`+hookBin+`" gate`)
 	r := Run(dir, func(name string) (string, error) {
-		if name == "rdd-plus" {
+		if name == "tpp" {
 			return pathBin, nil
 		}
 		return "/usr/bin/" + name, nil
@@ -318,11 +318,11 @@ func TestQuotedHookPathWithASpaceIsComparedWhole(t *testing.T) {
 	if err := os.MkdirAll(spaceDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	hookBin := binary(t, spaceDir, "rdd-plus")
-	pathBin := binary(t, t.TempDir(), "rdd-plus")
+	hookBin := binary(t, spaceDir, "tpp")
+	pathBin := binary(t, t.TempDir(), "tpp")
 	writeSettings(t, dir, `"`+hookBin+`" gate`)
 	r := Run(dir, func(name string) (string, error) {
-		if name == "rdd-plus" {
+		if name == "tpp" {
 			return pathBin, nil
 		}
 		return "/usr/bin/" + name, nil
@@ -332,7 +332,7 @@ func TestQuotedHookPathWithASpaceIsComparedWhole(t *testing.T) {
 	}
 }
 
-// Doctor already has verdicts for an unwired hook and for rdd-plus off PATH; the new line must not
+// Doctor already has verdicts for an unwired hook and for tpp off PATH; the new line must not
 // reinvent them.
 func TestDoctorStaysQuietWhenItCannotCompareBinaries(t *testing.T) {
 	if r := Run(t.TempDir(), allPresent); r.BinariesDiffer || strings.Contains(r.String(), "different verdicts") {
@@ -340,16 +340,16 @@ func TestDoctorStaysQuietWhenItCannotCompareBinaries(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	writeSettings(t, dir, `"`+binary(t, t.TempDir(), "rdd-plus")+`" gate`)
-	noRddPlus := func(name string) (string, error) {
-		if name == "rdd-plus" {
+	writeSettings(t, dir, `"`+binary(t, t.TempDir(), "tpp")+`" gate`)
+	noTpp := func(name string) (string, error) {
+		if name == "tpp" {
 			return "", errors.New("not found")
 		}
 		return "/usr/bin/" + name, nil
 	}
-	r := Run(dir, noRddPlus)
+	r := Run(dir, noTpp)
 	if r.BinariesDiffer || strings.Contains(r.String(), "different verdicts") {
-		t.Fatalf("rdd-plus off PATH must stay quiet: %+v", r)
+		t.Fatalf("tpp off PATH must stay quiet: %+v", r)
 	}
 }
 

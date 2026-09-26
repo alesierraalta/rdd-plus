@@ -27,11 +27,11 @@ func TestCLIRepairExitsZeroWhenHealthyAndOnDryRun(t *testing.T) {
 	bin := buildCLI(t)
 	home := t.TempDir()
 	cfg := t.TempDir()
-	if out, code := runCLIEnv(t, bin, []string{"RDD_PLUS_HOME=" + home}, "sync", "--config-dir", cfg); code != 0 {
+	if out, code := runCLIEnv(t, bin, []string{"TPP_HOME=" + home}, "sync", "--config-dir", cfg); code != 0 {
 		t.Fatalf("sync = %d\n%s", code, out)
 	}
 
-	out, code := runCLIEnv(t, bin, []string{"RDD_PLUS_HOME=" + home}, "repair", "--config-dir", cfg)
+	out, code := runCLIEnv(t, bin, []string{"TPP_HOME=" + home}, "repair", "--config-dir", cfg)
 	if code != 0 {
 		t.Fatalf("repair on a healthy install = %d, want 0\n%s", code, out)
 	}
@@ -48,7 +48,7 @@ func TestCLIRepairExitsZeroWhenHealthyAndOnDryRun(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, code = runCLIEnv(t, bin, []string{"RDD_PLUS_HOME=" + home}, "repair", "--config-dir", cfg, "--dry-run")
+	out, code = runCLIEnv(t, bin, []string{"TPP_HOME=" + home}, "repair", "--config-dir", cfg, "--dry-run")
 	if code != 0 {
 		t.Fatalf("repair --dry-run = %d, want 0\n%s", code, out)
 	}

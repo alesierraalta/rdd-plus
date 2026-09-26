@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alesierraalta/rdd-plus/internal/plan"
+	"github.com/alesierraalta/tpp/internal/plan"
 )
 
 // row builds a ledger row with every machine cell filled, so a case varies only the cell it is about.
@@ -686,7 +686,7 @@ func TestAdmitRefusesARowThatDoesNotMatchTheHeader(t *testing.T) {
 // process runs here either. The ledger wraps its command in backticks, and Admit strips that one
 // wrapping span so the shell is handed the command itself rather than its quoting.
 func TestAdmitReadsRowsThePlanLedgerParsed(t *testing.T) {
-	const output = "ok rdd-plus/internal/plan\n"
+	const output = "ok tpp/internal/plan\n"
 	doc := "## Evidence ledger\n\n" +
 		"| Id | Claim | Executed | Admit | Inputs and parameters | Observed | Digest | Mutation or negative control → result | Reproduction | Label (`observado` / `razonado`, literal) |\n" +
 		"|---|---|---|---|---|---|---|---|---|---|\n" +

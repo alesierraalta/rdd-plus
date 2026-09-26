@@ -5,7 +5,7 @@ license: Apache-2.0
 metadata:
   author: "alesierraalta"
   version: "0.1.1"
-  requires_rdd_plus: "0.3.8"
+  requires_tpp: "0.3.8"
   scope: [common]
   auto_invoke: "Explicit invocation to break a change before RDD: bounded adversarial probes and a readiness disposition"
 ---
@@ -76,9 +76,9 @@ After finishing, including blocked or partial runs, record the retrospective in 
 
 ```sh
 feedback_file="$(mktemp)"   # scratch path, outside the repository
-rdd-plus feedback --template --plan "<plan-path>" > "$feedback_file"
+tpp feedback --template --plan "<plan-path>" > "$feedback_file"
 # Fill the generated fields; add no fields.
-rdd-plus feedback --file "$feedback_file"
+tpp feedback --file "$feedback_file"
 ```
 
 The skeleton is a scratch file outside the repository, never inside the worktree; the ledger is the record, and the report's Feedback record section names it.

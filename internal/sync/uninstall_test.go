@@ -10,16 +10,16 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/alesierraalta/rdd-plus/internal/assets"
-	"github.com/alesierraalta/rdd-plus/internal/feature"
-	"github.com/alesierraalta/rdd-plus/internal/state"
+	"github.com/alesierraalta/tpp/internal/assets"
+	"github.com/alesierraalta/tpp/internal/feature"
+	"github.com/alesierraalta/tpp/internal/state"
 )
 
 // seededInstall puts a real installation on disk: skills, state.json, and the wired Stop hook.
 func seededInstall(t *testing.T) (root, cfg string) {
 	t.Helper()
 	root = t.TempDir()
-	t.Setenv("RDD_PLUS_HOME", root)
+	t.Setenv("TPP_HOME", root)
 	cfg = t.TempDir()
 	if _, err := Sync(cfg, bin, Options{}); err != nil {
 		t.Fatal(err)

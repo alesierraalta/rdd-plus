@@ -276,7 +276,7 @@ func testsOn(fixture, overlay, ws string, tests []string, suite string, timeout 
 
 // stage builds fixture + overlay + the agent's test files in a fresh directory.
 func stage(fixture, overlay, ws string, tests []string) (string, error) {
-	dir, err := os.MkdirTemp("", "rdd-plus-catch-")
+	dir, err := os.MkdirTemp("", "tpp-catch-")
 	if err != nil {
 		return "", err
 	}
