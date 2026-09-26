@@ -97,7 +97,8 @@ func TestUpdateWithAFakeGoRunsTheInstallArgv(t *testing.T) {
 	home := t.TempDir()
 	fakeBin := t.TempDir()
 	argsFile := filepath.Join(fakeBin, "go-args")
-	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > '" + argsFile + "'\n"
+	gobinFile := filepath.Join(fakeBin, "go-gobin")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > '" + argsFile + "'\nprintf '%s' \"$GOBIN\" > '" + gobinFile + "'\n"
 	if err := os.WriteFile(filepath.Join(fakeBin, "go"), []byte(script), 0o755); err != nil {
 		t.Fatalf("write fake go: %v", err)
 	}
@@ -119,6 +120,16 @@ func TestUpdateWithAFakeGoRunsTheInstallArgv(t *testing.T) {
 	}
 	if !strings.Contains(out, "rdd-plus version") {
 		t.Fatalf("success must point at confirming in a new shell:\n%s", out)
+	}
+	// The release must replace the binary that is running, not land in a GOBIN that PATH or the Stop hook
+	// never reach (issue #144).
+	gobin, err := os.ReadFile(gobinFile)
+	if err != nil {
+		t.Fatalf("fake go left no GOBIN record: %v", err)
+	}
+	wantDir, _ := filepath.EvalSymlinks(filepath.Dir(bin))
+	if string(gobin) != wantDir {
+		t.Fatalf("go install ran with GOBIN=%q, want the running binary's directory %q", gobin, wantDir)
 	}
 }
 
