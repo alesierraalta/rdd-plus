@@ -310,7 +310,7 @@ func runUpdate(args []string) int {
 		fmt.Fprintln(os.Stderr, "update:", err)
 		return 1
 	}
-	fmt.Printf("installed %s; restart your shell and run `rdd-plus version` there to confirm\n", result.Latest)
+	fmt.Printf("installed tpp %s (rdd-plus is now tpp) into %s; restart your shell, confirm with `tpp version`, then run `tpp sync` to move your hooks to tpp\n", result.Latest, gobin)
 	return 0
 }
 
