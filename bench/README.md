@@ -252,6 +252,13 @@ the measurement. Every run records `corpus`, a digest over the case names and
 defect ids it measured, in its aggregate and in a `corpus` column appended last to the history; a
 case that failed or was invalid still contributes its name and key defect ids to that digest.
 
+Each valid run also records which plan mode it wrote: `light` counts plans that declare a validated
+scoped run, and `micro` counts activated micro plans (declared and accepted by `plan check`). The two
+are counted independently — plan check refuses a plan that is both — per case in the summary, in the
+aggregate, and in the history, where `micro` is a column appended last. Rows written before that
+column sit under a note saying they record no micro plan either way. `bench compare` prints both counts
+before → after beside the turn and cost totals, so a Micro A/B reads its cost next to its activation.
+
 ```
 git commit                      # a build from a dirty tree prints a warning and cannot be re-derived
 make build

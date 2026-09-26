@@ -267,6 +267,10 @@ func runUpdate(args []string) int {
 	}); err != nil {
 		fmt.Fprintln(os.Stderr, "update: cache:", err)
 	}
+	if result.Relation == update.Unknown {
+		fmt.Println(update.Uncomparable(buildinfo.Version, result.Latest))
+		return 0
+	}
 	if result.Relation != update.Behind {
 		fmt.Printf("already up to date (installed %s, latest %s)\n", buildinfo.Version, result.Latest)
 		return 0
@@ -1554,7 +1558,7 @@ func runBenchRescore(args []string) int {
 		Found: agg.Found, Recall: agg.Recall, Caught: agg.Caught, RecallCaught: agg.RecallCaught,
 		FalsePositives: agg.FalsePositives, Failed: agg.Failed, Invalid: agg.Invalid, NoPlan: agg.NoPlan,
 		Kind: bench.KindRescore, RunTS: agg.RunTS, SourceRun: results, SkillVersion: agg.SkillVersion,
-		Corpus: agg.Corpus, LightActivated: agg.LightActivated, Runs: agg.Runs,
+		Corpus: agg.Corpus, LightActivated: agg.LightActivated, MicroActivated: agg.MicroActivated, Runs: agg.Runs,
 	})
 	fmt.Print(bench.Summary(agg))
 	return 0

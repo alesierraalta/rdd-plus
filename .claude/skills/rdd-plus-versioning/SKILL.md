@@ -4,7 +4,7 @@ description: "Trigger: versionar, version bump, release, subir versión, install
 license: Apache-2.0
 metadata:
   author: "alesierraalta"
-  version: "1.0"
+  version: "1.3"
 ---
 
 ## Activation Contract
@@ -19,10 +19,14 @@ ship, when the operator asks to version or release, or to install the latest bui
 - Binary version lives only in `internal/buildinfo/buildinfo.go` (`var Version`). Bump the patch
   (`0.3.8` → `0.3.9`); a minor bump is the operator's call.
 - A skill whose `SKILL.md`, `assets/` or `references/` changed bumps its own `metadata.version` patch.
-- Set a skill's `requires_rdd_plus` to the new binary version only when the skill relies on behaviour
-  that version introduced; otherwise leave it.
+- test-strategy's `requires_rdd_plus` and its "written for `rdd-plus X`" line always equal the binary
+  version (`TestSkillNamesTheRddPlusVersionItRequires` enforces it), so every binary bump also bumps
+  test-strategy's `metadata.version` patch. Other skills (e.g. breakcheck) change `requires_rdd_plus` only
+  when they rely on behaviour that version introduced.
 - Never rewrite historical records: `docs/testing/test-plan.md` rows, `bench/history.md`, fixture reports.
-- No git tags or GitHub releases unless the operator asks; this repo does not use them.
+- Every released binary version gets an annotated tag `vX.Y.Z` on its merge commit, pushed to origin:
+  `rdd-plus update` reads the Go module proxy, which only sees tagged releases (an untagged main is a
+  `v0.0.0-…` pseudo-version that cannot be compared). No GitHub release objects unless asked.
 - `main` is protected: ship through a PR whose `test` check passes, merged with a merge commit.
 - Build the installed binary from a clean clone of `origin/main`, never from a checkout with staged or
   unstaged foreign changes.
@@ -31,9 +35,8 @@ ship, when the operator asks to version or release, or to install the latest bui
 
 | Changed | Bump |
 |---|---|
-| Binary only | `buildinfo.Version` patch |
+| Binary (any) | `buildinfo.Version` patch + test-strategy `metadata.version` patch + its `requires_rdd_plus` |
 | Skill text/assets only | that skill's `metadata.version` patch |
-| Skill uses new binary behaviour | both, plus `requires_rdd_plus` |
 | Tests, CI, `odd/`, `.claude/` only | nothing |
 
 ## Execution Steps
@@ -43,10 +46,14 @@ ship, when the operator asks to version or release, or to install the latest bui
 2. Edit the version strings, then update every live mention: `rtk proxy grep -rn '<old>' internal cmd
    assets README.md` — the prose in `SKILL.md` ("written for `rdd-plus X`", "aligned with <skill> X")
    and `TestEmbeddedSkillIdentityNamesTheEmbeddedSkill` in `internal/feedback/feedback_test.go`.
-3. `gofmt -l`, `go vet ./...`, `go test ./... -short -count=1`; `go run ./cmd/rdd-plus version`.
+3. `gofmt -l`, `go vet ./...`, then the FULL suite as CI runs it — no `-short`, in a clean clone of the
+   branch (`git clone --branch <b> . $S/ci && cd $S/ci && go test ./... -count=1`), because `-short` skips the
+   process-spawning tests and a local checkout may carry foreign changes; `go run ./cmd/rdd-plus version`.
 4. Commit `chore(release): rdd-plus X, <skill> Y` on a branch, open the PR listing what ships, wait for
    `test`, merge.
-5. Install: follow [references/install.md](references/install.md).
+5. Tag the merge commit and push it: `git tag -a vX -m "rdd-plus X" <merge sha> && git push origin vX`;
+   confirm `https://proxy.golang.org/github.com/alesierraalta/rdd-plus/@v/vX.info` answers with that hash.
+6. Install: follow [references/install.md](references/install.md).
 
 ## Output Contract
 

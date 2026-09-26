@@ -68,7 +68,10 @@ type Result struct {
 	// LightActivated records that the run declared a scoped run its own plan validates. It is the only
 	// durable answer to "did the mode run?": a defect found, a well-formed ordinary plan, or a line that
 	// merely looks like a declaration leaves it false.
-	LightActivated  bool        `json:"light_activated"`
+	LightActivated bool `json:"light_activated"`
+	// MicroActivated records that the run's plan is an activated micro plan: declared, and accepted by
+	// plan check as a whole. It is counted apart from LightActivated; plan check refuses a plan that is both.
+	MicroActivated  bool        `json:"micro_activated"`
 	RowsWithoutPath int         `json:"rows_without_path"` // finding rows that name no file, so nothing can be located
 	ClaimedPinned   int         `json:"claimed_pinned"`    // defects whose finding names a pinning test
 	Caught          int         `json:"caught"`            // defects some agent test distinguishes (fixture vs fix)
@@ -225,7 +228,7 @@ func Score(plan string, key Key) Result {
 
 // scoreMechanical applies the lexical and location rules without deciding whether a proposal is true.
 func scoreMechanical(plan string, key Key) Result {
-	r := Result{Case: key.ID, Control: key.IsCleanControl(), Total: len(key.Defects), LightActivated: plancheck.LightActivated(plan), MetricsVersion: MetricsVersion}
+	r := Result{Case: key.ID, Control: key.IsCleanControl(), Total: len(key.Defects), LightActivated: plancheck.LightActivated(plan), MicroActivated: plancheck.MicroActivated(plan), MetricsVersion: MetricsVersion}
 	findings := plancheck.Section(plan, "Findings")
 	findingsHeader, rows := plancheck.Table(plan, "Findings")
 	r.FindingRows = len(rows)

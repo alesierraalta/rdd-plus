@@ -180,6 +180,24 @@ func TestUpdateReportsWhenAlreadyUpToDate(t *testing.T) {
 	}
 }
 
+// A module with no release tag reaches the proxy as a pseudo-version, which carries no comparable release
+// number: saying "already up to date" would be a verdict the check never reached.
+func TestUpdateDoesNotCallAnUncomparableVersionUpToDate(t *testing.T) {
+	bin := buildCLI(t)
+	srv := fakeProxy(t, "v0.0.0-20260925221235-11e300da863b")
+	out, code := runCLIEnv(t, bin, []string{
+		"RDD_PLUS_HOME=" + t.TempDir(),
+		"RDD_PLUS_UPDATE_BASE_URL=" + srv.URL,
+		"PATH=" + t.TempDir(),
+	}, "update", "--check")
+	if code != 0 {
+		t.Fatalf("update --check on a pseudo-version = %d, want 0\n%s", code, out)
+	}
+	if strings.Contains(out, "already up to date") || !strings.Contains(out, "cannot compare") {
+		t.Fatalf("an uncomparable latest must be named as such, not as up to date:\n%s", out)
+	}
+}
+
 // --check refreshes the cache and reports the gap but never reaches for go.
 func TestUpdateCheckOnlyNeverInstalls(t *testing.T) {
 	bin := buildCLI(t)

@@ -114,7 +114,10 @@ type Aggregate struct {
 	NoPlan         int      `json:"no_plan"` // valid runs whose selected plan file is absent; scored zero
 	// LightActivated counts the valid runs whose own plan declares a validated scoped run: the reading's
 	// answer to "did the mode run?", next to what it cost and what it caught.
-	LightActivated int    `json:"light_activated"`
+	LightActivated int `json:"light_activated"`
+	// MicroActivated counts the valid runs whose own plan is an activated micro plan, apart from
+	// LightActivated, so a reading can say how often the micro path ran and what it cost.
+	MicroActivated int    `json:"micro_activated"`
 	CostCeilingHit bool   `json:"cost_ceiling_hit"`
 	RescoredFrom   string `json:"rescored_from,omitempty"` // set when this aggregate re-reads another run with newer rules
 	RunTS          string `json:"run_ts,omitempty"`        // rescore: when the run it re-reads happened
@@ -391,6 +394,9 @@ func foldResult(agg *Aggregate, u unit, res Result) {
 		if res.LightActivated {
 			agg.LightActivated++
 		}
+		if res.MicroActivated {
+			agg.MicroActivated++
+		}
 	}
 }
 
@@ -400,7 +406,7 @@ func finalizeAggregate(agg *Aggregate) {
 	counts := CountUnique(agg.Cases)
 	agg.Defects, agg.Found, agg.Caught = 0, 0, 0
 	agg.ClaimedPinned, agg.FalsePositives = 0, 0
-	agg.Invalid, agg.Failed, agg.NoPlan, agg.LightActivated = 0, 0, 0, 0
+	agg.Invalid, agg.Failed, agg.NoPlan, agg.LightActivated, agg.MicroActivated = 0, 0, 0, 0, 0
 	agg.AdjudicatedTrue, agg.AdjudicatedFalse, agg.OutOfScope = 0, 0, 0
 	agg.PendingAdjudication = 0
 	complete := true
@@ -426,6 +432,9 @@ func finalizeAggregate(agg *Aggregate) {
 		}
 		if r.LightActivated {
 			agg.LightActivated++
+		}
+		if r.MicroActivated {
+			agg.MicroActivated++
 		}
 		if r.Control {
 			continue
@@ -504,7 +513,7 @@ func historyEntry(agg Aggregate, caseDirs []string, opts Options) HistoryEntry {
 		FalsePositives: agg.FalsePositives, CostUSD: agg.CostUSD,
 		Failed: agg.Failed, Invalid: agg.Invalid, NoPlan: agg.NoPlan, Kind: KindRun,
 		SkillVersion: SkillVersion(opts.SkillFile), Corpus: agg.Corpus,
-		LightActivated: agg.LightActivated, Runs: opts.Runs,
+		LightActivated: agg.LightActivated, MicroActivated: agg.MicroActivated, Runs: opts.Runs,
 		MetricsVersion: agg.MetricsVersion, UniqueDefects: agg.UniqueDefects, UniqueFound: agg.UniqueFound,
 		UniqueConfirmed: agg.UniqueConfirmed, UniqueCaught: agg.UniqueCaught, DefectRuns: agg.DefectRuns,
 		Controls: agg.Controls, Precision: agg.Precision, PendingAdjudication: agg.PendingAdjudication,
@@ -713,7 +722,7 @@ func Summary(agg Aggregate) string {
 	if agg.CostCeilingHit {
 		b.WriteString(" · cost ceiling hit")
 	}
-	b.WriteString("\n\n| case | reported | pinned | caught | light | false positives | cost USD | turns | minutes | note | precision (pending) |\n|---|---|---|---|---|---|---|---|---|---|---|\n")
+	b.WriteString("\n\n| case | reported | pinned | caught | light | micro | false positives | cost USD | turns | minutes | note | precision (pending) |\n|---|---|---|---|---|---|---|---|---|---|---|---|\n")
 	for _, c := range agg.Cases {
 		note := strings.TrimSpace(invalidTag(c) + noPlanTag(c))
 		if len(c.Notes) > 0 {
@@ -729,17 +738,17 @@ func Summary(agg Aggregate) string {
 		if c.Control {
 			reported, pinned, caught = "clean", "clean", "clean"
 		}
-		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %d | %.3f | %d | %.1f | %s | %s |\n",
-			c.Case, reported, pinned, caught, lightTag(c), c.FalsePositives, c.CostUSD, c.Turns, c.Seconds/60, note, precision)
+		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %s | %d | %.3f | %d | %.1f | %s | %s |\n",
+			c.Case, reported, pinned, caught, lightTag(c), microTag(c), c.FalsePositives, c.CostUSD, c.Turns, c.Seconds/60, note, precision)
 	}
 	return b.String()
 }
 
 func aggregateTotals(agg Aggregate) string {
-	line := fmt.Sprintf("reported (defect-runs): %d/%d · reported (unique defects): %d/%d · claimed a pinning test: %d defect-runs · caught (defect-runs): %d/%d · caught (unique defects): %d/%d · precision: %s · out of scope: %d finding rows · inconclusive: %d runs · controls: %d runs · false positives: %d finding rows · failed: %d runs · invalid: %d runs · no plan: %d runs · light runs: %d · cost (USD): $%.3f",
+	line := fmt.Sprintf("reported (defect-runs): %d/%d · reported (unique defects): %d/%d · claimed a pinning test: %d defect-runs · caught (defect-runs): %d/%d · caught (unique defects): %d/%d · precision: %s · out of scope: %d finding rows · inconclusive: %d runs · controls: %d runs · false positives: %d finding rows · failed: %d runs · invalid: %d runs · no plan: %d runs · light runs: %d · micro runs: %d · cost (USD): $%.3f",
 		agg.Found, agg.Defects, agg.UniqueFound, agg.UniqueDefects, agg.ClaimedPinned, agg.Caught, agg.Defects, agg.UniqueCaught, agg.UniqueDefects,
 		precisionSummary(agg.Precision, agg.AdjudicatedTrue, agg.AdjudicatedFalse, agg.PendingAdjudication), agg.OutOfScope, agg.Inconclusive, agg.Controls,
-		agg.FalsePositives, agg.Failed, agg.Invalid, agg.NoPlan, agg.LightActivated, agg.CostUSD)
+		agg.FalsePositives, agg.Failed, agg.Invalid, agg.NoPlan, agg.LightActivated, agg.MicroActivated, agg.CostUSD)
 	if len(agg.UnstableCases) > 0 {
 		line += " · unstable cases: " + strings.Join(agg.UnstableCases, ", ")
 	}
@@ -766,7 +775,16 @@ func casePrecision(r Result) string {
 
 // lightTag is the per-case column: a reading has to show which runs were scoped, not only how many.
 func lightTag(r Result) string {
-	if r.LightActivated {
+	return yesNo(r.LightActivated)
+}
+
+// microTag is the per-case column for the micro path, read the same way as lightTag.
+func microTag(r Result) string {
+	return yesNo(r.MicroActivated)
+}
+
+func yesNo(b bool) string {
+	if b {
 		return "yes"
 	}
 	return "no"
