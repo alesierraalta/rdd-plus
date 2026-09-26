@@ -12,7 +12,11 @@ import (
 )
 
 // ConfigName is the repository-local declaration read from the worktree root.
-const ConfigName = ".rdd-plus.json"
+const ConfigName = ".tpp.json"
+
+// LegacyConfigName is the declaration's name before the rename. It is still read when ConfigName is absent,
+// and never renamed on the operator's behalf.
+const LegacyConfigName = ".rdd-plus.json"
 
 // Reader reads a file's text; nil means os.ReadFile.
 type Reader func(path string) (string, error)
@@ -34,51 +38,77 @@ func readDeclaration(root string, read Reader) (declaration, error) {
 			return string(body), err
 		}
 	}
-	body, err := read(filepath.Join(root, ConfigName))
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return declaration{}, nil
-		}
-		return declaration{}, fmt.Errorf("%s: %w", ConfigName, err)
+	name, body, err := readDeclarationFile(root, read)
+	if err != nil || name == "" {
+		return declaration{}, err
 	}
 
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(body), &fields); err != nil {
-		return declaration{}, fmt.Errorf("%s: %w", ConfigName, err)
+		return declaration{}, fmt.Errorf("%s: %w", name, err)
 	}
 	if fields == nil {
-		return declaration{}, fmt.Errorf("%s: declaration must be a JSON object", ConfigName)
+		return declaration{}, fmt.Errorf("%s: declaration must be a JSON object", name)
 	}
 	// The key check must be a map check: Go's decoder matches struct field names case-insensitively,
 	// so {"planpath": ...} would decode into the field and DisallowUnknownFields would not refuse it.
 	// Checking the exact key is what makes a typo fail closed.
 	for key := range fields {
 		if key != "planPath" && key != "run" {
-			return declaration{}, fmt.Errorf("%s: unknown field %q", ConfigName, key)
+			return declaration{}, fmt.Errorf("%s: unknown field %q", name, key)
 		}
 	}
 
 	var d declaration
 	if declared, present := fields["planPath"]; present {
 		if err := json.Unmarshal(declared, &d.planPath); err != nil {
-			return declaration{}, fmt.Errorf("%s: planPath must be a string: %w", ConfigName, err)
+			return declaration{}, fmt.Errorf("%s: planPath must be a string: %w", name, err)
 		}
 		if strings.TrimSpace(d.planPath) == "" {
-			return declaration{}, fmt.Errorf("%s: planPath is empty", ConfigName)
+			return declaration{}, fmt.Errorf("%s: planPath is empty", name)
 		}
-		if err := ValidatePlanPath(ConfigName, d.planPath); err != nil {
+		if err := ValidatePlanPath(name, d.planPath); err != nil {
 			return declaration{}, err
 		}
 	}
 	if declared, present := fields["run"]; present {
 		if err := json.Unmarshal(declared, &d.run); err != nil {
-			return declaration{}, fmt.Errorf("%s: run must be a string: %w", ConfigName, err)
+			return declaration{}, fmt.Errorf("%s: run must be a string: %w", name, err)
 		}
-		if err := ValidateRun(ConfigName, d.run); err != nil {
+		if err := ValidateRun(name, d.run); err != nil {
 			return declaration{}, err
 		}
 	}
 	return d, nil
+}
+
+// readDeclarationFile answers the name and body of the declaration the root carries: ConfigName, else
+// LegacyConfigName, else no name at all. Both present is an error naming both, because the two can disagree
+// and silently picking one would audit a plan the operator did not mean.
+func readDeclarationFile(root string, read Reader) (string, string, error) {
+	var found []string
+	var body string
+	for _, name := range []string{ConfigName, LegacyConfigName} {
+		text, err := read(filepath.Join(root, name))
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return "", "", fmt.Errorf("%s: %w", name, err)
+		}
+		if len(found) == 0 {
+			body = text
+		}
+		found = append(found, name)
+	}
+	switch len(found) {
+	case 0:
+		return "", "", nil
+	case 1:
+		return found[0], body, nil
+	default:
+		return "", "", fmt.Errorf("both %s and %s are present at the worktree root; keep %s and remove %s", ConfigName, LegacyConfigName, ConfigName, LegacyConfigName)
+	}
 }
 
 // DeclaredPath returns the repository-relative plan the root declares, or "" when the root declares

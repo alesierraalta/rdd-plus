@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alesierraalta/rdd-plus/internal/doctor"
+	"github.com/alesierraalta/rdd-plus/internal/hookcmd"
 )
 
 // SuiteResult is the fixture's own suite outcome before the agent touches it.
@@ -48,6 +48,8 @@ func Scaffold(caseDir, ws string, key Key, suiteTimeout time.Duration) (SuiteRes
 	if _, err := os.Stat(filepath.Join(ws, KeyFile)); err == nil {
 		return SuiteResult{}, errors.New("answer key leaked into the workspace")
 	}
+	// The commit identity keeps its pre-rename name on purpose: recorded runs were scaffolded under it, and
+	// the scaffold commit must stay the same object for a run today as for the runs it is compared with.
 	for _, args := range [][]string{
 		{"init", "-q"},
 		{"config", "user.email", "bench@rdd-plus"},
@@ -69,7 +71,7 @@ func Scaffold(caseDir, ws string, key Key, suiteTimeout time.Duration) (SuiteRes
 // command it could not read, so the caller can report which suite was unreadable.
 func RunSuite(ws, suite string, timeout time.Duration) (SuiteResult, error) {
 	res := SuiteResult{Command: suite, ExitCode: -1}
-	fields, err := doctor.ShellWords(suite)
+	fields, err := hookcmd.ShellWords(suite)
 	if err != nil {
 		return res, err
 	}

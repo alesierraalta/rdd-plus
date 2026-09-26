@@ -5,7 +5,7 @@ license: Apache-2.0
 metadata:
   author: "alesierraalta"
   version: "0.3.23"
-  requires_rdd_plus: "0.3.20"
+  requires_tpp: "0.3.20"
   scope: [common]
   auto_invoke: "Any request to test something: infer scope and mode from repo state, build or resume the persisted plan, execute it through specialized testing skills"
 ---

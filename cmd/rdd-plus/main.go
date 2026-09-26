@@ -26,6 +26,7 @@ import (
 	"github.com/alesierraalta/rdd-plus/internal/feature"
 	"github.com/alesierraalta/rdd-plus/internal/feedback"
 	"github.com/alesierraalta/rdd-plus/internal/gate"
+	"github.com/alesierraalta/rdd-plus/internal/hookcmd"
 	"github.com/alesierraalta/rdd-plus/internal/plan"
 	"github.com/alesierraalta/rdd-plus/internal/repair"
 	"github.com/alesierraalta/rdd-plus/internal/sanitize"
@@ -240,8 +241,8 @@ func statusView() (tui.StatusView, error) {
 // runUpdate checks the module proxy for the latest tag, refreshes the cache `status` reads, and
 // installs through `go install` when this build is behind. The binary a fresh install lands on
 // only runs after a restart, so success points at a new shell instead of claiming this process
-// became the new version. RDD_PLUS_UPDATE_BASE_URL points the check at another proxy (tests use
-// a local one); an empty value means the public Go module proxy.
+// became the new version. TPP_UPDATE_BASE_URL, or the legacy RDD_PLUS_UPDATE_BASE_URL when it is unset,
+// points the check at another proxy (tests use a local one); an empty value means the public Go module proxy.
 func runUpdate(args []string) int {
 	fs := flag.NewFlagSet("update", flag.ContinueOnError)
 	checkOnly := fs.Bool("check", false, "only check and refresh the cache; never install")
@@ -252,7 +253,11 @@ func runUpdate(args []string) int {
 		fmt.Fprintf(os.Stderr, "update: unexpected argument %q\n", fs.Arg(0))
 		return 2
 	}
-	checker := update.Checker{BaseURL: os.Getenv("RDD_PLUS_UPDATE_BASE_URL")}
+	baseURL := os.Getenv("TPP_UPDATE_BASE_URL")
+	if baseURL == "" {
+		baseURL = os.Getenv("RDD_PLUS_UPDATE_BASE_URL")
+	}
+	checker := update.Checker{BaseURL: baseURL}
 	result, err := checker.Check(context.Background())
 	if err != nil {
 		// A failed check still lands in the cache so the record shows a check was attempted;
@@ -1083,7 +1088,7 @@ func runShell(ctx context.Context, dir, command string) (string, error) {
 // rest of the tool reads commands with, so a command it cannot read is refused here instead of run as a
 // fragment.
 func probeHook(command string) error {
-	fields, err := doctor.ShellWords(command)
+	fields, err := hookcmd.ShellWords(command)
 	if err != nil || len(fields) == 0 {
 		return fmt.Errorf("cannot read the wired command")
 	}

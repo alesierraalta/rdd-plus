@@ -199,7 +199,8 @@ func TestSaveIsPrivateAndAtomic(t *testing.T) {
 	}
 }
 
-func TestPathHonoursRDD_PLUS_HOME(t *testing.T) {
+func TestPathHonoursTheLegacyHomeVariable(t *testing.T) {
+	t.Setenv("TPP_HOME", "")
 	home := filepath.Join(t.TempDir(), "chosen-home")
 	t.Setenv("RDD_PLUS_HOME", home)
 	got, err := Path()

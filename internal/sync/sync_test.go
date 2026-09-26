@@ -259,6 +259,31 @@ func TestSyncRemovesPreviousGateHooks(t *testing.T) {
 	}
 }
 
+// Upgrading from rdd-plus to tpp rewrites the wired gate in place: one Stop entry for the new binary, no
+// leftover for the old one, and a neighbour hook that only mentions the old name in its path survives.
+func TestSyncRewritesALegacyGateHookToTheNewBinary(t *testing.T) {
+	t.Setenv("RDD_PLUS_HOME", t.TempDir())
+	cfg := t.TempDir()
+	existing := `{"hooks":{"Stop":[
+  {"matcher":"","hooks":[{"type":"command","command":"\"/opt/rdd-plus-tools/notify\" gate","timeout":30}]},
+  {"matcher":"","hooks":[{"type":"command","command":"\"/opt/tools/rdd-plus\" gate","timeout":30}]}
+]}}`
+	if err := os.WriteFile(filepath.Join(cfg, "settings.json"), []byte(existing), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	const tppBin = "/opt/tools/tpp"
+	for i := 0; i < 2; i++ {
+		if _, err := Sync(cfg, tppBin, Options{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cmds := stopCommands(t, readSettings(t, cfg))
+	want := []string{`"/opt/rdd-plus-tools/notify" gate`, HookCommand(tppBin)}
+	if len(cmds) != len(want) || cmds[0] != want[0] || cmds[1] != want[1] {
+		t.Fatalf("stop hooks = %q, want %q", cmds, want)
+	}
+}
+
 func TestIsPreviousGate(t *testing.T) {
 	cases := []struct {
 		cmd  string
@@ -267,6 +292,14 @@ func TestIsPreviousGate(t *testing.T) {
 		{`"/home/u/.claude/hooks/testing-gate.mjs"`, true},
 		{`"/home/u/.claude/hooks/bin/testing-gate"`, true},
 		{`"/old/rdd-plus" gate`, true},
+		{`/usr/local/bin/rdd-plus gate`, true},
+		{`"/home/u/go/bin/tpp" gate`, true},
+		{`"/opt/Program Files/tpp" gate`, true},
+		// Only the executable's own name counts: a directory or a sibling tool that merely mentions the
+		// product is somebody else's hook.
+		{`"/opt/rdd-plus-tools/notify" gate`, false},
+		{`"/home/u/rdd-plus/bin/other" gate`, false},
+		{`"/home/u/go/bin/tpp" check`, false},
 		{`gentle-ai review stop-hook --agent claude-code`, false},
 		{`"/home/u/.claude/hooks/ctx-read-guard.mjs"`, false},
 		{`some-other-tool gate`, false},

@@ -48,18 +48,45 @@ type State struct {
 	Features         map[string]FeatureState `json:"features,omitempty"`
 }
 
-// Path resolves <root>/state.json. The root is $RDD_PLUS_HOME when set, otherwise the XDG config
-// directory for this tool, otherwise ~/.config/rdd-plus.
+// Path resolves <root>/state.json. The root is $TPP_HOME when set, then the legacy $RDD_PLUS_HOME, otherwise
+// the XDG config directory's tpp folder. An installation made before the rename lives in the XDG config
+// directory's rdd-plus folder: when only that one exists it is moved to the new place once, and when the move
+// cannot happen the old folder stays the root, so the installation is never split across two places.
 func Path() (string, error) {
-	root := os.Getenv("RDD_PLUS_HOME")
-	if root == "" {
-		configDir, err := os.UserConfigDir()
-		if err != nil {
-			return "", fmt.Errorf("resolve XDG config directory: %w", err)
-		}
-		root = filepath.Join(configDir, "rdd-plus")
+	root, err := resolveRoot()
+	if err != nil {
+		return "", err
 	}
 	return filepath.Join(root, "state.json"), nil
+}
+
+// resolveRoot answers the directory that holds state.json, its backups and the update cache; see Path.
+func resolveRoot() (string, error) {
+	for _, name := range []string{"TPP_HOME", "RDD_PLUS_HOME"} {
+		if root := os.Getenv(name); root != "" {
+			return root, nil
+		}
+	}
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve XDG config directory: %w", err)
+	}
+	return adoptLegacyRoot(filepath.Join(configDir, "rdd-plus"), filepath.Join(configDir, "tpp")), nil
+}
+
+// adoptLegacyRoot answers the root to use: current once it exists, else legacy moved to current, else legacy
+// itself when the move fails. Anything but a clean absence of current leaves legacy untouched.
+func adoptLegacyRoot(legacy, current string) string {
+	if _, err := os.Lstat(current); !errors.Is(err, os.ErrNotExist) {
+		return current
+	}
+	if info, err := os.Stat(legacy); err != nil || !info.IsDir() {
+		return current
+	}
+	if err := os.Rename(legacy, current); err != nil {
+		return legacy
+	}
+	return current
 }
 
 // Load answers an empty state when the file is absent, and an error when it exists but cannot be

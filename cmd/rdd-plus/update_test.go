@@ -281,3 +281,23 @@ func TestUpdateRefusesWhenTheRunningBinaryDirIsNotWritable(t *testing.T) {
 		t.Fatalf("go ran although the running binary's directory is not writable:\n%s", out)
 	}
 }
+
+// The renamed variable wins when both are set, so a shell that still exports the old name cannot point
+// the check at a proxy the operator already moved away from.
+func TestUpdateBaseURLPrefersTheNewVariable(t *testing.T) {
+	bin := buildCLI(t)
+	current := fakeProxy(t, "v99.0.0")
+	legacy := fakeProxy(t, "v77.0.0")
+	out, code := runCLIEnv(t, bin, []string{
+		"TPP_HOME=" + t.TempDir(),
+		"TPP_UPDATE_BASE_URL=" + current.URL,
+		"RDD_PLUS_UPDATE_BASE_URL=" + legacy.URL,
+		"PATH=" + t.TempDir(),
+	}, "update", "--check")
+	if code != 0 {
+		t.Fatalf("update --check = %d, want 0\n%s", code, out)
+	}
+	if !strings.Contains(out, "v99.0.0") || strings.Contains(out, "v77.0.0") {
+		t.Fatalf("update --check did not use TPP_UPDATE_BASE_URL:\n%s", out)
+	}
+}

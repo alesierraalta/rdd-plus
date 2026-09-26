@@ -18,6 +18,7 @@ import (
 
 	"github.com/alesierraalta/rdd-plus/internal/assets"
 	"github.com/alesierraalta/rdd-plus/internal/buildinfo"
+	"github.com/alesierraalta/rdd-plus/internal/hookcmd"
 	"github.com/alesierraalta/rdd-plus/internal/manifest"
 	"github.com/alesierraalta/rdd-plus/internal/skilltree"
 	"github.com/alesierraalta/rdd-plus/internal/state"
@@ -609,7 +610,7 @@ func payloadMode(source string) os.FileMode {
 }
 
 // wireHook makes settings carry exactly one gate hook: previous gate entries (the Node hook,
-// the pre-repo binary, or an older rdd-plus path) are dropped, and the desired command is added
+// the pre-repo binary, or an older rdd-plus or tpp path) are dropped, and the desired command is added
 // only when absent. It returns whether settings changed and which commands were removed.
 func wireHook(settings map[string]any, command string) (bool, []string) {
 	hooks, _ := settings["hooks"].(map[string]any)
@@ -687,12 +688,13 @@ func filterStopGates(settings map[string]any, keep func(cmd string) bool) (chang
 	return changed, removed, present
 }
 
-// isPreviousGate recognizes every earlier way the gate was wired.
+// isPreviousGate recognizes every earlier way the gate was wired: the Node hook, the pre-repo binary, and
+// the gate subcommand of this binary under its current or its pre-rename name, wherever it was installed.
 func isPreviousGate(cmd string) bool {
 	c := strings.TrimSpace(cmd)
 	c = strings.TrimSuffix(c, " gate")
 	c = strings.Trim(c, "\"")
 	return strings.HasSuffix(c, "/testing-gate.mjs") ||
 		strings.HasSuffix(c, "/hooks/bin/testing-gate") ||
-		(strings.HasSuffix(cmd, " gate") && strings.Contains(c, "rdd-plus"))
+		hookcmd.IsGate(cmd)
 }

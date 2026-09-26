@@ -916,7 +916,7 @@ func TestVersionNamesTheBuild(t *testing.T) {
 // The probe runs the wired Stop command, so a command it cannot read must be refused before anything is
 // run: an unterminated quote used to be an error the probe turned into the doctor's own verdict, and it
 // must not become an attempt to execute the fragment. The split-rule cases that used to live here belong
-// to the one splitter, doctor.ShellWords, and are tested in internal/doctor.
+// to the one splitter, hookcmd.ShellWords, and are tested in internal/doctor.
 func TestProbeHookRefusesACommandItCannotRead(t *testing.T) {
 	for _, command := range []string{"", "   \t", `"unbalanced`, `'unbalanced`, `/h/bin/rdd-plus "gate`} {
 		err := probeHook(command)

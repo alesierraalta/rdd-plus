@@ -46,9 +46,9 @@ func TestSkillNamesTheRddPlusVersionItRequires(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SKILL.md missing: %v", err)
 	}
-	field := regexp.MustCompile(`(?m)^\s*requires_rdd_plus:\s*"?([0-9]+\.[0-9]+\.[0-9]+)"?\s*$`).FindSubmatch(data)
+	field := requiredVersion(data)
 	if field == nil {
-		t.Fatalf("test-strategy frontmatter has no requires_rdd_plus; this build is %s", buildinfo.Version)
+		t.Fatalf("test-strategy frontmatter has no requires_tpp; this build is %s", buildinfo.Version)
 	}
 	if got := string(field[1]); got != buildinfo.Version {
 		t.Fatalf("test-strategy requires rdd-plus %s, but this build is %s", got, buildinfo.Version)
@@ -57,6 +57,17 @@ func TestSkillNamesTheRddPlusVersionItRequires(t *testing.T) {
 		!strings.Contains(string(data), "go install github.com/alesierraalta/rdd-plus/cmd/rdd-plus@latest") {
 		t.Fatalf("test-strategy requires rdd-plus %s but names no install path", buildinfo.Version)
 	}
+}
+
+// requiredVersion reads the binary version a skill's frontmatter requires: requires_tpp, or requires_rdd_plus
+// in a skill written before the rename.
+func requiredVersion(skill []byte) [][]byte {
+	for _, key := range []string{"requires_tpp", "requires_rdd_plus"} {
+		if m := regexp.MustCompile(`(?m)^\s*` + key + `:\s*"?([0-9]+\.[0-9]+\.[0-9]+)"?\s*$`).FindSubmatch(skill); m != nil {
+			return m
+		}
+	}
+	return nil
 }
 
 func TestNoRunArtifactsAreEmbedded(t *testing.T) {

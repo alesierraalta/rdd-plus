@@ -209,7 +209,7 @@ func SaveCache(entry Cache) (bool, error) {
 	return true, nil
 }
 
-// cachePath is the cache file beside state.json: same root, same RDD_PLUS_HOME/XDG resolution.
+// cachePath is the cache file beside state.json: same root, same TPP_HOME/RDD_PLUS_HOME/XDG resolution.
 func cachePath() (string, error) {
 	statePath, err := state.Path()
 	if err != nil {
