@@ -121,6 +121,17 @@ ten lines or fewer, its contract unchanged, and none of the refused classes. `pl
 shape, the corroborated file, the absence of a Layer matrix and of a `Light:` line, and the two ledger
 rows; whether the function was really that small stays, as with `Light:`, with the operator and the reader.
 
+Whether Micro is cheaper is not established. One A/B on 2026-09-26 (rdd-plus 0.3.13, test-strategy
+0.3.16, runner pi, `openai-codex/gpt-5.6-luna`, twenty cases at three runs each, corpus
+`sha256:61d78d07b4779295`) compared the shipped skill with the same build whose SKILL.md dropped the Micro
+route. Detection did not move (caught 65 of 93 defect-runs on both sides), and the side with the route cost
+more ($2.05 and 1,737 turns against $1.79 and 1,558), but the comparison cannot be charged to Micro: the arm
+without the route still declared Micro eleven times against three, because the embedded micro template and
+`plan init --micro` stayed reachable. Within the nine cases where some runs went micro and others did not,
+micro runs took fewer turns in five and more in four, on one to three micro runs a case. Treat Micro as a
+record that states less, not as a measured saving; a clean measurement needs an arm with no path to Micro at
+all.
+
 ---
 
 ## Central Routing to Sibling Skills
