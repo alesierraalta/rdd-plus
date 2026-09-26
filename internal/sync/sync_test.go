@@ -583,3 +583,41 @@ func TestSyncCreatesNoStateOnADryRun(t *testing.T) {
 func contains(values []string, want string) bool {
 	return containsString(values, want)
 }
+
+// A host with thousands of user files must not print thousands of rows: the report lists what
+// changes and counts what does not, whether it plans or writes.
+func TestReportListsChangesAndCountsTheRest(t *testing.T) {
+	host := HostReport{
+		Host:   Host{Name: "claude", ConfigDir: "/cfg"},
+		Counts: map[ActionClass]int{ActionUpdate: 1, ActionOK: 2, ActionForeign: 3},
+		Actions: []Action{
+			{Class: ActionOK, Path: "/cfg/skills/a/SKILL.md", Reason: "matches"},
+			{Class: ActionOK, Path: "/cfg/skills/b/SKILL.md", Reason: "matches"},
+			{Class: ActionUpdate, Path: "/cfg/skills/c/SKILL.md", Reason: "differs"},
+			{Class: ActionForeign, Path: "/cfg/skills/mine/x.md", Reason: "user file"},
+			{Class: ActionForeign, Path: "/cfg/skills/mine/y.md", Reason: "user file"},
+			{Class: ActionForeign, Path: "/cfg/skills/mine/z.md", Reason: "user file"},
+		},
+		Unchanged: []string{"a", "b"},
+		Written:   []string{"c"},
+		Foreign:   []string{"/cfg/skills/mine/x.md", "/cfg/skills/mine/y.md", "/cfg/skills/mine/z.md"},
+	}
+	for _, dryRun := range []bool{true, false} {
+		out := Report{DryRun: dryRun, Hosts: []HostReport{host}}.String()
+		for _, hidden := range []string{"/cfg/skills/a/SKILL.md", "/cfg/skills/mine/"} {
+			if strings.Contains(out, hidden) {
+				t.Errorf("dry-run=%v report lists %s row by row:\n%s", dryRun, hidden, out)
+			}
+		}
+		if !strings.Contains(out, "skip-user: 3 files not managed by rdd-plus (left untouched)") {
+			t.Errorf("dry-run=%v report does not count the user files:\n%s", dryRun, out)
+		}
+	}
+	if out := (Report{DryRun: true, Hosts: []HostReport{host}}).String(); !strings.Contains(out, "[update] /cfg/skills/c/SKILL.md: differs") {
+		t.Errorf("dry-run report hides the update:\n%s", out)
+	}
+	out := Report{Hosts: []HostReport{host}}.String()
+	if !strings.Contains(out, "c ") || !strings.Contains(out, "written") || !strings.Contains(out, "2 skills unchanged") {
+		t.Errorf("write report does not list the written skill and count the unchanged ones:\n%s", out)
+	}
+}
