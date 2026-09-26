@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/alesierraalta/rdd-plus/internal/assets"
+	"github.com/alesierraalta/tpp/internal/assets"
 )
 
 // CredentialsFile is the only piece of the operator's configuration a benchmark run needs: the

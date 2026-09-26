@@ -6,7 +6,7 @@ import (
 )
 
 func TestRenderMenu(t *testing.T) {
-	want := "rdd-plus tui\n" +
+	want := "tpp tui\n" +
 		"\n" +
 		"  Status\n" +
 		"  Features\n" +
@@ -21,7 +21,7 @@ func TestRenderMenu(t *testing.T) {
 
 func TestRenderStatus(t *testing.T) {
 	fixture := StatusView{
-		StateRoot:        "/home/u/.config/rdd-plus",
+		StateRoot:        "/home/u/.config/tpp",
 		StateExists:      true,
 		InstalledVersion: "1.4.0",
 		AvailableVersion: "unknown (no update check yet)",
@@ -29,9 +29,9 @@ func TestRenderStatus(t *testing.T) {
 			{ID: "feedback", Title: "Feedback", Enabled: false},
 		},
 	}
-	want := "rdd-plus tui: status\n" +
+	want := "tpp tui: status\n" +
 		"\n" +
-		"State root: /home/u/.config/rdd-plus\n" +
+		"State root: /home/u/.config/tpp\n" +
 		"State exists: yes\n" +
 		"Installed version: 1.4.0\n" +
 		"Available version: unknown (no update check yet)\n" +
@@ -44,7 +44,7 @@ func TestRenderStatus(t *testing.T) {
 		t.Errorf("renderStatus ok =\n%q\nwant\n%q", got, want)
 	}
 
-	wantErr := "rdd-plus tui: status\n" +
+	wantErr := "tpp tui: status\n" +
 		"\n" +
 		"error: status unavailable\n" +
 		"\n" +
@@ -59,7 +59,7 @@ func TestRenderFeatures(t *testing.T) {
 		{ID: "feedback", Title: "Feedback", Enabled: false},
 		{ID: "logging", Title: "Logging", Enabled: true},
 	}
-	want := "rdd-plus tui: features\n" +
+	want := "tpp tui: features\n" +
 		"\n" +
 		"> feedback  Feedback  disabled\n" +
 		"  logging   Logging   enabled\n" +
@@ -69,7 +69,7 @@ func TestRenderFeatures(t *testing.T) {
 		t.Errorf("renderFeatures no detail =\n%q\nwant\n%q", got, want)
 	}
 
-	wantDetail := "rdd-plus tui: features\n" +
+	wantDetail := "tpp tui: features\n" +
 		"\n" +
 		"  feedback  Feedback  disabled\n" +
 		"> logging   Logging   enabled\n" +
@@ -83,7 +83,7 @@ func TestRenderFeatures(t *testing.T) {
 }
 
 func TestRenderPlan(t *testing.T) {
-	want := "rdd-plus tui: sync plan (dry-run; writes nothing)\n" +
+	want := "tpp tui: sync plan (dry-run; writes nothing)\n" +
 		"\n" +
 		"line1\n" +
 		"line2\n" +
@@ -93,7 +93,7 @@ func TestRenderPlan(t *testing.T) {
 		t.Errorf("renderPlan ok =\n%q\nwant\n%q", got, want)
 	}
 
-	wantErr := "rdd-plus tui: sync plan (dry-run; writes nothing)\n" +
+	wantErr := "tpp tui: sync plan (dry-run; writes nothing)\n" +
 		"\n" +
 		"error: plan failed\n" +
 		"\n" +

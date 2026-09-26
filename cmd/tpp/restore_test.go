@@ -27,7 +27,7 @@ func TestCLIRestoreIsListedInTheUsage(t *testing.T) {
 func TestCLIRestoreWithoutBackupsExitsOne(t *testing.T) {
 	bin := buildCLI(t)
 	home := t.TempDir()
-	out, code := runCLIEnv(t, bin, []string{"RDD_PLUS_HOME=" + home}, "restore")
+	out, code := runCLIEnv(t, bin, []string{"TPP_HOME=" + home}, "restore")
 	if code != 1 {
 		t.Fatalf("restore without backups = %d, want 1\n%s", code, out)
 	}
@@ -42,7 +42,7 @@ func TestCLIRestoreDryRunThenRealRunPutsTheSnapshotBack(t *testing.T) {
 	bin := buildCLI(t)
 	home := t.TempDir()
 	cfg := t.TempDir()
-	if out, code := runCLIEnv(t, bin, []string{"RDD_PLUS_HOME=" + home}, "sync", "--config-dir", cfg); code != 0 {
+	if out, code := runCLIEnv(t, bin, []string{"TPP_HOME=" + home}, "sync", "--config-dir", cfg); code != 0 {
 		t.Fatalf("sync = %d\n%s", code, out)
 	}
 	skills, err := os.ReadDir(filepath.Join(cfg, "skills"))
@@ -55,7 +55,7 @@ func TestCLIRestoreDryRunThenRealRunPutsTheSnapshotBack(t *testing.T) {
 	}
 	// --force snapshots the modified file to the central store, then replaces it: the backup now
 	// holds "user edit\n" and the destination holds the embedded skill.
-	if out, code := runCLIEnv(t, bin, []string{"RDD_PLUS_HOME=" + home}, "sync", "--config-dir", cfg, "--force"); code != 0 {
+	if out, code := runCLIEnv(t, bin, []string{"TPP_HOME=" + home}, "sync", "--config-dir", cfg, "--force"); code != 0 {
 		t.Fatalf("sync --force = %d\n%s", code, out)
 	}
 	before, err := os.ReadFile(target)
@@ -63,7 +63,7 @@ func TestCLIRestoreDryRunThenRealRunPutsTheSnapshotBack(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, code := runCLIEnv(t, bin, []string{"RDD_PLUS_HOME=" + home}, "restore", "--dry-run")
+	out, code := runCLIEnv(t, bin, []string{"TPP_HOME=" + home}, "restore", "--dry-run")
 	if code != 0 {
 		t.Fatalf("restore --dry-run = %d, want 0\n%s", code, out)
 	}
@@ -75,7 +75,7 @@ func TestCLIRestoreDryRunThenRealRunPutsTheSnapshotBack(t *testing.T) {
 		t.Fatalf("dry run changed the destination: %q, err=%v", after, err)
 	}
 
-	out, code = runCLIEnv(t, bin, []string{"RDD_PLUS_HOME=" + home}, "restore")
+	out, code = runCLIEnv(t, bin, []string{"TPP_HOME=" + home}, "restore")
 	if code != 0 {
 		t.Fatalf("restore = %d, want 0\n%s", code, out)
 	}

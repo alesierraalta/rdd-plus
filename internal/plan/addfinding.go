@@ -364,6 +364,9 @@ func planLockPath(key string) (string, error) {
 // and every row but the last was erased. A directory under the user's cache is the same directory for every
 // process of that user, whichever TMPDIR it was handed.
 //
+// The directory keeps its pre-rename name, rdd-plus, on purpose: a tpp binary and an rdd-plus binary still
+// installed beside it must serialize on the same lock file, and a renamed directory would give each its own.
+//
 // The directory is created 0700 and re-tightened if it already exists, so lock names held in it are not
 // something another user can watch or replace. A root that cannot be resolved or created is an error: there is
 // no fallback that writes the plan without serialization, because that write is the defect.

@@ -128,7 +128,7 @@ func TestGeneralizeDropsAQueryStringWithThePath(t *testing.T) {
 }
 
 func TestGeneralizeDropsARelativeSourcePath(t *testing.T) {
-	for _, path := range []string{"internal/tools/runner", "cmd/rdd-plus/main", "src/app/models"} {
+	for _, path := range []string{"internal/tools/runner", "cmd/tpp/main", "src/app/models"} {
 		in := "The failure happened in " + path + " during startup."
 		got := Generalize(in)
 		if strings.Contains(got, path) || !strings.Contains(got, "a source file") {

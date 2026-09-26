@@ -14,7 +14,7 @@ func TestRevisionIsNeverEmpty(t *testing.T) {
 	}
 }
 
-// String is what `rdd-plus version` prints and what this package exists to compose, so both halves have to
+// String is what `tpp version` prints and what this package exists to compose, so both halves have to
 // survive in it: a version that lost its revision names a release nobody can check out. The assertion the
 // review found here promised this contract and could not check it — `Version` is never empty, so the branch
 // that guarded it was unreachable — and this one fails as soon as either half goes missing.

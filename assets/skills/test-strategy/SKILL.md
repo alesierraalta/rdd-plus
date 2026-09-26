@@ -4,8 +4,8 @@ description: "Trigger: haz el testing, testea esto, prueba esto, test this, test
 license: Apache-2.0
 metadata:
   author: "alesierraalta"
-  version: "0.3.23"
-  requires_rdd_plus: "0.3.20"
+  version: "0.3.24"
+  requires_tpp: "0.4.0"
   scope: [common]
   auto_invoke: "Any request to test something: infer scope and mode from repo state, build or resume the persisted plan, execute it through specialized testing skills"
 ---
@@ -23,12 +23,12 @@ This skill decides WHICH targets and routes; siblings do the work.
 
 ## Tooling
 
-This skill is written for `rdd-plus 0.3.20`, and `rdd-plus version` prints the build present.
-Install it from the repository with `make build`, which writes `bin/rdd-plus`; put that on `PATH`,
-or use `go install github.com/alesierraalta/rdd-plus/cmd/rdd-plus@latest` once the module is
+This skill is written for `tpp 0.4.0`, and `tpp version` prints the build present.
+Install it from the repository with `make build`, which writes `bin/tpp`; put that on `PATH`,
+or use `go install github.com/alesierraalta/tpp/cmd/tpp@latest` once the module is
 published. Without the binary the run continues on documented fallbacks: `plan init` is replaced
 by copying [assets/test-plan-template.md](assets/test-plan-template.md) (rule 12); `plan check` by
-applying its checks by hand, as aligned with test-strategy 0.3.23 — the Findings section exists and is a
+applying its checks by hand, as aligned with test-strategy 0.3.24 — the Findings section exists and is a
 table, and a finding is a row carrying `path:line` and an evidence id that exists, with no finding or
 evidence id repeated and no `razonado` row inside the ledger; settled rows name a pinning test;
 statuses stay inside the closed vocabulary; a prose line closes a table, a fenced block is
@@ -43,7 +43,7 @@ availability from `codegraph` and `git ls-files`
 instead of the capability probe.
 The run's process feedback — what paid off, what was ceremony, where a rule had to be
 reverse-engineered, and whether the method earned its keep — is recorded at the end of the run
-under Hard Rule 14 with `rdd-plus feedback --template`.
+under Hard Rule 14 with `tpp feedback --template`.
 
 ## Hard Rules
 
@@ -75,17 +75,17 @@ under Hard Rule 14 with `rdd-plus feedback --template`.
     state whether data is safe. Never re-propose a `rejected` or `wontfix` finding unless its
     cited-files fingerprint changed; cite the row when skipping.
 12. **Persist before you report, in the shipped shape.** The plan is a set of tables, not a
-    document you compose: create it with `rdd-plus plan init` (or copy
+    document you compose: create it with `tpp plan init` (or copy
     [assets/test-plan-template.md](assets/test-plan-template.md) when the binary is absent) and
     fill its rows. Prose replaces no row, and every finding cell opens with `path:line`. When the
-    plan is not `docs/testing/test-plan.md`, declare it so the Stop hook and `rdd-plus check` read
-    it: write `.rdd-plus.json` at the worktree root.
+    plan is not `docs/testing/test-plan.md`, declare it so the Stop hook and `tpp check` read
+    it: write `.tpp.json` at the worktree root.
     ```json
     {"planPath": "docs/testing/<name>.md"}
     ```
     A plan nobody declares is a plan nothing clears. The declaration is repository-local, so a
     scoped plan cannot silently become the default plan for another checkout. The final message is
-    written only after the declared plan is on disk and `rdd-plus plan check` passes: it reports
+    written only after the declared plan is on disk and `tpp plan check` passes: it reports
     findings that are not rows, cite no location, cite an evidence id that does not exist, or
     settle without a pinning test. A finding that exists only in chat does not exist, and one
     nothing can parse is the same thing. Asking the user whether to fix something never replaces
@@ -104,9 +104,9 @@ under Hard Rule 14 with `rdd-plus feedback --template`.
 
 14. **At the end of every run—including blocked, partial, or stopped-early runs—the executing agent
 records its own retrospective.** Use `mktemp` for a scratch file outside the repository, run
-`rdd-plus feedback --template` into it, fill only the existing fields (`ts`, `repo`, `plan`, `skill`,
+`tpp feedback --template` into it, fill only the existing fields (`ts`, `repo`, `plan`, `skill`,
 `build`, `paid`, `cost`, `reason`, `verdict` of `paid`, `partly`, or `ceremony`, optional `guess` and
-`freeform`), then submit with `rdd-plus feedback --file`; add no fields because the parser rejects
+`freeform`), then submit with `tpp feedback --file`; add no fields because the parser rejects
 unknown keys. Set `skill` to what actually ran as `<name>` or `<name> <version>`; a breakcheck run
 records `breakcheck <its version>`, not the template's default embedded test-strategy identity.
 
@@ -123,8 +123,8 @@ automatic change to this skill.
 
 | State found | Action |
 |---|---|
-| No declared plan (`.rdd-plus.json` absent or has no `planPath`) | PLAN the blast radius when the change is bounded (a scoped run), the whole app when it is not, then EXECUTE the first rows, same run |
-| No declared plan, and the change is one small function eligible for Micro (below) | PLAN micro with `rdd-plus plan init --micro`, then EXECUTE its one pinning test and one mutation |
+| No declared plan (`.tpp.json` absent or has no `planPath`) | PLAN the blast radius when the change is bounded (a scoped run), the whole app when it is not, then EXECUTE the first rows, same run |
+| No declared plan, and the change is one small function eligible for Micro (below) | PLAN micro with `tpp plan init --micro`, then EXECUTE its one pinning test and one mutation |
 | Plan exists but predates the template (missing sections or `Baseline:`) | Migrate it: add the missing sections empty, record the baseline (`assets/fingerprint.sh`), treat the tree as changed, then EXECUTE |
 | Plan exists, fingerprint unchanged | EXECUTE from the first `pending` row |
 | Plan exists, files differ from the plan baseline | Refresh rows in that diff's blast radius, rank first, EXECUTE |
@@ -150,13 +150,13 @@ package, a changed interface) or a scope a plan already covers, which is resumed
 
 **One small function plans micro.** When the change is a single function of about ten lines or fewer,
 its contract does not change, and it touches none of the refused classes above, the plan may be a micro
-plan: `rdd-plus plan init --micro` writes a header declaring `Micro: <file path> · touches none`, the
+plan: `tpp plan init --micro` writes a header declaring `Micro: <file path> · touches none`, the
 Findings table and the Evidence ledger, nothing else. It keeps the vacuous-assertion check on the tests
 that already cover the function, one pinning test observed red then green, and one mutation that test
 kills. `plan check` refuses a `Micro:` plan whose file no `path:line` citation corroborates, whose classes
 are not `none`, that also declares `Light:`, that carries a Layer matrix, or whose ledger lacks an
 `observado` row or a row with a `Mutate` cell; only a plan that passes owes no breadth to `plan gaps`,
-`rdd-plus check` and the Stop gate. A refused declaration reads as a sweep never planned.
+`tpp check` and the Stop gate. A refused declaration reads as a sweep never planned.
 
 Scope: a diff means its blast radius first, closed by the regression gate (rule 9); a clean
 tree on main means the whole app. A scope may keep its own plan beside another scope's — for
@@ -164,10 +164,10 @@ example `docs/testing/test-plan-reports.md` beside an existing `test-plan.md` �
 `plan check` on its own path.
 
 **Reviewing someone else's PR.** Keep the plan outside the author's branch, for example
-`~/.config/rdd-plus/reviews/<repo>/pr-<n>.md`, and pass it to every `plan` subcommand with `--path`; run
+`~/.config/tpp/reviews/<repo>/pr-<n>.md`, and pass it to every `plan` subcommand with `--path`; run
 `plan admit` from inside the checkout, where its commands and `Mutate` replays resolve. Pinning tests ship as
 a suggested patch, each named by its suite path :: test name, never as a commit to the author's branch.
-`rdd-plus plan export --path <plan>` prints the Findings as a sanitised Markdown comment naming the commit
+`tpp plan export --path <plan>` prints the Findings as a sanitised Markdown comment naming the commit
 it covers; post it (`gh pr comment <n> -F -`) only with the operator's approval.
 
 **Verdict per target**: probe · pin · none (`n/a`), profiles in
@@ -181,7 +181,7 @@ it covers; post it (`gh pr comment <n> -F -`) only with the operator's approval.
 
 **PLAN**
 
-1. Inventory surfaces and entry points with CodeGraph when `rdd-plus doctor` reports it
+1. Inventory surfaces and entry points with CodeGraph when `tpp doctor` reports it
    available, otherwise with `git ls-files` plus grep: routes, CLIs, jobs, migrations,
    ports/adapters, critical journeys.
 2. Layer sweep: invoke each layer owner in PLAN mode and take the target rows it returns
@@ -198,9 +198,9 @@ it covers; post it (`gh pr comment <n> -F -`) only with the operator's approval.
    records, never a silent omission. The `Skill` cell only labels what is still owed.
 6. Record the baseline (`assets/fingerprint.sh`: repo fingerprint; per-finding cited-files fingerprint) and persist to
    the declared plan path (or `docs/testing/test-plan.md` when no path is declared). Create the file with
-   `rdd-plus plan init --path <plan>`, which writes
+   `tpp plan init --path <plan>`, which writes
    [assets/test-plan-template.md](assets/test-plan-template.md) with every table in place; rows
-   start `pending`, `none` rows start `n/a`. Close the run with `rdd-plus plan check` (rule 12).
+   start `pending`, `none` rows start `n/a`. Close the run with `tpp plan check` (rule 12).
 
 **EXECUTE**
 
@@ -215,7 +215,7 @@ it covers; post it (`gh pr comment <n> -F -`) only with the operator's approval.
    of the contract: rewrite it before promoting. Those two runs are one evidence row, and the
    test's identity goes in the finding (rule 13).
 5. Update the plan: row status, rung, evidence ledger, findings, testability blocks with the
-   minimal change that opens them. Write the file, run `rdd-plus plan check` until it passes,
+   minimal change that opens them. Write the file, run `tpp plan check` until it passes,
    then report the delta (rule 12).
 
 ## Output Contract

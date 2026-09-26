@@ -1,4 +1,4 @@
-// rdd-plus is a deterministic companion for the testing discipline: it installs the skills,
+// tpp is a deterministic companion for the testing discipline: it installs the skills,
 // wires the Stop hook that keeps them invoked, and reports what the environment can do.
 package main
 
@@ -17,22 +17,23 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alesierraalta/rdd-plus/internal/admit"
-	"github.com/alesierraalta/rdd-plus/internal/bench"
-	"github.com/alesierraalta/rdd-plus/internal/buildinfo"
-	"github.com/alesierraalta/rdd-plus/internal/check"
-	"github.com/alesierraalta/rdd-plus/internal/doctor"
-	"github.com/alesierraalta/rdd-plus/internal/evidence"
-	"github.com/alesierraalta/rdd-plus/internal/feature"
-	"github.com/alesierraalta/rdd-plus/internal/feedback"
-	"github.com/alesierraalta/rdd-plus/internal/gate"
-	"github.com/alesierraalta/rdd-plus/internal/plan"
-	"github.com/alesierraalta/rdd-plus/internal/repair"
-	"github.com/alesierraalta/rdd-plus/internal/sanitize"
-	"github.com/alesierraalta/rdd-plus/internal/state"
-	"github.com/alesierraalta/rdd-plus/internal/sync"
-	"github.com/alesierraalta/rdd-plus/internal/tui"
-	"github.com/alesierraalta/rdd-plus/internal/update"
+	"github.com/alesierraalta/tpp/internal/admit"
+	"github.com/alesierraalta/tpp/internal/bench"
+	"github.com/alesierraalta/tpp/internal/buildinfo"
+	"github.com/alesierraalta/tpp/internal/check"
+	"github.com/alesierraalta/tpp/internal/doctor"
+	"github.com/alesierraalta/tpp/internal/evidence"
+	"github.com/alesierraalta/tpp/internal/feature"
+	"github.com/alesierraalta/tpp/internal/feedback"
+	"github.com/alesierraalta/tpp/internal/gate"
+	"github.com/alesierraalta/tpp/internal/hookcmd"
+	"github.com/alesierraalta/tpp/internal/plan"
+	"github.com/alesierraalta/tpp/internal/repair"
+	"github.com/alesierraalta/tpp/internal/sanitize"
+	"github.com/alesierraalta/tpp/internal/state"
+	"github.com/alesierraalta/tpp/internal/sync"
+	"github.com/alesierraalta/tpp/internal/tui"
+	"github.com/alesierraalta/tpp/internal/update"
 )
 
 // exitArtifact is what the CLI returns when its machine-readable output could not be written: the run
@@ -41,7 +42,7 @@ import (
 // and exit 0 would say it arrived.
 const exitArtifact = bench.ExitArtifact
 
-const usage = `usage: rdd-plus <command> [flags]
+const usage = `usage: tpp <command> [flags]
 
 commands:
   gate     Stop hook: read the hook payload on stdin, decide, log, emit feedback
@@ -120,7 +121,7 @@ update [--check]  --check only checks and refreshes the cache; it never installs
 restore [--id <backup-id>] [--dry-run]   (default: the latest backup)
 repair [--config-dir <dir>] [--dry-run] [--force]
 feature list|enable|disable <id> [--preview]
---path: relative values resolve against the worktree root; absolute values are taken as given except in check, which refuses them. Without --path, use the plan declared in .rdd-plus.json when there is one, else docs/testing/test-plan.md
+--path: relative values resolve against the worktree root; absolute values are taken as given except in check, which refuses them. Without --path, use the plan declared in .tpp.json when there is one, else docs/testing/test-plan.md
 --run: a lowercase slug identifying the active run; plan gaps uses the declaration when omitted, while --all forces whole-document counts
 feedback [--config-dir <dir>] [--template] [--file <path>] [--plan <path>] [--summary]
 `
@@ -240,8 +241,8 @@ func statusView() (tui.StatusView, error) {
 // runUpdate checks the module proxy for the latest tag, refreshes the cache `status` reads, and
 // installs through `go install` when this build is behind. The binary a fresh install lands on
 // only runs after a restart, so success points at a new shell instead of claiming this process
-// became the new version. RDD_PLUS_UPDATE_BASE_URL points the check at another proxy (tests use
-// a local one); an empty value means the public Go module proxy.
+// became the new version. TPP_UPDATE_BASE_URL, or the legacy RDD_PLUS_UPDATE_BASE_URL when it is unset,
+// points the check at another proxy (tests use a local one); an empty value means the public Go module proxy.
 func runUpdate(args []string) int {
 	fs := flag.NewFlagSet("update", flag.ContinueOnError)
 	checkOnly := fs.Bool("check", false, "only check and refresh the cache; never install")
@@ -252,7 +253,11 @@ func runUpdate(args []string) int {
 		fmt.Fprintf(os.Stderr, "update: unexpected argument %q\n", fs.Arg(0))
 		return 2
 	}
-	checker := update.Checker{BaseURL: os.Getenv("RDD_PLUS_UPDATE_BASE_URL")}
+	baseURL := os.Getenv("TPP_UPDATE_BASE_URL")
+	if baseURL == "" {
+		baseURL = os.Getenv("RDD_PLUS_UPDATE_BASE_URL")
+	}
+	checker := update.Checker{BaseURL: baseURL}
 	result, err := checker.Check(context.Background())
 	if err != nil {
 		// A failed check still lands in the cache so the record shows a check was attempted;
@@ -288,7 +293,7 @@ func runUpdate(args []string) int {
 	}
 	// A binary in a directory this user cannot write (a system bin dir) cannot be replaced in place; say so
 	// before go reports a bare permission error.
-	if probe, err := os.CreateTemp(gobin, ".rdd-plus-update-*"); err != nil {
+	if probe, err := os.CreateTemp(gobin, ".tpp-update-*"); err != nil {
 		fmt.Fprintf(os.Stderr, "update: %s is not writable, so the running binary cannot be replaced there: %v\n", gobin, err)
 		return 1
 	} else {
@@ -310,7 +315,7 @@ func runUpdate(args []string) int {
 		fmt.Fprintln(os.Stderr, "update:", err)
 		return 1
 	}
-	fmt.Printf("installed tpp %s (rdd-plus is now tpp) into %s; restart your shell, confirm with `tpp version`, then run `tpp sync` to move your hooks to tpp\n", result.Latest, gobin)
+	fmt.Printf("installed %s; restart your shell and run `tpp version` there to confirm\n", result.Latest)
 	return 0
 }
 
@@ -438,7 +443,7 @@ func parseFeatureArgs(args []string) (string, bool, bool) {
 }
 
 func featureUsage(reason string) int {
-	fmt.Fprintf(os.Stderr, "feature: %s\nusage: rdd-plus feature list|enable|disable <id> [--preview]\n", reason)
+	fmt.Fprintf(os.Stderr, "feature: %s\nusage: tpp feature list|enable|disable <id> [--preview]\n", reason)
 	return 2
 }
 
@@ -738,7 +743,7 @@ func runDoctor(args []string) int {
 }
 
 // selfDir is the directory of the running binary, so a spawned agent runs this build when the
-// skill tells it to call `rdd-plus plan init`.
+// skill tells it to call `tpp plan init`.
 func selfDir() string {
 	exe, err := os.Executable()
 	if err != nil {
@@ -1083,7 +1088,7 @@ func runShell(ctx context.Context, dir, command string) (string, error) {
 // rest of the tool reads commands with, so a command it cannot read is refused here instead of run as a
 // fragment.
 func probeHook(command string) error {
-	fields, err := doctor.ShellWords(command)
+	fields, err := hookcmd.ShellWords(command)
 	if err != nil || len(fields) == 0 {
 		return fmt.Errorf("cannot read the wired command")
 	}

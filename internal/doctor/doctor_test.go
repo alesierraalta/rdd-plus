@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/alesierraalta/rdd-plus/internal/assets"
-	"github.com/alesierraalta/rdd-plus/internal/sync"
+	"github.com/alesierraalta/tpp/internal/assets"
+	"github.com/alesierraalta/tpp/internal/sync"
 )
 
 func allPresent(name string) (string, error) { return "/usr/bin/" + name, nil }
@@ -17,7 +17,7 @@ func allPresent(name string) (string, error) { return "/usr/bin/" + name, nil }
 func synced(t *testing.T) string {
 	t.Helper()
 	cfg := t.TempDir()
-	if _, err := sync.Sync(cfg, "/opt/tools/rdd-plus", sync.Options{}); err != nil {
+	if _, err := sync.Sync(cfg, "/opt/tools/tpp", sync.Options{}); err != nil {
 		t.Fatal(err)
 	}
 	return cfg
@@ -170,8 +170,8 @@ func TestHookWiredRecognisesAStandaloneGateBinary(t *testing.T) {
 		command  string
 		wantKind string
 	}{
-		{"rdd-plus subcommand", `"/home/u/go/bin/rdd-plus" gate`, HookRddPlus},
-		{"rdd-plus with flags", `/home/u/go/bin/rdd-plus gate --config-dir /home/u/.claude`, HookRddPlus},
+		{"tpp subcommand", `"/home/u/go/bin/tpp" gate`, HookTpp},
+		{"tpp with flags", `/home/u/go/bin/tpp gate --config-dir /home/u/.claude`, HookTpp},
 		{"standalone binary", `"/home/u/.claude/hooks/bin/testing-gate"`, HookStandalone},
 		{"standalone node script", `node /home/u/.claude/hooks/testing-gate.mjs`, HookStandalone},
 		{"an unrelated hook", `gentle-ai review stop-hook --agent claude-code`, HookNone},
@@ -221,51 +221,6 @@ func jsonString(s string) string {
 	return string(b)
 }
 
-// One rule reads every command stored as one string, so the splitter is tested where it lives. A quoted
-// path is one word, and both quote characters count as quoting: the reader that used to live beside the
-// probe honoured double quotes only, which is how one command read as something other than what a shell
-// would run. The signal is tested with the words: a quote left open is reported, not silently repaired,
-// because the caller that executes the words has to refuse a command nobody can read — but the words read
-// so far are still returned, so a caller that only inspects a command keeps reading exactly what it did
-// before the signal existed.
-func TestShellWordsSplitsLikeAShell(t *testing.T) {
-	cases := []struct {
-		name    string
-		in      string
-		want    []string
-		wantErr bool
-	}{
-		{"plain command", `/h/bin/rdd-plus gate`, []string{"/h/bin/rdd-plus", "gate"}, false},
-		{"double quoted path with a space", `"/h/my bin/rdd-plus" gate`, []string{"/h/my bin/rdd-plus", "gate"}, false},
-		{"single quoted path with a space", `'/h/my bin/rdd-plus' gate`, []string{"/h/my bin/rdd-plus", "gate"}, false},
-		{"tabs and newlines separate words", "a\tb\r\nc", []string{"a", "b", "c"}, false},
-		{"leading and repeated whitespace", "  spaced   out  ", []string{"spaced", "out"}, false},
-		{"one quoted word alone", `"/h/gate"`, []string{"/h/gate"}, false},
-		{"whitespace only", "   \t\n", nil, false},
-		{"empty", "", nil, false},
-		// A quote left open is not a command: the probe must not run "unbalanced" as a program.
-		{"unterminated double quote", `"/h/my bin/rdd-plus gate`, []string{"/h/my bin/rdd-plus gate"}, true},
-		{"unterminated single quote", `'/h/my bin/rdd-plus`, []string{"/h/my bin/rdd-plus"}, true},
-		{"unterminated quote after a word", `/h/bin/rdd-plus "gate`, []string{"/h/bin/rdd-plus", "gate"}, true},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got, err := ShellWords(tc.in)
-			if (err != nil) != tc.wantErr {
-				t.Fatalf("ShellWords(%q) error = %v, want an error: %v", tc.in, err, tc.wantErr)
-			}
-			if len(got) != len(tc.want) {
-				t.Fatalf("%q -> %q, want %q", tc.in, got, tc.want)
-			}
-			for i := range got {
-				if got[i] != tc.want[i] {
-					t.Fatalf("%q -> %q, want %q", tc.in, got, tc.want)
-				}
-			}
-		})
-	}
-}
-
 // writeSettings wires one Stop hook command into a config dir, the way sync would.
 func writeSettings(t *testing.T, dir, command string) {
 	t.Helper()
@@ -275,7 +230,7 @@ func writeSettings(t *testing.T, dir, command string) {
 	}
 }
 
-// binary writes a stand-in for the rdd-plus executable.
+// binary writes a stand-in for the tpp executable.
 func binary(t *testing.T, dir, name string) string {
 	t.Helper()
 	p := filepath.Join(dir, name)
@@ -288,8 +243,8 @@ func binary(t *testing.T, dir, name string) string {
 // Today's real layout points the hook and PATH at the same binary through different paths, one of
 // them a symlink. Two paths, one file, one verdict: this must stay quiet.
 func TestHookBinaryMatchingPathBinaryIsQuiet(t *testing.T) {
-	real := binary(t, t.TempDir(), "rdd-plus")
-	link := filepath.Join(t.TempDir(), "rdd-plus-link")
+	real := binary(t, t.TempDir(), "tpp")
+	link := filepath.Join(t.TempDir(), "tpp-link")
 	if err := os.Symlink(real, link); err != nil {
 		t.Fatal(err)
 	}
@@ -307,7 +262,7 @@ func TestHookBinaryMatchingPathBinaryIsQuiet(t *testing.T) {
 			dir := t.TempDir()
 			writeSettings(t, dir, `"`+tc.hook+`" gate`)
 			r := Run(dir, func(name string) (string, error) {
-				if name == "rdd-plus" {
+				if name == "tpp" {
 					return tc.path, nil
 				}
 				return "/usr/bin/" + name, nil
@@ -325,11 +280,11 @@ func TestHookBinaryMatchingPathBinaryIsQuiet(t *testing.T) {
 // Two real binaries can give two verdicts: the hook must run the same file the user gets from PATH.
 func TestDoctorFlagsAHookBinaryThatDiffersFromPATH(t *testing.T) {
 	dir := t.TempDir()
-	hookBin := binary(t, t.TempDir(), "rdd-plus")
-	pathBin := binary(t, t.TempDir(), "rdd-plus")
+	hookBin := binary(t, t.TempDir(), "tpp")
+	pathBin := binary(t, t.TempDir(), "tpp")
 	writeSettings(t, dir, `"`+hookBin+`" gate`)
 	r := Run(dir, func(name string) (string, error) {
-		if name == "rdd-plus" {
+		if name == "tpp" {
 			return pathBin, nil
 		}
 		return "/usr/bin/" + name, nil
@@ -363,11 +318,11 @@ func TestQuotedHookPathWithASpaceIsComparedWhole(t *testing.T) {
 	if err := os.MkdirAll(spaceDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	hookBin := binary(t, spaceDir, "rdd-plus")
-	pathBin := binary(t, t.TempDir(), "rdd-plus")
+	hookBin := binary(t, spaceDir, "tpp")
+	pathBin := binary(t, t.TempDir(), "tpp")
 	writeSettings(t, dir, `"`+hookBin+`" gate`)
 	r := Run(dir, func(name string) (string, error) {
-		if name == "rdd-plus" {
+		if name == "tpp" {
 			return pathBin, nil
 		}
 		return "/usr/bin/" + name, nil
@@ -377,7 +332,7 @@ func TestQuotedHookPathWithASpaceIsComparedWhole(t *testing.T) {
 	}
 }
 
-// Doctor already has verdicts for an unwired hook and for rdd-plus off PATH; the new line must not
+// Doctor already has verdicts for an unwired hook and for tpp off PATH; the new line must not
 // reinvent them.
 func TestDoctorStaysQuietWhenItCannotCompareBinaries(t *testing.T) {
 	if r := Run(t.TempDir(), allPresent); r.BinariesDiffer || strings.Contains(r.String(), "different verdicts") {
@@ -385,16 +340,16 @@ func TestDoctorStaysQuietWhenItCannotCompareBinaries(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	writeSettings(t, dir, `"`+binary(t, t.TempDir(), "rdd-plus")+`" gate`)
-	noRddPlus := func(name string) (string, error) {
-		if name == "rdd-plus" {
+	writeSettings(t, dir, `"`+binary(t, t.TempDir(), "tpp")+`" gate`)
+	noTpp := func(name string) (string, error) {
+		if name == "tpp" {
 			return "", errors.New("not found")
 		}
 		return "/usr/bin/" + name, nil
 	}
-	r := Run(dir, noRddPlus)
+	r := Run(dir, noTpp)
 	if r.BinariesDiffer || strings.Contains(r.String(), "different verdicts") {
-		t.Fatalf("rdd-plus off PATH must stay quiet: %+v", r)
+		t.Fatalf("tpp off PATH must stay quiet: %+v", r)
 	}
 }
 
@@ -410,5 +365,44 @@ func TestDoctorDoesNotCallASkillVerifiedWhenItCannotReadTheTree(t *testing.T) {
 	}
 	if matches(skills, "demo", target) {
 		t.Fatal("a skill whose tree could not be walked was reported as identical")
+	}
+}
+
+// After the rename the binary on PATH is tpp, and a machine mid-migration may still carry rdd-plus beside
+// it: the comparison asks for tpp first and falls back to rdd-plus only when no tpp resolves.
+func TestBinaryComparisonLooksUpTppBeforeRddPlus(t *testing.T) {
+	tppBin := binary(t, t.TempDir(), "tpp")
+	legacyBin := binary(t, t.TempDir(), "rdd-plus")
+	cases := []struct {
+		name       string
+		hook       string
+		onPath     map[string]string
+		wantDiffer bool
+		wantPath   string
+	}{
+		{"tpp on PATH is preferred", tppBin, map[string]string{"tpp": tppBin, "rdd-plus": legacyBin}, false, tppBin},
+		{"a legacy hook against tpp on PATH differs", legacyBin, map[string]string{"tpp": tppBin}, true, tppBin},
+		{"only rdd-plus on PATH still compares", legacyBin, map[string]string{"rdd-plus": legacyBin}, false, legacyBin},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeSettings(t, dir, `"`+tc.hook+`" gate`)
+			r := Run(dir, func(name string) (string, error) {
+				if p, ok := tc.onPath[name]; ok {
+					return p, nil
+				}
+				if name == "tpp" || name == "rdd-plus" {
+					return "", errors.New("not found")
+				}
+				return "/usr/bin/" + name, nil
+			})
+			if r.BinariesDiffer != tc.wantDiffer {
+				t.Fatalf("BinariesDiffer = %v, want %v: %+v", r.BinariesDiffer, tc.wantDiffer, r)
+			}
+			if tc.wantDiffer && r.PathBinary != tc.wantPath {
+				t.Fatalf("PathBinary = %q, want %q", r.PathBinary, tc.wantPath)
+			}
+		})
 	}
 }

@@ -4,8 +4,8 @@ package buildinfo
 import "runtime/debug"
 
 // Version is the release this build was cut from. It is overridable at build time:
-// -ldflags "-X github.com/alesierraalta/rdd-plus/internal/buildinfo.Version=v1.2.3".
-var Version = "0.3.20"
+// -ldflags "-X github.com/alesierraalta/tpp/internal/buildinfo.Version=v1.2.3".
+var Version = "0.4.0"
 
 // String renders the version and the revision the build came from, such as "0.3.5 (fcb4ce6)"
 // or "0.3.5 (unknown)" when the build carries no revision.

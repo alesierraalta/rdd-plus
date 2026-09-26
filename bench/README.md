@@ -84,7 +84,7 @@ identical every time. There is little to remove.
 ## Scoring
 
 The runner copies `fixture/` into a fresh workspace, runs the flow under evaluation there, and
-reads the plan the workspace declares in `.rdd-plus.json`, or `docs/testing/test-plan.md` when it
+reads the plan the workspace declares in `.tpp.json`, or `docs/testing/test-plan.md` when it
 declares none. `result.json` records the path it read as `plan_path`. A declaration that cannot be
 read or that escapes the workspace is refused: the default path is read instead, and the refusal is
 named in the run's notes so a run is never silently scored as having delivered no plan. For every
@@ -131,10 +131,10 @@ catching, shows up as a gap between the columns rather than as a single score.
 `bench adjudicate` writes `<run>/adjudication.json` beside the plan and `result.json` of one run:
 
 ```
-rdd-plus bench adjudicate --run bench/results/<ts>/<case>/<run> --pending
-rdd-plus bench adjudicate --run <run dir> --row 2 --verdict false_positive \
+tpp bench adjudicate --run bench/results/<ts>/<case>/<run> --pending
+tpp bench adjudicate --run <run dir> --row 2 --verdict false_positive \
   --by alesierraalta --reason "style claim, not a defect of this candidate"
-rdd-plus bench adjudicate --run <run dir> --row 2 --verdict defect --defect D1 \
+tpp bench adjudicate --run <run dir> --row 2 --verdict defect --defect D1 \
   --by alesierraalta --reason "the row names the defect the key plants" --replace
 ```
 
@@ -192,7 +192,7 @@ than it catches is naming tests that distinguish nothing.
 
 Every run keeps the plan it produced as `test-plan.md` beside its `result.json`, whatever path the
 workspace declared, even when the workspace is removed, so older runs can be re-scored when the
-rule changes: `rdd-plus bench score --case bench/cases/<id> --plan <results>/<id>/<run>/test-plan.md`.
+rule changes: `tpp bench score --case bench/cases/<id> --plan <results>/<id>/<run>/test-plan.md`.
 
 A valid run whose selected plan file is absent scores zero and is reported as `NO PLAN` (`no_plan` in the
 aggregate and the history): the flow ran and did not persist its deliverable at the path it promised,
@@ -262,7 +262,7 @@ before → after beside the turn and cost totals, so a Micro A/B reads its cost 
 ```
 git commit                      # a build from a dirty tree prints a warning and cannot be re-derived
 make build
-bin/rdd-plus bench run --cases '*' --runs 2 --model sonnet --agent-config bench --max-cost-usd 40
+bin/tpp bench run --cases '*' --runs 2 --model sonnet --agent-config bench --max-cost-usd 40
 ```
 
 Eighteen cases at two runs each is roughly 36 agent runs; the last fifteen-case run cost $12.83, so

@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alesierraalta/rdd-plus/internal/evidence"
-	"github.com/alesierraalta/rdd-plus/internal/plan"
+	"github.com/alesierraalta/tpp/internal/evidence"
+	"github.com/alesierraalta/tpp/internal/plan"
 )
 
 const (
@@ -34,7 +34,7 @@ const (
 // the copy carries what git knows and no `.git`, so a row whose command needs repository metadata is refused by its
 // own failing replay instead of being admitted against a tree it never saw.
 func stageTree(dir string) (string, error) {
-	staged, err := os.MkdirTemp("", "rdd-plus-replay-")
+	staged, err := os.MkdirTemp("", "tpp-replay-")
 	if err != nil {
 		return "", fmt.Errorf("stage the tree: %w", err)
 	}
@@ -206,7 +206,7 @@ func replayWith(run Runner, timeout time.Duration) func(plan.Mutation, string, s
 		}
 		defer func() {
 			if err := os.RemoveAll(staged); err != nil {
-				fmt.Fprintf(os.Stderr, "rdd-plus: the staged replay tree %s could not be removed: %v\n", staged, err)
+				fmt.Fprintf(os.Stderr, "tpp: the staged replay tree %s could not be removed: %v\n", staged, err)
 			}
 		}()
 		original, mode, err := applyMutation(staged, mutation)

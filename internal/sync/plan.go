@@ -11,8 +11,9 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/alesierraalta/rdd-plus/internal/manifest"
-	"github.com/alesierraalta/rdd-plus/internal/state"
+	"github.com/alesierraalta/tpp/internal/hookcmd"
+	"github.com/alesierraalta/tpp/internal/manifest"
+	"github.com/alesierraalta/tpp/internal/state"
 )
 
 // ActionClass names what the synchronizer would do with one path.
@@ -145,7 +146,7 @@ func buildHostPlan(in PlanInput, deps PlanDeps, host Host) ([]Action, error) {
 		})
 	}
 
-	if hook != "" && !hookReady(hostState.Hook) {
+	if hook != "" && (!hookReady(hostState.Hook) || hookcmd.IsLegacyGate(hostState.Hook.Command)) {
 		actions = append(actions, Action{
 			Class:     ActionHook,
 			Host:      host.Name,
@@ -312,6 +313,9 @@ func hookReason(hook *state.HookState) string {
 	}
 	if !hook.Wired {
 		return "state records the Stop hook as not wired; would wire it in settings.json"
+	}
+	if hookcmd.IsLegacyGate(hook.Command) {
+		return fmt.Sprintf("state records the Stop hook for the pre-rename binary (%s); would rewire it in settings.json", hook.Command)
 	}
 	return "state has no expected Stop hook command; would wire it in settings.json"
 }

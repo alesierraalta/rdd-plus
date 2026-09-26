@@ -7,10 +7,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/alesierraalta/rdd-plus/internal/assets"
+	"github.com/alesierraalta/tpp/internal/assets"
 )
 
-const bin = "/opt/tools/rdd-plus"
+const bin = "/opt/tools/tpp"
 
 func readSettings(t *testing.T, cfg string) map[string]any {
 	t.Helper()
@@ -49,7 +49,7 @@ func mustAbs(t *testing.T, path string) string {
 }
 
 func TestSyncFreshConfigDir(t *testing.T) {
-	t.Setenv("RDD_PLUS_HOME", t.TempDir())
+	t.Setenv("TPP_HOME", t.TempDir())
 	cfg := t.TempDir()
 	report, err := Sync(cfg, bin, Options{})
 	if err != nil {
@@ -73,7 +73,7 @@ func TestSyncFreshConfigDir(t *testing.T) {
 }
 
 func TestSyncPreservesExistingHooksAndSettings(t *testing.T) {
-	t.Setenv("RDD_PLUS_HOME", t.TempDir())
+	t.Setenv("TPP_HOME", t.TempDir())
 	cfg := t.TempDir()
 	existing := `{
   "model": "opus",
@@ -103,7 +103,7 @@ func TestSyncPreservesExistingHooksAndSettings(t *testing.T) {
 }
 
 func TestSyncIsIdempotent(t *testing.T) {
-	t.Setenv("RDD_PLUS_HOME", t.TempDir())
+	t.Setenv("TPP_HOME", t.TempDir())
 	cfg := t.TempDir()
 	if _, err := Sync(cfg, bin, Options{}); err != nil {
 		t.Fatal(err)
@@ -129,7 +129,7 @@ func TestSyncIsIdempotent(t *testing.T) {
 }
 
 func TestSyncBacksUpADifferingSkill(t *testing.T) {
-	t.Setenv("RDD_PLUS_HOME", t.TempDir())
+	t.Setenv("TPP_HOME", t.TempDir())
 	cfg := t.TempDir()
 	if _, err := Sync(cfg, bin, Options{}); err != nil {
 		t.Fatal(err)
@@ -170,13 +170,13 @@ func TestSyncBacksUpADifferingSkill(t *testing.T) {
 	if string(restored) == "local edit\n" {
 		t.Fatal("skill was not replaced with the embedded version")
 	}
-	if strings.Contains(backup, filepath.Join("skills", ".rdd-plus-backup")) {
+	if strings.Contains(backup, filepath.Join("skills", ".tpp-backup")) {
 		t.Fatalf("backup dir %s still uses the retired per-host layout", backup)
 	}
 }
 
 func TestSyncRefusesInvalidSettingsAndWritesNothing(t *testing.T) {
-	t.Setenv("RDD_PLUS_HOME", t.TempDir())
+	t.Setenv("TPP_HOME", t.TempDir())
 	cfg := t.TempDir()
 	broken := []byte("{not json")
 	if err := os.WriteFile(filepath.Join(cfg, "settings.json"), broken, 0o644); err != nil {
@@ -199,7 +199,7 @@ func TestSyncRefusesInvalidSettingsAndWritesNothing(t *testing.T) {
 // telling a reader the gate hook is `already wired` in a file the tool could not parse is a sentence about a
 // file nobody looked at, and it sits one line above the refusal that says otherwise.
 func TestSyncSaysNothingAboutTheHookInSettingsItCouldNotRead(t *testing.T) {
-	t.Setenv("RDD_PLUS_HOME", t.TempDir())
+	t.Setenv("TPP_HOME", t.TempDir())
 	cfg := t.TempDir()
 	if err := os.WriteFile(filepath.Join(cfg, "settings.json"), []byte("{not json"), 0o644); err != nil {
 		t.Fatal(err)
@@ -214,7 +214,7 @@ func TestSyncSaysNothingAboutTheHookInSettingsItCouldNotRead(t *testing.T) {
 }
 
 func TestSyncDryRunWritesNothing(t *testing.T) {
-	t.Setenv("RDD_PLUS_HOME", t.TempDir())
+	t.Setenv("TPP_HOME", t.TempDir())
 	cfg := t.TempDir()
 	report, err := Sync(cfg, bin, Options{DryRun: true})
 	if err != nil {
@@ -235,7 +235,7 @@ func TestSyncDryRunWritesNothing(t *testing.T) {
 }
 
 func TestSyncRemovesPreviousGateHooks(t *testing.T) {
-	t.Setenv("RDD_PLUS_HOME", t.TempDir())
+	t.Setenv("TPP_HOME", t.TempDir())
 	cfg := t.TempDir()
 	existing := `{"hooks":{"Stop":[
   {"matcher":"","hooks":[{"type":"command","command":"gentle-ai review stop-hook --agent claude-code","timeout":60}]},
@@ -259,6 +259,51 @@ func TestSyncRemovesPreviousGateHooks(t *testing.T) {
 	}
 }
 
+// Upgrading from rdd-plus to tpp rewrites the wired gate in place: one Stop entry for the new binary, no
+// leftover for the old one, and a neighbour hook that only mentions the old name in its path survives.
+func TestSyncRewritesALegacyGateHookToTheNewBinary(t *testing.T) {
+	t.Setenv("TPP_HOME", t.TempDir())
+	cfg := t.TempDir()
+	existing := `{"hooks":{"Stop":[
+  {"matcher":"","hooks":[{"type":"command","command":"\"/opt/rdd-plus-tools/notify\" gate","timeout":30}]},
+  {"matcher":"","hooks":[{"type":"command","command":"\"/opt/tools/rdd-plus\" gate","timeout":30}]}
+]}}`
+	if err := os.WriteFile(filepath.Join(cfg, "settings.json"), []byte(existing), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	const tppBin = "/opt/tools/tpp"
+	for i := 0; i < 2; i++ {
+		if _, err := Sync(cfg, tppBin, Options{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cmds := stopCommands(t, readSettings(t, cfg))
+	want := []string{`"/opt/rdd-plus-tools/notify" gate`, HookCommand(tppBin)}
+	if len(cmds) != len(want) || cmds[0] != want[0] || cmds[1] != want[1] {
+		t.Fatalf("stop hooks = %q, want %q", cmds, want)
+	}
+}
+
+// An install made by rdd-plus records its hook in state as wired, so a planner that only asks "is a hook
+// wired?" never looks at settings again: the upgrade must still move the hook to the new binary.
+func TestSyncRewiresAHookThatStateRecordsForTheLegacyBinary(t *testing.T) {
+	t.Setenv("TPP_HOME", t.TempDir())
+	cfg := t.TempDir()
+	const legacyBin, tppBin = "/opt/tools/rdd-plus", "/opt/tools/tpp"
+	if _, err := Sync(cfg, legacyBin, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if _, err := Sync(cfg, tppBin, Options{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cmds := stopCommands(t, readSettings(t, cfg))
+	if len(cmds) != 1 || cmds[0] != HookCommand(tppBin) {
+		t.Fatalf("stop hooks = %q, want only %q", cmds, HookCommand(tppBin))
+	}
+}
+
 func TestIsPreviousGate(t *testing.T) {
 	cases := []struct {
 		cmd  string
@@ -267,6 +312,14 @@ func TestIsPreviousGate(t *testing.T) {
 		{`"/home/u/.claude/hooks/testing-gate.mjs"`, true},
 		{`"/home/u/.claude/hooks/bin/testing-gate"`, true},
 		{`"/old/rdd-plus" gate`, true},
+		{`/usr/local/bin/rdd-plus gate`, true},
+		{`"/home/u/go/bin/tpp" gate`, true},
+		{`"/opt/Program Files/tpp" gate`, true},
+		// Only the executable's own name counts: a directory or a sibling tool that merely mentions the
+		// product is somebody else's hook.
+		{`"/opt/rdd-plus-tools/notify" gate`, false},
+		{`"/home/u/rdd-plus/bin/other" gate`, false},
+		{`"/home/u/go/bin/tpp" check`, false},
 		{`gentle-ai review stop-hook --agent claude-code`, false},
 		{`"/home/u/.claude/hooks/ctx-read-guard.mjs"`, false},
 		{`some-other-tool gate`, false},
@@ -282,7 +335,7 @@ func TestIsPreviousGate(t *testing.T) {
 
 func testAllHosts(t *testing.T) []Host {
 	t.Helper()
-	t.Setenv("RDD_PLUS_HOME", t.TempDir())
+	t.Setenv("TPP_HOME", t.TempDir())
 	home := t.TempDir()
 	for _, dir := range []string{".claude", filepath.Join(".config", "opencode"), ".gemini", ".codex"} {
 		if err := os.MkdirAll(filepath.Join(home, dir), 0o755); err != nil {
@@ -426,7 +479,7 @@ func backupDirs(t *testing.T, root string) []string {
 
 func TestSyncTwiceIsByteIdentical(t *testing.T) {
 	root := t.TempDir()
-	t.Setenv("RDD_PLUS_HOME", root)
+	t.Setenv("TPP_HOME", root)
 	cfg := t.TempDir()
 	if _, err := Sync(cfg, bin, Options{}); err != nil {
 		t.Fatal(err)
@@ -460,7 +513,7 @@ func TestSyncTwiceIsByteIdentical(t *testing.T) {
 
 func TestSyncRefusesAModifiedFileWithoutForce(t *testing.T) {
 	root := t.TempDir()
-	t.Setenv("RDD_PLUS_HOME", root)
+	t.Setenv("TPP_HOME", root)
 	cfg := t.TempDir()
 	if _, err := Sync(cfg, bin, Options{}); err != nil {
 		t.Fatal(err)
@@ -512,7 +565,7 @@ func TestSyncRefusesAModifiedFileWithoutForce(t *testing.T) {
 
 func TestSyncLeavesForeignSkillsAlone(t *testing.T) {
 	root := t.TempDir()
-	t.Setenv("RDD_PLUS_HOME", root)
+	t.Setenv("TPP_HOME", root)
 	cfg := t.TempDir()
 	foreign := filepath.Join(cfg, "skills", "unrelated", "README.md")
 	if err := os.MkdirAll(filepath.Dir(foreign), 0o755); err != nil {
@@ -536,7 +589,7 @@ func TestSyncLeavesForeignSkillsAlone(t *testing.T) {
 
 func TestSyncWritesSettingsOnlyWhenTheyDiffer(t *testing.T) {
 	root := t.TempDir()
-	t.Setenv("RDD_PLUS_HOME", root)
+	t.Setenv("TPP_HOME", root)
 	cfg := t.TempDir()
 	if _, err := Sync(cfg, bin, Options{}); err != nil {
 		t.Fatal(err)
@@ -559,7 +612,7 @@ func TestSyncWritesSettingsOnlyWhenTheyDiffer(t *testing.T) {
 
 func TestSyncCreatesNoStateOnADryRun(t *testing.T) {
 	root := t.TempDir()
-	t.Setenv("RDD_PLUS_HOME", root)
+	t.Setenv("TPP_HOME", root)
 	cfg := t.TempDir()
 	report, err := Sync(cfg, bin, Options{DryRun: true})
 	if err != nil {
@@ -609,7 +662,7 @@ func TestReportListsChangesAndCountsTheRest(t *testing.T) {
 				t.Errorf("dry-run=%v report lists %s row by row:\n%s", dryRun, hidden, out)
 			}
 		}
-		if !strings.Contains(out, "skip-user: 3 files not managed by rdd-plus (left untouched)") {
+		if !strings.Contains(out, "skip-user: 3 files not managed by tpp (left untouched)") {
 			t.Errorf("dry-run=%v report does not count the user files:\n%s", dryRun, out)
 		}
 	}

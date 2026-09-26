@@ -11,8 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/alesierraalta/rdd-plus/internal/doctor"
-	"github.com/alesierraalta/rdd-plus/internal/sync"
+	"github.com/alesierraalta/tpp/internal/doctor"
+	"github.com/alesierraalta/tpp/internal/sync"
 )
 
 // Options controls a repair run.

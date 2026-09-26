@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alesierraalta/rdd-plus/internal/plan"
+	"github.com/alesierraalta/tpp/internal/plan"
 )
 
 // Options is the run's shape: what to execute, where, under what bound, and what to narrow or record.

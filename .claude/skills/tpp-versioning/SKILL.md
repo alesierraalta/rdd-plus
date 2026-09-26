@@ -1,10 +1,10 @@
 ---
-name: rdd-plus-versioning
-description: "Trigger: versionar, version bump, release, subir versión, install latest rdd-plus. Bump rdd-plus and skill versions, ship, install the build."
+name: tpp-versioning
+description: "Trigger: versionar, version bump, release, subir versión, install latest tpp. Bump tpp and skill versions, ship, install the build."
 license: Apache-2.0
 metadata:
   author: "alesierraalta"
-  version: "1.5"
+  version: "1.6"
 ---
 
 ## Activation Contract
@@ -19,13 +19,13 @@ ship, when the operator asks to version or release, or to install the latest bui
 - Binary version lives only in `internal/buildinfo/buildinfo.go` (`var Version`). Bump the patch
   (`0.3.8` → `0.3.9`); a minor bump is the operator's call.
 - A skill whose `SKILL.md`, `assets/` or `references/` changed bumps its own `metadata.version` patch.
-- test-strategy's `requires_rdd_plus` and its "written for `rdd-plus X`" line always equal the binary
-  version (`TestSkillNamesTheRddPlusVersionItRequires` enforces it), so every binary bump also bumps
-  test-strategy's `metadata.version` patch. Other skills (e.g. breakcheck) change `requires_rdd_plus` only
+- test-strategy's `requires_tpp` and its "written for `tpp X`" line always equal the binary
+  version (`TestSkillNamesTheTppVersionItRequires` enforces it), so every binary bump also bumps
+  test-strategy's `metadata.version` patch. Other skills (e.g. breakcheck) change `requires_tpp` only
   when they rely on behaviour that version introduced.
 - Never rewrite historical records: `docs/testing/test-plan.md` rows, `bench/history.md`, fixture reports.
 - Every released binary version gets an annotated tag `vX.Y.Z` on its merge commit, pushed to origin:
-  `rdd-plus update` reads the Go module proxy, which only sees tagged releases (an untagged main is a
+  `tpp update` reads the Go module proxy, which only sees tagged releases (an untagged main is a
   `v0.0.0-…` pseudo-version that cannot be compared). No GitHub release objects unless asked.
 - `main` is protected: ship through a PR whose `test` check passes, merged with a merge commit.
 - No AI attribution anywhere: no `Co-Authored-By` trailer, no "Generated with Claude Code" line in commit
@@ -37,7 +37,7 @@ ship, when the operator asks to version or release, or to install the latest bui
 
 | Changed | Bump |
 |---|---|
-| Binary (any) | `buildinfo.Version` patch + test-strategy `metadata.version` patch + its `requires_rdd_plus` |
+| Binary (any) | `buildinfo.Version` patch + test-strategy `metadata.version` patch + its `requires_tpp` |
 | Embedded skill text/assets only (`assets/skills/`) | that skill's `metadata.version` patch + `buildinfo.Version` patch (the skill ships inside the binary, so only a new binary version and tag delivers it) + test-strategy lockstep |
 | Tests, CI, `odd/`, `.claude/` only | nothing |
 
@@ -46,20 +46,20 @@ ship, when the operator asks to version or release, or to install the latest bui
 1. Diff against the last version bump: `git log --oneline -1 -- internal/buildinfo/buildinfo.go` and
    `git diff <that>..HEAD --stat -- cmd internal assets/skills`; pick bumps from the table.
 2. Edit the version strings, then update every live mention: `rtk proxy grep -rn '<old>' internal cmd
-   assets README.md` — the prose in `SKILL.md` ("written for `rdd-plus X`", "aligned with <skill> X")
+   assets README.md` — the prose in `SKILL.md` ("written for `tpp X`", "aligned with <skill> X")
    and `TestEmbeddedSkillIdentityNamesTheEmbeddedSkill` in `internal/feedback/feedback_test.go`.
 3. `gofmt -l`, `go vet ./...`, then the FULL suite as CI runs it — no `-short`, in a clean clone of the
    branch (`git clone --branch <b> . $S/ci && cd $S/ci && go test ./... -count=1`), because `-short` skips the
-   process-spawning tests and a local checkout may carry foreign changes; `go run ./cmd/rdd-plus version`.
-4. Commit `chore(release): rdd-plus X, <skill> Y` on a branch, open the PR listing what ships, wait for
+   process-spawning tests and a local checkout may carry foreign changes; `go run ./cmd/tpp version`.
+4. Commit `chore(release): tpp X, <skill> Y` on a branch, open the PR listing what ships, wait for
    `test`, merge.
-5. Tag the merge commit and push it: `git tag -a vX -m "rdd-plus X" <merge sha> && git push origin vX`;
-   confirm `https://proxy.golang.org/github.com/alesierraalta/rdd-plus/@v/vX.info` answers with that hash.
+5. Tag the merge commit and push it: `git tag -a vX -m "tpp X" <merge sha> && git push origin vX`;
+   confirm `https://proxy.golang.org/github.com/alesierraalta/tpp/@v/vX.info` answers with that hash.
 6. Install: follow [references/install.md](references/install.md).
 
 ## Output Contract
 
-Report old → new for each version, the PR and merge commit, the installed `rdd-plus version` line, the
+Report old → new for each version, the PR and merge commit, the installed `tpp version` line, the
 `doctor` verdict, and anything skipped.
 
 ## References

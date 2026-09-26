@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	plancheck "github.com/alesierraalta/rdd-plus/internal/plan"
+	plancheck "github.com/alesierraalta/tpp/internal/plan"
 )
 
 const findingsHeader = "| Id | Finding (path:line, one line) | Severity | Data safe? | Evidence id | Status | Verdict | Reason | Fingerprint |\n|---|---|---|---|---|---|---|---|---|\n"
@@ -181,7 +181,7 @@ func TestScoreWorkspaceReadsThePlanFile(t *testing.T) {
 	}
 }
 
-// A run that delivers its plan at the path its .rdd-plus.json declares is scored from that path; a
+// A run that delivers its plan at the path its .tpp.json declares is scored from that path; a
 // declaration that escapes is refused with a note and the default path is read instead; and a
 // workspace with no plan anywhere keeps today's result and note.
 // A plan path that exists but cannot be read as a plan is not a missing plan. Both scorers name the
@@ -249,6 +249,18 @@ func TestScoreWorkspaceResolvesTheDeclaredPlanPath(t *testing.T) {
 			name: "declared elsewhere",
 			setup: func(t *testing.T, ws string) {
 				declarePlan(t, ws, "docs/testing/test-plan-other.md")
+				writePlanAt(t, ws, "docs/testing/test-plan-other.md", body)
+			},
+			wantFound: true, wantPath: "docs/testing/test-plan-other.md", wantNoNotes: true,
+		},
+		{
+			// A run recorded before the rename declared its plan in the legacy file; rescoring it must
+			// still read the plan the run actually delivered.
+			name: "declared elsewhere in the legacy declaration",
+			setup: func(t *testing.T, ws string) {
+				if err := os.WriteFile(filepath.Join(ws, plancheck.LegacyConfigName), []byte(`{"planPath":"docs/testing/test-plan-other.md"}`), 0o644); err != nil {
+					t.Fatal(err)
+				}
 				writePlanAt(t, ws, "docs/testing/test-plan-other.md", body)
 			},
 			wantFound: true, wantPath: "docs/testing/test-plan-other.md", wantNoNotes: true,
@@ -459,7 +471,7 @@ func TestScoreWorkspaceRefusesSymlinkEscapes(t *testing.T) {
 				// Both facts travel in one note: the rejected declaration and the refusal of the fallback it
 				// would otherwise have read.
 				return []string{fmt.Sprintf(
-					"declared plan path refused (.rdd-plus.json escapes the worktree: %q); read %s instead; selected plan path %q refused: resolves outside workspace to %q",
+					"declared plan path refused (.tpp.json escapes the worktree: %q); read %s instead; selected plan path %q refused: resolves outside workspace to %q",
 					"../escape.md", PlanPath, PlanPath, outside)}
 			},
 		},

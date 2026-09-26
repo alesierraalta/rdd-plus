@@ -13,13 +13,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alesierraalta/rdd-plus/internal/buildinfo"
+	"github.com/alesierraalta/tpp/internal/buildinfo"
 )
 
 func useHome(t *testing.T) string {
 	t.Helper()
-	home := filepath.Join(t.TempDir(), "rdd-plus")
-	t.Setenv("RDD_PLUS_HOME", home)
+	home := filepath.Join(t.TempDir(), "tpp")
+	t.Setenv("TPP_HOME", home)
 	return home
 }
 

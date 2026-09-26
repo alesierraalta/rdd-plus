@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/alesierraalta/rdd-plus/internal/assets"
-	"github.com/alesierraalta/rdd-plus/internal/repair"
-	"github.com/alesierraalta/rdd-plus/internal/sync"
+	"github.com/alesierraalta/tpp/internal/assets"
+	"github.com/alesierraalta/tpp/internal/repair"
+	"github.com/alesierraalta/tpp/internal/sync"
 )
 
 func currentBin(t *testing.T) string {
@@ -27,11 +27,11 @@ func currentBin(t *testing.T) string {
 }
 
 // seed puts a healthy installation on disk wired to this test binary, with PATH stubbed so
-// doctor's binary comparison cannot see the rdd-plus the developer machine has on PATH.
+// doctor's binary comparison cannot see the tpp the developer machine has on PATH.
 func seed(t *testing.T) (root, cfg string) {
 	t.Helper()
 	root = t.TempDir()
-	t.Setenv("RDD_PLUS_HOME", root)
+	t.Setenv("TPP_HOME", root)
 	t.Setenv("PATH", t.TempDir())
 	cfg = t.TempDir()
 	if _, err := sync.Sync(cfg, currentBin(t), sync.Options{}); err != nil {
@@ -200,7 +200,7 @@ func TestRepairRewiresTheStopHook(t *testing.T) {
 	foreign := map[string]any{"matcher": "", "hooks": []any{map[string]any{
 		"type": "command", "command": "foreign review hook", "timeout": 60,
 	}}}
-	oldCmd := `"/old/install/rdd-plus" gate`
+	oldCmd := `"/old/install/tpp" gate`
 
 	t.Run("unwired", func(t *testing.T) {
 		_, cfg := seed(t)

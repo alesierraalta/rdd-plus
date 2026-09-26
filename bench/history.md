@@ -1,6 +1,6 @@
 # Benchmark history
 
-One row per `rdd-plus bench run`; never rewritten.
+One row per `tpp bench run`; never rewritten.
 
 | ts | out | model | cases | defects | found | recall | false positives | cost USD | skill version |
 |---|---|---|---|---|---|---|---|---|---|

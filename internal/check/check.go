@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/alesierraalta/rdd-plus/internal/gate"
-	"github.com/alesierraalta/rdd-plus/internal/plan"
+	"github.com/alesierraalta/tpp/internal/gate"
+	"github.com/alesierraalta/tpp/internal/plan"
 )
 
 // Deps are the process boundaries, injected so the decision is testable without a repository.

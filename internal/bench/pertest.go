@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alesierraalta/rdd-plus/internal/doctor"
+	"github.com/alesierraalta/tpp/internal/hookcmd"
 )
 
 // perTestCommand rewrites a suite command so it reports one line per test: node's TAP reporter
@@ -19,7 +19,7 @@ import (
 // suite the splitter cannot read is reported instead of rewritten, for the same reason the whole-suite path
 // refuses it: the words read so far are the head of a command nobody wrote.
 func perTestCommand(suite string) (argv []string, parser func(string) map[string]bool, err error) {
-	fields, err := doctor.ShellWords(suite)
+	fields, err := hookcmd.ShellWords(suite)
 	if err != nil {
 		return nil, nil, err
 	}

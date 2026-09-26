@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alesierraalta/rdd-plus/internal/evidence"
-	"github.com/alesierraalta/rdd-plus/internal/plan"
+	"github.com/alesierraalta/tpp/internal/evidence"
+	"github.com/alesierraalta/tpp/internal/plan"
 )
 
 // Runner runs one command in dir and returns its combined output.

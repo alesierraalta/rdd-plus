@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// backupFixture writes content at target with mode under the current RDD_PLUS_HOME, snapshots it
+// backupFixture writes content at target with mode under the current TPP_HOME, snapshots it
 // into a fresh backup store entry, and returns the backup id.
 func backupFixture(t *testing.T, target, content string, mode os.FileMode) string {
 	t.Helper()
@@ -57,7 +57,7 @@ func writeManifestFixture(t *testing.T, root, id string, entries []backupEntry) 
 // the mode the manifest recorded come back over whatever now sits at the original path.
 func TestListBackupsAnswersNewestFirstAndRestoreUsesTheLatest(t *testing.T) {
 	root := t.TempDir()
-	t.Setenv("RDD_PLUS_HOME", root)
+	t.Setenv("TPP_HOME", root)
 	target := filepath.Join(t.TempDir(), "note.txt")
 	first := backupFixture(t, target, "first edition\n", 0o644)
 	second := backupFixture(t, target, "second edition\n", 0o600)
@@ -112,7 +112,7 @@ func TestListBackupsAnswersNewestFirstAndRestoreUsesTheLatest(t *testing.T) {
 // An explicit id selects that backup even when a newer one exists.
 func TestRestoreSelectsTheNamedBackup(t *testing.T) {
 	root := t.TempDir()
-	t.Setenv("RDD_PLUS_HOME", root)
+	t.Setenv("TPP_HOME", root)
 	target := filepath.Join(t.TempDir(), "note.txt")
 	first := backupFixture(t, target, "first edition\n", 0o644)
 	backupFixture(t, target, "second edition\n", 0o644)
@@ -137,7 +137,7 @@ func TestRestoreSelectsTheNamedBackup(t *testing.T) {
 // without going to the filesystem.
 func TestRestoreUnknownIDNamesTheAvailableIDs(t *testing.T) {
 	root := t.TempDir()
-	t.Setenv("RDD_PLUS_HOME", root)
+	t.Setenv("TPP_HOME", root)
 	target := filepath.Join(t.TempDir(), "note.txt")
 	first := backupFixture(t, target, "first edition\n", 0o644)
 	second := backupFixture(t, target, "second edition\n", 0o644)
@@ -157,7 +157,7 @@ func TestRestoreUnknownIDNamesTheAvailableIDs(t *testing.T) {
 // destination byte-identical, and the plan line names both ends and the mode.
 func TestRestoreDryRunPlansWithoutTouchingTheDestination(t *testing.T) {
 	root := t.TempDir()
-	t.Setenv("RDD_PLUS_HOME", root)
+	t.Setenv("TPP_HOME", root)
 	target := filepath.Join(t.TempDir(), "note.txt")
 	id := backupFixture(t, target, "backup content\n", 0o600)
 	if err := os.WriteFile(target, []byte("current content\n"), 0o644); err != nil {
@@ -227,7 +227,7 @@ func TestRestoreRefusesManifestPathsOutsideTheStore(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
-			t.Setenv("RDD_PLUS_HOME", root)
+			t.Setenv("TPP_HOME", root)
 			// A real file where the escaping snapshot path would land: without the refusal the
 			// restore would read it and write its bytes to the destination.
 			if err := os.WriteFile(filepath.Join(root, "planted.txt"), []byte("planted\n"), 0o644); err != nil {

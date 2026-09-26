@@ -14,7 +14,7 @@ import (
 //
 //	pi -p 'Reply with exactly the two characters: ok' --mode json \
 //	  --model opencode/muse-spark-1.3-contributor-free --no-session
-const recordedPiRun = `{"type":"session","version":3,"id":"01a0900d-6be5-728b-b577-23b7713819d9","timestamp":"2026-09-11T10:39:53.830Z","cwd":"/home/alesierraalta/documents/projects/rdd-plus"}
+const recordedPiRun = `{"type":"session","version":3,"id":"01a0900d-6be5-728b-b577-23b7713819d9","timestamp":"2026-09-11T10:39:53.830Z","cwd":"/home/alesierraalta/documents/projects/tpp"}
 {"type":"agent_start"}
 {"type":"turn_start"}
 {"type":"message_start","message":{"role":"user","content":[{"type":"text","text":"Reply with exactly the two characters: ok"}],"timestamp":1789123196835}}

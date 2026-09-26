@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/alesierraalta/rdd-plus/internal/manifest"
-	"github.com/alesierraalta/rdd-plus/internal/state"
+	"github.com/alesierraalta/tpp/internal/manifest"
+	"github.com/alesierraalta/tpp/internal/state"
 )
 
 type planDepsStub struct {

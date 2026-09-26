@@ -76,7 +76,7 @@ func (s *spy) deps() Deps {
 
 func runScript(t *testing.T, script string, deps Deps) (string, error) {
 	t.Helper()
-	t.Setenv("RDD_PLUS_HOME", t.TempDir())
+	t.Setenv("TPP_HOME", t.TempDir())
 	var out bytes.Buffer
 	err := Run(strings.NewReader(script), &out, deps)
 	return out.String(), err
@@ -110,7 +110,7 @@ func TestRunStatusView(t *testing.T) {
 	if s.statusCalls != 1 {
 		t.Errorf("Status called %d times, want 1", s.statusCalls)
 	}
-	for _, want := range []string{"State root: /tmp/rdd-home", "Installed version: 1.4.0", "rdd-plus tui: status"} {
+	for _, want := range []string{"State root: /tmp/rdd-home", "Installed version: 1.4.0", "tpp tui: status"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q", want)
 		}
@@ -201,7 +201,7 @@ func TestRunFeaturesLoadError(t *testing.T) {
 
 func TestRunInputExhaustedIsNotQuit(t *testing.T) {
 	s := &spy{}
-	t.Setenv("RDD_PLUS_HOME", t.TempDir())
+	t.Setenv("TPP_HOME", t.TempDir())
 	var out bytes.Buffer
 	// One ignored key, no quit: input ends and Run reports EOF instead of success.
 	err := Run(bytes.NewReader([]byte("x")), &out, s.deps())
@@ -217,7 +217,7 @@ func TestRunArrowSplitAcrossReads(t *testing.T) {
 	if err := Run(in, &out, s.deps()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	hasTitle := strings.Contains(out.String(), "rdd-plus tui: features")
+	hasTitle := strings.Contains(out.String(), "tpp tui: features")
 	if s.featuresCall != 1 || s.statusCalls != 0 || !hasTitle {
 		t.Errorf("features=%d status=%d hasTitle=%v, want 1, 0, true", s.featuresCall, s.statusCalls, hasTitle)
 	}
