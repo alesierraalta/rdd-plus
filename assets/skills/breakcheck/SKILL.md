@@ -4,7 +4,7 @@ description: "Trigger: breakcheck, romper esto, intenta romperlo, testing advers
 license: Apache-2.0
 metadata:
   author: "alesierraalta"
-  version: "0.1.1"
+  version: "0.1.2"
   requires_tpp: "0.3.8"
   scope: [common]
   auto_invoke: "Explicit invocation to break a change before RDD: bounded adversarial probes and a readiness disposition"
