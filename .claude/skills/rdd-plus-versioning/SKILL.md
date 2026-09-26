@@ -4,7 +4,7 @@ description: "Trigger: versionar, version bump, release, subir versión, install
 license: Apache-2.0
 metadata:
   author: "alesierraalta"
-  version: "1.2"
+  version: "1.3"
 ---
 
 ## Activation Contract
@@ -46,7 +46,9 @@ ship, when the operator asks to version or release, or to install the latest bui
 2. Edit the version strings, then update every live mention: `rtk proxy grep -rn '<old>' internal cmd
    assets README.md` — the prose in `SKILL.md` ("written for `rdd-plus X`", "aligned with <skill> X")
    and `TestEmbeddedSkillIdentityNamesTheEmbeddedSkill` in `internal/feedback/feedback_test.go`.
-3. `gofmt -l`, `go vet ./...`, `go test ./... -short -count=1`; `go run ./cmd/rdd-plus version`.
+3. `gofmt -l`, `go vet ./...`, then the FULL suite as CI runs it — no `-short`, in a clean clone of the
+   branch (`git clone --branch <b> . $S/ci && cd $S/ci && go test ./... -count=1`), because `-short` skips the
+   process-spawning tests and a local checkout may carry foreign changes; `go run ./cmd/rdd-plus version`.
 4. Commit `chore(release): rdd-plus X, <skill> Y` on a branch, open the PR listing what ships, wait for
    `test`, merge.
 5. Tag the merge commit and push it: `git tag -a vX -m "rdd-plus X" <merge sha> && git push origin vX`;
