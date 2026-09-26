@@ -106,15 +106,9 @@ flowchart TD
 
 ## Install with an agent
 
-This block is a prompt, not a description: hand it to an agent that has a shell and let it drive the
-install end to end. An install has five steps a model can each skip in silence — the binary that
-never reaches `PATH`, the hook wired to a binary you will delete tomorrow, the rehearsal that never
-ran, the warning read as a verdict, the host declared working because its configuration file was
-written. This project's whole subject is that last failure, so the prompt asks for the exit code and
-the output line behind every claim, and rehearses into a throwaway configuration directory before it
-touches yours.
-
-Pick the prompt that matches the machine:
+Hand one of these prompts to an agent that has a shell. `tpp setup` does the install and the checking
+itself, so the prompt only has to run it and read how it ended: exit 0 and a last line saying tpp is
+installed and working.
 
 | You use | Prompt | What you get |
 |---|---|---|
@@ -123,212 +117,60 @@ Pick the prompt that matches the machine:
 
 tpp works the same in both: the difference is what else is on the machine, not how tpp behaves.
 
-### With Gentle AI
-
-````text
-Install tpp on this machine, next to the Gentle AI already installed, and leave it working. Answer in the language the operator wrote to
-you in, and prove every step with the command you ran, its exit code, and the output line that
-carries the claim.
-
-Rules:
-- Never write "installed", "wired" or "working" without the exit code and the output that shows it.
-- Never edit ~/.claude/settings.json by hand. `tpp sync` owns that merge: it preserves every
-  existing setting and hook, adds the gate once, and refuses a file it cannot parse.
-- Decide where the binary will live before the first `sync`. The hook records the absolute path of
-  the binary that ran sync, so run sync from the binary you intend to keep, after it is on PATH.
-- When a step fails, stop and report the failure verbatim instead of improvising around it.
-
-0. Gentle AI first, read-only. Run `gentle-ai version`, `engram version` and
-   `gentle-ai review mode status`. If gentle-ai is missing, stop: tell the operator this prompt is
-   for machines that already use Gentle AI, and that they either install Gentle AI with its own
-   instructions first or use the standalone prompt instead. Do not install or reconfigure Gentle AI
-   from here, and do not change the review mode: `review mode status` only reads it. Record the
-   versions and the mode line for the report.
-
-1. Prerequisites. `git --version` and `go version`; go.mod declares `go 1.26`, and the module has no
-   third-party dependencies, so Go and git are the whole requirement. docker, node, python3, claude,
-   codegraph and rtk are optional. `tpp doctor` names what each one's absence degrades, and that
-   report is the authority rather than a list here; on this machine it must list gentle-ai and
-   engram as present.
-
-2. Install the binary. Pick one:
-   a. Published: `go install github.com/alesierraalta/tpp/cmd/tpp@latest`, which lands in
-      `$(go env GOPATH)/bin`. Ensure that directory is on PATH, then confirm with
-      `command -v tpp`.
-   b. From a source checkout, which is what running the tests and the mutants requires:
-      `git clone https://github.com/alesierraalta/tpp.git && cd tpp && make build` writes
-      `bin/tpp`. `make test` runs the suite, `make vet` runs gofmt and go vet, and
-      `go run ./tools/mutants` applies 23 literal mutations to a copy of the tree and requires every
-      one killed. That last one copies the whole working tree file by file, so a checkout carrying
-      local tool state — a `.codegraph/daemon.sock`, for instance — fails before it applies
-      anything: report that, and do not delete the directory to get past it.
-
-3. Prove the binary runs: `tpp version` prints the version and the revision it was built from —
-   `unknown` for a `go install` build, a commit hash for a build from a checkout, with `+dirty` when
-   that checkout has uncommitted changes.
-
-4. Rehearse the install without touching the real configuration. `--config-dir` targets one Claude
-   directory and nothing else, which is what makes this safe:
-
-   ```sh
-   tmp=$(mktemp -d)
-   tpp sync --config-dir "$tmp/cfg" --dry-run     # the plan, writing nothing
-   tpp sync --config-dir "$tmp/cfg"               # $tmp/cfg/skills plus settings.json
-   tpp doctor --config-dir "$tmp/cfg"             # must exit 0
-   ```
-
-   The report carries one line per embedded skill, the command the wired hook runs, whether that
-   command answered, and the capabilities; the line that decides is `verdict: healthy` with exit 0.
-   `doctor --json` prints the same report as a machine reads it.
-
-5. Install for real: `tpp sync` with no `--config-dir` (default `~/.claude`; `--hosts` narrows
-   the run to named hosts), then `tpp doctor`, which must exit 0. A skill you edited locally is
-   moved to `<config root>/backups/<timestamp>/` before it is replaced, so the run
-   is reversible. Read doctor's warning about the binaries, not only its verdict: doctor compares the
-   binary the hook invokes with the `tpp` on PATH, and when they are different files it says the
-   two would give different verdicts. If it warns, run sync again from the PATH binary and re-check.
-   A machine where no host is installed yet (no `~/.claude`, `~/.config/opencode`, `~/.gemini` or
-   `~/.codex`) gets exit 1 from `sync`, naming where it looked: nothing was installed, so install the
-   host first or pass `--config-dir`.
-
-6. Two hosts cannot be wired from here. Pi takes `assets/hosts/pi/settings.stop-hook.json` merged
-   into its settings (Pi reads the same `~/.claude/skills`, so it already has the skills), and OpenCode
-   takes `assets/hosts/opencode/tpp.ts` as a plugin. Both shapes were read from their
-   documentation and nobody has watched them fire here: install them if asked, and say plainly that
-   they are unverified instead of reporting them as working.
-
-7. Prove the hook answers without waiting for a real session. In a throwaway git repository, commit a
-   file, write a transcript whose first timestamp precedes the change, touch a production source file,
-   then hand the gate the payload its host would:
-
-   ```sh
-   printf '%s' "{\"session_id\":\"install-check\",\"transcript_path\":\"$tmp/transcript.jsonl\",\"cwd\":\"$tmp/repo\",\"hook_event_name\":\"Stop\",\"stop_hook_active\":false}" \
-     | TESTING_GATE_LOG="$tmp/gate.jsonl" tpp gate
-   ```
-
-   Expected: exit 0, a Stop payload naming the changed file, and one line in `$tmp/gate.jsonl` reading
-   `"fired":true`. A payload the gate cannot read (`printf '{ broken' | tpp gate`) also exits 0
-   and leaves one line reading `"skipped":"unreadable_payload"`. Exit 0 is the contract: the gate
-   grades the turn, it never breaks it, so a non-zero exit is a defect and not a refusal.
-
-8. To leave a project under the discipline and not only the machine: `tpp plan init` writes
-   `docs/testing/test-plan.md`, and `tpp check` exits 1 naming what the repository still owes,
-   layer by layer, from git and the plan alone — no hook payload, no transcript, no host, which is
-   also what makes it usable from CI.
-
-9. Confirm the two systems sit side by side and neither owns the other's files. In `tpp doctor`,
-   the capabilities lines read `gentle-ai present` and `engram present`. tpp installs its own skills
-   and its own Stop hook entry; `tpp sync` preserves every other hook, so Gentle AI's entries in
-   settings.json must still be there after it (compare the Stop list before and after). tpp runs
-   the testing discipline; Gentle AI's review runs afterwards on the finished change, and tpp never
-   starts or approves that review.
-
-Report a table of command → exit code → the line that proves it, then name what you could not
-verify and why. If doctor does not exit 0 with `verdict: healthy`, the install is not finished: say
-which problem line it printed.
-````
-
 ### Without Gentle AI
 
-````text
-Install tpp on this machine and leave it working. Answer in the language the operator wrote to
-you in, and prove every step with the command you ran, its exit code, and the output line that
-carries the claim.
+```text
+Install tpp: run go install github.com/alesierraalta/tpp/cmd/tpp@latest, then tpp setup (if tpp is
+not found, run "$(go env GOPATH)/bin/tpp" setup and add the PATH line it prints). It is done when
+setup exits 0; show me its last lines.
+```
 
-Rules:
-- Never write "installed", "wired" or "working" without the exit code and the output that shows it.
-- Never edit ~/.claude/settings.json by hand. `tpp sync` owns that merge: it preserves every
-  existing setting and hook, adds the gate once, and refuses a file it cannot parse.
-- Decide where the binary will live before the first `sync`. The hook records the absolute path of
-  the binary that ran sync, so run sync from the binary you intend to keep, after it is on PATH.
-- When a step fails, stop and report the failure verbatim instead of improvising around it.
+### With Gentle AI
 
-1. Prerequisites. `git --version` and `go version`; go.mod declares `go 1.26`, and the module has no
-   third-party dependencies, so Go and git are the whole requirement. docker, node, python3, claude,
-   codegraph, rtk, gentle-ai and engram are optional. This install does not use Gentle AI: when
-   `tpp doctor` lists gentle-ai or engram as absent, that is expected and not a failure. `tpp doctor`
-   names what each one's absence degrades, and that report is the authority rather than a list here.
-
-2. Install the binary. Pick one:
-   a. Published: `go install github.com/alesierraalta/tpp/cmd/tpp@latest`, which lands in
-      `$(go env GOPATH)/bin`. Ensure that directory is on PATH, then confirm with
-      `command -v tpp`.
-   b. From a source checkout, which is what running the tests and the mutants requires:
-      `git clone https://github.com/alesierraalta/tpp.git && cd tpp && make build` writes
-      `bin/tpp`. `make test` runs the suite, `make vet` runs gofmt and go vet, and
-      `go run ./tools/mutants` applies 23 literal mutations to a copy of the tree and requires every
-      one killed. That last one copies the whole working tree file by file, so a checkout carrying
-      local tool state — a `.codegraph/daemon.sock`, for instance — fails before it applies
-      anything: report that, and do not delete the directory to get past it.
-
-3. Prove the binary runs: `tpp version` prints the version and the revision it was built from —
-   `unknown` for a `go install` build, a commit hash for a build from a checkout, with `+dirty` when
-   that checkout has uncommitted changes.
-
-4. Rehearse the install without touching the real configuration. `--config-dir` targets one Claude
-   directory and nothing else, which is what makes this safe:
-
-   ```sh
-   tmp=$(mktemp -d)
-   tpp sync --config-dir "$tmp/cfg" --dry-run     # the plan, writing nothing
-   tpp sync --config-dir "$tmp/cfg"               # $tmp/cfg/skills plus settings.json
-   tpp doctor --config-dir "$tmp/cfg"             # must exit 0
-   ```
-
-   The report carries one line per embedded skill, the command the wired hook runs, whether that
-   command answered, and the capabilities; the line that decides is `verdict: healthy` with exit 0.
-   `doctor --json` prints the same report as a machine reads it.
-
-5. Install for real: `tpp sync` with no `--config-dir` (default `~/.claude`; `--hosts` narrows
-   the run to named hosts), then `tpp doctor`, which must exit 0. A skill you edited locally is
-   moved to `<config root>/backups/<timestamp>/` before it is replaced, so the run
-   is reversible. Read doctor's warning about the binaries, not only its verdict: doctor compares the
-   binary the hook invokes with the `tpp` on PATH, and when they are different files it says the
-   two would give different verdicts. If it warns, run sync again from the PATH binary and re-check.
-   A machine where no host is installed yet (no `~/.claude`, `~/.config/opencode`, `~/.gemini` or
-   `~/.codex`) gets exit 1 from `sync`, naming where it looked: nothing was installed, so install the
-   host first or pass `--config-dir`.
-
-6. Two hosts cannot be wired from here. Pi takes `assets/hosts/pi/settings.stop-hook.json` merged
-   into its settings (Pi reads the same `~/.claude/skills`, so it already has the skills), and OpenCode
-   takes `assets/hosts/opencode/tpp.ts` as a plugin. Both shapes were read from their
-   documentation and nobody has watched them fire here: install them if asked, and say plainly that
-   they are unverified instead of reporting them as working.
-
-7. Prove the hook answers without waiting for a real session. In a throwaway git repository, commit a
-   file, write a transcript whose first timestamp precedes the change, touch a production source file,
-   then hand the gate the payload its host would:
-
-   ```sh
-   printf '%s' "{\"session_id\":\"install-check\",\"transcript_path\":\"$tmp/transcript.jsonl\",\"cwd\":\"$tmp/repo\",\"hook_event_name\":\"Stop\",\"stop_hook_active\":false}" \
-     | TESTING_GATE_LOG="$tmp/gate.jsonl" tpp gate
-   ```
-
-   Expected: exit 0, a Stop payload naming the changed file, and one line in `$tmp/gate.jsonl` reading
-   `"fired":true`. A payload the gate cannot read (`printf '{ broken' | tpp gate`) also exits 0
-   and leaves one line reading `"skipped":"unreadable_payload"`. Exit 0 is the contract: the gate
-   grades the turn, it never breaks it, so a non-zero exit is a defect and not a refusal.
-
-8. To leave a project under the discipline and not only the machine: `tpp plan init` writes
-   `docs/testing/test-plan.md`, and `tpp check` exits 1 naming what the repository still owes,
-   layer by layer, from git and the plan alone — no hook payload, no transcript, no host, which is
-   also what makes it usable from CI.
-
-Report a table of command → exit code → the line that proves it, then name what you could not
-verify and why. If doctor does not exit 0 with `verdict: healthy`, the install is not finished: say
-which problem line it printed.
-````
-
-A correct run ends with `tpp doctor` exiting 0, `verdict: healthy`, one line per embedded skill,
-and the Stop hook wired to the binary you kept. The section below is the same install, for a person.
+```text
+Install tpp: run go install github.com/alesierraalta/tpp/cmd/tpp@latest, then tpp setup (if tpp is
+not found, run "$(go env GOPATH)/bin/tpp" setup and add the PATH line it prints). It is done when
+setup exits 0; show me its last lines. Gentle AI is already installed here: confirm setup lists
+gentle-ai and engram as present.
+```
 
 ## Install
 
 ```sh
 go install github.com/alesierraalta/tpp/cmd/tpp@latest
+tpp setup     # sync, then doctor's checks, then one line saying tpp works (exit 0) or what is left
+```
+
+`tpp setup` is the one-step path: it runs the same sync as `tpp sync`, the same checks as `tpp doctor`
+against the directory it just wrote, and ends on `tpp is installed and working: <N> skills in <hosts>,
+Stop hook wired to <binary>` with exit 0. A failing sync (including a machine with no host yet) stops it
+with sync's exit code; a doctor problem ends it on `setup: not finished:` naming that problem, with exit 1.
+When the binary's directory is not on `PATH` it prints the exact `export PATH=...` line to add; that is a
+warning, not a failure, because the Stop hook calls the absolute path. Run it from the binary you intend
+to keep: the hook records the path of the binary that ran it.
+
+Step by step, for a person who wants to see each part:
+
+```sh
+tmp=$(mktemp -d)
+tpp sync --config-dir "$tmp/cfg" --dry-run     # rehearse: the plan, writing nothing
+tpp sync --config-dir "$tmp/cfg"               # rehearse into a throwaway Claude directory
+tpp doctor --config-dir "$tmp/cfg"             # must exit 0 with verdict: healthy
 tpp sync      # installs skills into every discovered host; wires the Stop hook only for Claude
 tpp doctor    # verifies the install and lists optional capabilities
 ```
+
+To prove the hook answers without waiting for a real session, hand the gate the payload its host would.
+In a throwaway git repository with a committed file, a transcript whose first timestamp precedes the
+change, and a touched production source file:
+
+```sh
+printf '%s' "{\"session_id\":\"install-check\",\"transcript_path\":\"$tmp/transcript.jsonl\",\"cwd\":\"$tmp/repo\",\"hook_event_name\":\"Stop\",\"stop_hook_active\":false}" \
+  | TESTING_GATE_LOG="$tmp/gate.jsonl" tpp gate
+```
+
+It exits 0, prints a Stop payload naming the changed file, and leaves one line in `$tmp/gate.jsonl`
+reading `"fired":true`. The gate always exits 0: it grades the turn and never breaks it.
 
 `sync` installs the embedded skills into every host it finds: `~/.claude/skills`,
 `~/.config/opencode/skills`, `~/.gemini/skills`, and `~/.codex/skills`. The Stop hook is wired only
@@ -380,6 +222,7 @@ Commands table below.
 | Command | What it does |
 |---|---|
 | `tpp gate` | The Stop hook. Reads the hook payload on stdin, decides, logs one line, and emits Stop feedback when a session changed production source without loading the adversarial testing discipline. Always exits 0. |
+| `tpp setup [--hosts <a,b>] [--config-dir <dir>]` | Installs and verifies in one step: the same sync as `tpp sync`, the same checks as `tpp doctor` on the directory it wrote, and a PATH check that prints the `export PATH=...` line when the binary's directory is missing. Ends on `tpp is installed and working: ...` with exit 0, or exits with sync's code or 1 (`setup: not finished: ...`). |
 | `tpp sync [--dry-run] [--force]` | Installs the embedded skills into discovered hosts and wires Claude's Stop hook. `--dry-run` prints the plan and writes nothing; `--force` replaces modified managed files after snapshotting them. Idempotent. |
 | `tpp doctor` | Reports installed skills (and whether they drift from the embedded version), whether the hook is wired, and which optional tools are on PATH with what degrades without each. `--json` for machines. Exit 1 when git, a skill, or the hook is missing. |
 | `tpp status [--json]` | Reports local installation state, features, and available version — the cached result after `update` has checked, or `unknown (no update check yet)` before the first check. |
