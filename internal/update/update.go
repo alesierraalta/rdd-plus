@@ -122,6 +122,15 @@ func Compare(installed, latest string) Relation {
 	return Equal
 }
 
+// Uncomparable says why Compare answered Unknown, naming the side that carries no release number: an
+// untagged module reaches the proxy as a pseudo-version, and a local build may carry no numeric version at all.
+func Uncomparable(installed, latest string) string {
+	if _, ok := parseVersion(installed); !ok {
+		return fmt.Sprintf("cannot compare: installed %s is not a release version (latest %s)", installed, latest)
+	}
+	return fmt.Sprintf("cannot compare: latest %s is not a release version (installed %s); releases are tagged vX.Y.Z", latest, installed)
+}
+
 func parseVersion(version string) ([]int, bool) {
 	trimmed := strings.TrimPrefix(strings.TrimSpace(version), "v")
 	if trimmed == "" {

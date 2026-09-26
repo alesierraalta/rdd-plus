@@ -206,3 +206,16 @@ func TestRunInstallHandsTheRunnerThePrintedCommand(t *testing.T) {
 		t.Fatalf("runner argv = %q, want %q", joined, InstallCommand("v1.2.3"))
 	}
 }
+
+// An uncomparable pair names the side that carries no release number, so the operator is not told to tag a
+// release that exists when it is the local build that has no version.
+func TestUncomparableNamesTheSideThatIsNotARelease(t *testing.T) {
+	for _, tc := range []struct{ installed, latest, want string }{
+		{"0.3.12", "v0.0.0-20260925221235-11e300da863b", "latest v0.0.0-20260925221235-11e300da863b is not a release version"},
+		{"dev", "v0.3.13", "installed dev is not a release version"},
+	} {
+		if got := Uncomparable(tc.installed, tc.latest); !strings.Contains(got, tc.want) {
+			t.Errorf("Uncomparable(%q, %q) = %q, want it to contain %q", tc.installed, tc.latest, got, tc.want)
+		}
+	}
+}
