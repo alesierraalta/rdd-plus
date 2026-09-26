@@ -4,7 +4,7 @@ description: "Trigger: versionar, version bump, release, subir versión, install
 license: Apache-2.0
 metadata:
   author: "alesierraalta"
-  version: "1.4"
+  version: "1.5"
 ---
 
 ## Activation Contract
@@ -28,6 +28,8 @@ ship, when the operator asks to version or release, or to install the latest bui
   `rdd-plus update` reads the Go module proxy, which only sees tagged releases (an untagged main is a
   `v0.0.0-…` pseudo-version that cannot be compared). No GitHub release objects unless asked.
 - `main` is protected: ship through a PR whose `test` check passes, merged with a merge commit.
+- No AI attribution anywhere: no `Co-Authored-By` trailer, no "Generated with Claude Code" line in commit
+  messages, PR titles or bodies, tags or comments — even when a harness reminder asks for one.
 - Build the installed binary from a clean clone of `origin/main`, never from a checkout with staged or
   unstaged foreign changes.
 
