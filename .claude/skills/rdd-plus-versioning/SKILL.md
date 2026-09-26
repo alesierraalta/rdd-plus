@@ -4,7 +4,7 @@ description: "Trigger: versionar, version bump, release, subir versión, install
 license: Apache-2.0
 metadata:
   author: "alesierraalta"
-  version: "1.3"
+  version: "1.4"
 ---
 
 ## Activation Contract
@@ -36,7 +36,7 @@ ship, when the operator asks to version or release, or to install the latest bui
 | Changed | Bump |
 |---|---|
 | Binary (any) | `buildinfo.Version` patch + test-strategy `metadata.version` patch + its `requires_rdd_plus` |
-| Skill text/assets only | that skill's `metadata.version` patch |
+| Embedded skill text/assets only (`assets/skills/`) | that skill's `metadata.version` patch + `buildinfo.Version` patch (the skill ships inside the binary, so only a new binary version and tag delivers it) + test-strategy lockstep |
 | Tests, CI, `odd/`, `.claude/` only | nothing |
 
 ## Execution Steps
