@@ -158,6 +158,14 @@ func (r Report) writeHook(b *strings.Builder) {
 	}
 }
 
+// CapabilitiesString renders only the capabilities block, for a caller that has no Claude config dir to
+// report skills and a hook for but still owes the reader what the host can do.
+func (r Report) CapabilitiesString() string {
+	var b strings.Builder
+	r.writeCapabilities(&b)
+	return b.String()
+}
+
 // writeCapabilities lists what the host can do, marking the ones the discipline needs and saying what degrades
 // without the ones that are absent.
 func (r Report) writeCapabilities(b *strings.Builder) {

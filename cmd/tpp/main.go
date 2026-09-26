@@ -21,7 +21,6 @@ import (
 	"github.com/alesierraalta/tpp/internal/bench"
 	"github.com/alesierraalta/tpp/internal/buildinfo"
 	"github.com/alesierraalta/tpp/internal/check"
-	"github.com/alesierraalta/tpp/internal/doctor"
 	"github.com/alesierraalta/tpp/internal/evidence"
 	"github.com/alesierraalta/tpp/internal/feature"
 	"github.com/alesierraalta/tpp/internal/feedback"
@@ -46,6 +45,8 @@ const usage = `usage: tpp <command> [flags]
 
 commands:
   gate     Stop hook: read the hook payload on stdin, decide, log, emit feedback
+  setup    install and verify in one step: sync, run the doctor's checks, say whether the binary's
+           directory is on PATH, and end on one line saying tpp is working (exit 0) or what is left
   sync     install the embedded skills into discovered hosts and wire Claude's Stop hook
   uninstall remove the installed skills and unwire the Stop hook (--dry-run writes nothing,
            --orphans also removes recorded paths the manifest no longer ships, --force
@@ -71,12 +72,12 @@ commands:
            (--template | --file <path> | --summary)
   version  print the version
 
-flags shared by gate, sync, doctor, uninstall, feedback, repair:
+flags shared by gate, setup, sync, doctor, uninstall, feedback, repair:
   --config-dir <dir>   Claude config directory (default: ~/.claude)
 
-flags for sync:
+flags for sync and setup:
   --hosts <a,b,...>    limit installation to named hosts (claude, opencode, gemini, codex)
-  --dry-run            print the plan and write nothing
+  --dry-run            print the plan and write nothing (sync only)
 
 bench run [--cases <glob>] [--runner pi|claude] [--model <m>] [--runs N] [--max-turns N] [--timeout 30m]
           [--max-cost-usd N] [--out <dir>] [--bench-dir <dir>] [--dry-run] [--keep]
@@ -147,6 +148,8 @@ func main() {
 	switch os.Args[1] {
 	case "gate":
 		os.Exit(runGate(os.Args[2:]))
+	case "setup":
+		os.Exit(runSetup(os.Args[2:]))
 	case "sync":
 		os.Exit(runSync(os.Args[2:]))
 	case "uninstall":
@@ -512,27 +515,34 @@ func runSync(args []string) int {
 		fmt.Fprintln(os.Stderr, "sync:", err)
 		return 2
 	}
-	discovery := discoverSync(*configDir, flagSet(fs, "config-dir"))
-	if flagSet(fs, "config-dir") {
+	code, _ := syncInstall(*configDir, flagSet(fs, "config-dir"), selected, sync.Options{DryRun: *dryRun, Force: *force})
+	return code
+}
+
+// syncInstall is what sync and setup share: discover the hosts, narrow them to --config-dir and --hosts,
+// run the planner, print its report, and return the exit code with the hosts it ran against.
+func syncInstall(configDir string, explicitConfigDir bool, selected map[string]bool, opts sync.Options) (int, sync.Discovery) {
+	discovery := discoverSync(configDir, explicitConfigDir)
+	if explicitConfigDir {
 		discovery.Hosts = filterSyncHosts(discovery.Hosts, map[string]bool{"claude": true})
 	}
 	if selected != nil {
 		discovery.Hosts = filterSyncHosts(discovery.Hosts, selected)
 	}
 
-	text, err := syncReport(discovery, sync.Options{DryRun: *dryRun, Force: *force})
+	text, err := syncReport(discovery, opts)
 	fmt.Print(text)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "sync:", err)
-		return 1
+		return 1, discovery
 	}
 	// A sync that found no host installed nothing. Exit 0 would tell a scripted install (dotfiles, CI) it
 	// succeeded, so it says how to proceed and exits 1, the code doctor uses for "action required".
 	if len(discovery.Hosts) == 0 {
 		fmt.Println("sync: nothing installed: no host found; install a host (Claude Code creates ~/.claude) or pass --config-dir <dir>")
-		return 1
+		return 1, discovery
 	}
-	return 0
+	return 0, discovery
 }
 
 // shellQuote renders s as one POSIX shell word, so a printed command still works when a path holds spaces.
@@ -725,7 +735,7 @@ func runDoctor(args []string) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	report := doctor.RunWith(*configDir, exec.LookPath, probeHook)
+	report := doctorReport(*configDir)
 	if *asJSON {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")

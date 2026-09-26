@@ -1793,3 +1793,98 @@ func TestConfigModeForTheAgentConfigFlag(t *testing.T) {
 		}
 	}
 }
+
+// setupEnv isolates a setup run: its own HOME and installation state, and exactly the PATH given, so
+// the PATH check sees only what the test decided.
+func setupEnv(t *testing.T, home, path string) []string {
+	t.Helper()
+	return []string{"HOME=" + home, "TPP_HOME=" + t.TempDir(), "PATH=" + path, "CLAUDE_CONFIG_DIR=", "PI_CODING_AGENT_DIR="}
+}
+
+// pathWithoutBin is a PATH that still finds git (doctor requires it) and never holds the test binary.
+func pathWithoutBin(t *testing.T) string {
+	t.Helper()
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git is required by doctor")
+	}
+	return filepath.Dir(git) + string(os.PathListSeparator) + "/usr/bin" + string(os.PathListSeparator) + "/bin"
+}
+
+func lastLine(out string) string {
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	return lines[len(lines)-1]
+}
+
+// setup is the whole install in one command: it syncs, verifies with the doctor's checks, and ends on one
+// line saying tpp works, so an agent or a person knows the install is done from the exit code and that line.
+func TestSetupInstallsVerifiesAndSaysItIsWorking(t *testing.T) {
+	bin := buildCLI(t)
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Dir(bin) + string(os.PathListSeparator) + pathWithoutBin(t)
+	out, code := runCLIEnv(t, bin, setupEnv(t, home, path), "setup")
+	if code != 0 {
+		t.Fatalf("setup on a machine with Claude Code exit = %d, want 0\n%s", code, out)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".claude", "skills", "test-strategy", "SKILL.md")); err != nil {
+		t.Fatalf("setup did not install the skills: %v\n%s", err, out)
+	}
+	settings, err := os.ReadFile(filepath.Join(home, ".claude", "settings.json"))
+	if err != nil || !strings.Contains(string(settings), "gate") {
+		t.Fatalf("setup did not wire the Stop hook (err %v):\n%s", err, settings)
+	}
+	if !strings.Contains(out, "verdict: healthy") {
+		t.Fatalf("setup must show the doctor's checks:\n%s", out)
+	}
+	last := lastLine(out)
+	if !strings.HasPrefix(last, "tpp is installed and working: ") || !strings.Contains(last, "in claude") || !strings.HasSuffix(last, "Stop hook wired to "+bin) {
+		t.Fatalf("last line = %q, want the working line naming the host and the wired binary\n%s", last, out)
+	}
+	if strings.Contains(out, "export PATH=") {
+		t.Fatalf("the binary's directory is on PATH, so setup must not ask to add it:\n%s", out)
+	}
+}
+
+// A machine with no host has nothing to install into: setup stops with sync's exit code and never claims
+// tpp is working.
+func TestSetupStopsWhenNoHostIsInstalled(t *testing.T) {
+	bin := buildCLI(t)
+	home := t.TempDir()
+	out, code := runCLIEnv(t, bin, setupEnv(t, home, pathWithoutBin(t)), "setup")
+	if code != 1 {
+		t.Fatalf("setup with no host exit = %d, want sync's 1\n%s", code, out)
+	}
+	if strings.Contains(out, "installed and working") {
+		t.Fatalf("setup claimed success with nothing installed:\n%s", out)
+	}
+	if !strings.Contains(out, "no host found") {
+		t.Fatalf("setup must carry sync's reason:\n%s", out)
+	}
+}
+
+// The Stop hook uses the absolute path, so a binary off PATH still works; setup says so and prints the
+// exact line to add, without failing.
+func TestSetupPrintsThePathLineWhenTheBinaryIsNotOnPath(t *testing.T) {
+	bin := buildCLI(t)
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, code := runCLIEnv(t, bin, setupEnv(t, home, pathWithoutBin(t)), "setup")
+	if code != 0 {
+		t.Fatalf("setup with the binary off PATH exit = %d, want 0: the hook uses the absolute path\n%s", code, out)
+	}
+	dir, err := filepath.EvalSymlinks(filepath.Dir(bin))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `export PATH="` + dir + `:$PATH"`; !strings.Contains(out, want) {
+		t.Fatalf("setup must print %q:\n%s", want, out)
+	}
+	if last := lastLine(out); !strings.HasPrefix(last, "tpp is installed and working: ") || !strings.HasSuffix(last, "Stop hook wired to "+bin) {
+		t.Fatalf("a PATH warning is not a failure, and the hook still names the binary it runs; last line = %q\n%s", last, out)
+	}
+}
