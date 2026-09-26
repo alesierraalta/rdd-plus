@@ -4,7 +4,7 @@ description: "Trigger: security audit, appsec testing, vulnerability test, IDOR,
 license: Apache-2.0
 metadata:
   author: "alesierraalta"
-  version: "1.0"
+  version: "1.1"
 ---
 
 ## Activation Contract
@@ -46,7 +46,7 @@ cheap static ones (Semgrep, Gitleaks, Trivy).
 | Security Focus | Technique & Tool | Target Vector / Invariant |
 | :--- | :--- | :--- |
 | **Object Authorization** | Dual-Persona Testing (`assets/dual-persona-auth-test.py`) | BOLA / IDOR (`WHERE id = :id AND tenant_id = :auth_tenant`) |
-| **Static Taint Analysis** | Semgrep (`assets/semgrep-rules.yaml`) | SQLi raw escapes (`text()`, `extra()`), SSRF sinks (`requests.get`) |
+| **Static Taint Analysis** | Semgrep (`assets/semgrep-rules.yaml`, Flask sources only; for FastAPI, Django or other stacks write scratch rules for that stack's request sources, or the scan cannot fire) | SQLi raw escapes (`text()`, `execute()`), SSRF sinks (`requests.get`, `httpx.get`) |
 | **Secret Leaks** | Gitleaks on Git diff against base | High-entropy tokens, private keys, API keys in commits |
 | **Parsers & Deserializers** | Coverage-Guided Fuzzing (`f.Fuzz`, `Hypothesis`) | Crash-freedom, round-trip invariance (`decode(encode(x)) == x`) |
 | **Stateful Logic (Finance/Auth)** | Model-Based PBT (`RuleBasedStateMachine`) | Conservation laws (mass balance, non-negative funds, monotonic states) |
@@ -73,6 +73,6 @@ cheap static ones (Semgrep, Gitleaks, Trivy).
 - [references/attack-vectors.md](references/attack-vectors.md) — BOLA, SSRF bypasses, security invariant design.
 - [references/severity.md](references/severity.md) — C/M/N classes and the sink rule.
 - [references/rdd-receipt.md](references/rdd-receipt.md) — receipt contract for `lens:security`.
-- [assets/semgrep-rules.yaml](assets/semgrep-rules.yaml) — Semgrep taint rules for SQLi and SSRF.
+- [assets/semgrep-rules.yaml](assets/semgrep-rules.yaml) — Semgrep taint rules for SQLi and SSRF, Flask request sources only.
 - [assets/dual-persona-auth-test.py](assets/dual-persona-auth-test.py) — dual-persona authorization harness.
 - Sibling skills: `test-strategy` · `dependency-legitimacy` · `docker-test-containers` · `exploit-testing`.
