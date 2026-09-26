@@ -227,11 +227,7 @@ func Run(opts Options) (Aggregate, int) {
 	results, skipped := runUnits(units, opts)
 	agg, corpus, code := tallyUnits(agg, units, results, skipped, opts)
 	agg, code = finalizeRun(agg, corpus, code, opts)
-	written, writtenCode, ok := writeArtifacts(agg, caseDirs, opts)
-	if !ok {
-		return written, writtenCode
-	}
-	return agg, code
+	return writeArtifacts(agg, code, caseDirs, opts)
 }
 
 // normalizeOptions fills the defaults a run cannot start without: somewhere to log, at least one run of each case,
@@ -483,25 +479,23 @@ func finalizeRun(agg Aggregate, corpus []CorpusCase, code int, opts Options) (Ag
 	return agg, code
 }
 
-// writeArtifacts writes the three records a run leaves — the aggregate, its summary and the history row — and says
-// whether the numbers were persisted. A record that could not be written is ExitArtifact with the numbers still
-// returned: the run happened, and nothing persisted it.
-func writeArtifacts(agg Aggregate, caseDirs []string, opts Options) (Aggregate, int, bool) {
+// writeArtifacts writes the three records a run leaves — the aggregate, its summary and the history row — and
+// returns the aggregate plus the resulting exit code. A record that could not be written is ExitArtifact with the
+// numbers still returned: the run happened, and nothing persisted it. A successful write preserves runCode, which
+// may already describe a partial run or a cost ceiling.
+func writeArtifacts(agg Aggregate, runCode int, caseDirs []string, opts Options) (Aggregate, int) {
 	if err := writeJSON(filepath.Join(opts.Out, "aggregate.json"), agg); err != nil {
-		a, c := unwritten(agg, opts, "aggregate.json", err)
-		return a, c, false
+		return unwritten(agg, opts, "aggregate.json", err)
 	}
 	if err := os.WriteFile(filepath.Join(opts.Out, "summary.md"), []byte(Summary(agg)), 0o644); err != nil {
-		a, c := unwritten(agg, opts, "summary.md", err)
-		return a, c, false
+		return unwritten(agg, opts, "summary.md", err)
 	}
 	if !opts.DryRun && opts.BenchDir != "" {
 		if err := AppendHistory(opts.BenchDir, historyEntry(agg, caseDirs, opts)); err != nil {
-			a, c := unwritten(agg, opts, "the history row", err)
-			return a, c, false
+			return unwritten(agg, opts, "the history row", err)
 		}
 	}
-	return agg, 0, true
+	return agg, runCode
 }
 
 // historyEntry is the row a run appends to the history: what it measured, on which corpus, by which skill version,
