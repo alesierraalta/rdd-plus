@@ -267,6 +267,10 @@ func runUpdate(args []string) int {
 	}); err != nil {
 		fmt.Fprintln(os.Stderr, "update: cache:", err)
 	}
+	if result.Relation == update.Unknown {
+		fmt.Printf("cannot compare (installed %s, latest %s is not a release version; releases are tagged vX.Y.Z)\n", buildinfo.Version, result.Latest)
+		return 0
+	}
 	if result.Relation != update.Behind {
 		fmt.Printf("already up to date (installed %s, latest %s)\n", buildinfo.Version, result.Latest)
 		return 0

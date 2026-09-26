@@ -4,7 +4,7 @@ description: "Trigger: versionar, version bump, release, subir versión, install
 license: Apache-2.0
 metadata:
   author: "alesierraalta"
-  version: "1.1"
+  version: "1.2"
 ---
 
 ## Activation Contract
@@ -24,7 +24,9 @@ ship, when the operator asks to version or release, or to install the latest bui
   test-strategy's `metadata.version` patch. Other skills (e.g. breakcheck) change `requires_rdd_plus` only
   when they rely on behaviour that version introduced.
 - Never rewrite historical records: `docs/testing/test-plan.md` rows, `bench/history.md`, fixture reports.
-- No git tags or GitHub releases unless the operator asks; this repo does not use them.
+- Every released binary version gets an annotated tag `vX.Y.Z` on its merge commit, pushed to origin:
+  `rdd-plus update` reads the Go module proxy, which only sees tagged releases (an untagged main is a
+  `v0.0.0-…` pseudo-version that cannot be compared). No GitHub release objects unless asked.
 - `main` is protected: ship through a PR whose `test` check passes, merged with a merge commit.
 - Build the installed binary from a clean clone of `origin/main`, never from a checkout with staged or
   unstaged foreign changes.
@@ -47,7 +49,9 @@ ship, when the operator asks to version or release, or to install the latest bui
 3. `gofmt -l`, `go vet ./...`, `go test ./... -short -count=1`; `go run ./cmd/rdd-plus version`.
 4. Commit `chore(release): rdd-plus X, <skill> Y` on a branch, open the PR listing what ships, wait for
    `test`, merge.
-5. Install: follow [references/install.md](references/install.md).
+5. Tag the merge commit and push it: `git tag -a vX -m "rdd-plus X" <merge sha> && git push origin vX`;
+   confirm `https://proxy.golang.org/github.com/alesierraalta/rdd-plus/@v/vX.info` answers with that hash.
+6. Install: follow [references/install.md](references/install.md).
 
 ## Output Contract
 
