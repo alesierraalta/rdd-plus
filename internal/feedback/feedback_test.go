@@ -646,8 +646,8 @@ func TestSummaryOnAMissingLedgerSaysSo(t *testing.T) {
 }
 
 func TestEmbeddedSkillIdentityNamesTheEmbeddedSkill(t *testing.T) {
-	if got := EmbeddedSkillIdentity(); got != "test-strategy 0.3.17" {
-		t.Fatalf("embedded skill identity = %q, want %q", got, "test-strategy 0.3.17")
+	if got := EmbeddedSkillIdentity(); got != "test-strategy 0.3.18" {
+		t.Fatalf("embedded skill identity = %q, want %q", got, "test-strategy 0.3.18")
 	}
 }
 

@@ -4,7 +4,7 @@ description: "Trigger: security audit, appsec testing, vulnerability test, IDOR,
 license: Apache-2.0
 metadata:
   author: "alesierraalta"
-  version: "1.0"
+  version: "1.1"
 ---
 
 ## Activation Contract
