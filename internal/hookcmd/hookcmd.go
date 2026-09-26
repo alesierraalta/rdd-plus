@@ -61,15 +61,27 @@ var GateBinaries = []string{"tpp", "rdd-plus"}
 // substring of the command, so a sibling tool that merely lives under a directory named after the product
 // is somebody else's hook.
 func IsGate(command string) bool {
+	return gateBinary(command) != ""
+}
+
+// IsLegacyGate reports whether command runs the gate under a name it no longer ships under: a hook wired
+// before the rename, which sync moves to the current binary.
+func IsLegacyGate(command string) bool {
+	name := gateBinary(command)
+	return name != "" && name != GateBinaries[0]
+}
+
+// gateBinary answers which of GateBinaries command runs the gate subcommand of, or "" for any other command.
+func gateBinary(command string) string {
 	words, err := ShellWords(command)
 	if err != nil || len(words) < 2 || words[1] != "gate" {
-		return false
+		return ""
 	}
 	name := strings.TrimSuffix(filepath.Base(words[0]), ".exe")
 	for _, binary := range GateBinaries {
 		if name == binary {
-			return true
+			return binary
 		}
 	}
-	return false
+	return ""
 }

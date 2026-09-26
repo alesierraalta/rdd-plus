@@ -284,6 +284,26 @@ func TestSyncRewritesALegacyGateHookToTheNewBinary(t *testing.T) {
 	}
 }
 
+// An install made by rdd-plus records its hook in state as wired, so a planner that only asks "is a hook
+// wired?" never looks at settings again: the upgrade must still move the hook to the new binary.
+func TestSyncRewiresAHookThatStateRecordsForTheLegacyBinary(t *testing.T) {
+	t.Setenv("TPP_HOME", t.TempDir())
+	cfg := t.TempDir()
+	const legacyBin, tppBin = "/opt/tools/rdd-plus", "/opt/tools/tpp"
+	if _, err := Sync(cfg, legacyBin, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if _, err := Sync(cfg, tppBin, Options{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cmds := stopCommands(t, readSettings(t, cfg))
+	if len(cmds) != 1 || cmds[0] != HookCommand(tppBin) {
+		t.Fatalf("stop hooks = %q, want only %q", cmds, HookCommand(tppBin))
+	}
+}
+
 func TestIsPreviousGate(t *testing.T) {
 	cases := []struct {
 		cmd  string
