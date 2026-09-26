@@ -86,6 +86,9 @@ func adoptLegacyRoot(legacy, current string) string {
 	if err := os.Rename(legacy, current); err != nil {
 		return legacy
 	}
+	// An rdd-plus binary left on the machine still resolves the old path; a link there keeps it on this root
+	// instead of starting a second, empty installation beside it. A failed link loses nothing: the move is done.
+	_ = os.Symlink(current, legacy)
 	return current
 }
 

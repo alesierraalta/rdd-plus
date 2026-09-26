@@ -62,8 +62,14 @@ func TestTheLegacyConfigRootMovesOnce(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "tpp", "backups", "b1", "settings.json")); err != nil {
 		t.Fatalf("backups did not move with the root: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "rdd-plus")); !os.IsNotExist(err) {
-		t.Fatalf("legacy root still present after the move: %v", err)
+	// The old path becomes a link to the new root, so an rdd-plus binary still on the machine reads and writes
+	// the same state instead of starting a second, empty one.
+	legacy := filepath.Join(dir, "rdd-plus")
+	if info, err := os.Lstat(legacy); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("legacy root is not a link to the new root after the move: %v %v", info, err)
+	}
+	if body, err := os.ReadFile(filepath.Join(legacy, "state.json")); err != nil || string(body) != `{"schemaVersion":1}` {
+		t.Fatalf("state read through the legacy path = %q, %v; want the moved state", body, err)
 	}
 }
 
