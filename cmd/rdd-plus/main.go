@@ -504,6 +504,12 @@ func runSync(args []string) int {
 		fmt.Fprintln(os.Stderr, "sync:", err)
 		return 1
 	}
+	// A sync that found no host installed nothing. Exit 0 would tell a scripted install (dotfiles, CI) it
+	// succeeded, so it says how to proceed and exits 1, the code doctor uses for "action required".
+	if len(discovery.Hosts) == 0 {
+		fmt.Println("sync: nothing installed: no host found; install a host (Claude Code creates ~/.claude) or pass --config-dir <dir>")
+		return 1
+	}
 	return 0
 }
 

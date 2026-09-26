@@ -73,7 +73,9 @@ Rules:
    moved to `<config root>/backups/<timestamp>/` before it is replaced, so the run
    is reversible. Read doctor's warning about the binaries, not only its verdict: doctor compares the
    binary the hook invokes with the `rdd-plus` on PATH, and when they are different files it says the
-   two would give different verdicts. If it warns, run sync again from the PATH binary and re-check.
+   two would give different verdicts. If it warns, run sync again from the PATH binary and re-check. A machine where no host is installed yet (no `~/.claude`, `~/.config/opencode`, `~/.gemini` or
+   `~/.codex`) gets exit 1 from `sync`, naming where it looked: nothing was installed, so install the host
+   first or pass `--config-dir`.
 
 6. Two hosts cannot be wired from here. Pi takes `assets/hosts/pi/settings.stop-hook.json` merged
    into its settings (Pi reads the same `~/.claude/skills`, so it already has the skills), and OpenCode

@@ -1403,12 +1403,17 @@ func runCLIWithHome(t *testing.T, home, bin string, args ...string) (string, int
 	return "", -1
 }
 
+// A sync that found no host installed nothing, so it must not read as a success: a scripted install
+// (dotfiles, CI) only sees the exit code. It says what it looked for and how to proceed, and exits 1.
 func TestSyncReportsWhenNoHostIsInstalled(t *testing.T) {
 	bin := buildCLI(t)
 	home := t.TempDir()
 	out, code := runCLIWithHome(t, home, bin, "sync")
-	if code != 0 {
-		t.Fatalf("sync with no installed host exit = %d\n%s", code, out)
+	if code != 1 {
+		t.Fatalf("sync with no installed host exit = %d, want 1: nothing was installed\n%s", code, out)
+	}
+	if !strings.Contains(out, "--config-dir") {
+		t.Fatalf("no-host sync must say how to proceed (--config-dir):\n%s", out)
 	}
 	for _, path := range []string{filepath.Join(home, ".claude"), filepath.Join(home, ".config", "opencode"), filepath.Join(home, ".gemini"), filepath.Join(home, ".codex")} {
 		if !strings.Contains(out, path) {
