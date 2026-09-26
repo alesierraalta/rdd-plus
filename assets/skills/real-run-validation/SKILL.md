@@ -28,6 +28,10 @@ runtime surface to drive).
 - Explicitly probe the failure path (bad input, tamper, wrong auth) and
   confirm it fails as intended — fail-closed, not silently.
 - State plainly what was validated vs what was NOT reachable this way.
+- Start the target with an isolated HOME (`HOME=$(mktemp -d)`) and no cloud profile or
+  credential variables. `env -i` alone is not enough when HOME still points at the
+  operator's: SDKs such as boto3 read `~/.aws/credentials` and can reach real services
+  at startup.
 - Never invent output. If you cannot run it, say so and stop.
 - Evidence: every finding carries an executed evidence record per
   `~/.claude/skills/test-strategy/references/evidence.md`; no finding from reading alone.
@@ -54,7 +58,8 @@ Also fill the plan's "Real-run recipes" table for every journey you contribute (
 ## Execution Steps
 
 1. Identify the runtime surface of the change (table above).
-2. Build/install so the driver hits the REAL artifact (right venv/deps).
+2. Build/install so the driver hits the REAL artifact (right venv/deps). Record the
+   isolated HOME and environment in the recipe so EXECUTE starts the target the same way.
 3. Write a minimal driver with real inputs covering: happy path (exact
    round-trip / expected effect) AND at least one failure path.
 4. Run it. Capture verbatim output.
