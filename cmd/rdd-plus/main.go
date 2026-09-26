@@ -286,6 +286,15 @@ func runUpdate(args []string) int {
 		fmt.Fprintln(os.Stderr, "update: cannot locate the running binary:", err)
 		return 1
 	}
+	// A binary in a directory this user cannot write (a system bin dir) cannot be replaced in place; say so
+	// before go reports a bare permission error.
+	if probe, err := os.CreateTemp(gobin, ".rdd-plus-update-*"); err != nil {
+		fmt.Fprintf(os.Stderr, "update: %s is not writable, so the running binary cannot be replaced there: %v\n", gobin, err)
+		return 1
+	} else {
+		probe.Close()
+		os.Remove(probe.Name())
+	}
 	err = update.RunInstall(result.Latest, exec.LookPath, func(name string, argv ...string) error {
 		fmt.Printf("go found; running: GOBIN=%s %s\n", gobin, strings.Join(append([]string{name}, argv...), " "))
 		cmd := exec.Command(name, argv...)
@@ -295,7 +304,7 @@ func runUpdate(args []string) int {
 	})
 	switch {
 	case errors.Is(err, update.ErrGoMissing):
-		fmt.Printf("go is not on PATH; run this from a shell with Go installed:\nGOBIN=%s %s\n", gobin, update.InstallCommand(result.Latest))
+		fmt.Printf("go is not on PATH; run this from a shell with Go installed:\nGOBIN=%s %s\n", shellQuote(gobin), update.InstallCommand(result.Latest))
 		return 0
 	case err != nil:
 		fmt.Fprintln(os.Stderr, "update:", err)
@@ -519,6 +528,11 @@ func runSync(args []string) int {
 		return 1
 	}
 	return 0
+}
+
+// shellQuote renders s as one POSIX shell word, so a printed command still works when a path holds spaces.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // runningBinaryDir is the directory of the binary that is executing, with symlinks resolved, so an update

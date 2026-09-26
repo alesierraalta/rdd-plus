@@ -79,6 +79,10 @@ func TestUpdateWithoutGoPrintsTheInstallCommand(t *testing.T) {
 	if !strings.Contains(out, want) {
 		t.Fatalf("output missing the exact install command %q:\n%s", want, out)
 	}
+	dir, _ := filepath.EvalSymlinks(filepath.Dir(bin))
+	if hint := "GOBIN='" + dir + "' go install"; !strings.Contains(out, hint) {
+		t.Fatalf("the hint must name the running binary's directory, shell-quoted (%q):\n%s", hint, out)
+	}
 	t.Setenv("RDD_PLUS_HOME", home)
 	cache, err := update.LoadCache()
 	if err != nil {
@@ -235,5 +239,44 @@ func TestUpdateCheckOnlyNeverInstalls(t *testing.T) {
 	}
 	if cache.AvailableVersion != "v99.0.0" {
 		t.Fatalf("cache = %+v, want --check to refresh it", cache)
+	}
+}
+
+// A running binary in a directory the user cannot write (a system bin dir) cannot be replaced in place: the
+// update refuses before running go, naming the directory, instead of surfacing go's permission error.
+func TestUpdateRefusesWhenTheRunningBinaryDirIsNotWritable(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can write a read-only directory")
+	}
+	src := buildCLI(t)
+	roDir := t.TempDir()
+	bin := filepath.Join(roDir, "rdd-plus")
+	data, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bin, data, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(roDir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(roDir, 0o755) })
+	srv := fakeProxy(t, "v99.0.0")
+	fakeBin := t.TempDir()
+	ran := filepath.Join(fakeBin, "ran")
+	if err := os.WriteFile(filepath.Join(fakeBin, "go"), []byte("#!/bin/sh\ntouch '"+ran+"'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, code := runCLIEnv(t, bin, []string{
+		"RDD_PLUS_HOME=" + t.TempDir(),
+		"RDD_PLUS_UPDATE_BASE_URL=" + srv.URL,
+		"PATH=" + fakeBin,
+	}, "update")
+	if code != 1 || !strings.Contains(out, "not writable") {
+		t.Fatalf("update into a read-only binary dir = %d, want 1 naming it not writable:\n%s", code, out)
+	}
+	if _, err := os.Stat(ran); err == nil {
+		t.Fatalf("go ran although the running binary's directory is not writable:\n%s", out)
 	}
 }
