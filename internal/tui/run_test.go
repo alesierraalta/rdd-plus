@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 type setCall struct {
@@ -128,7 +130,7 @@ func TestRunFeaturesToggleAndPreview(t *testing.T) {
 	if len(s.previews) != 1 || s.previews[0] != "feedback" {
 		t.Errorf("Preview calls = %v, want [feedback]", s.previews)
 	}
-	for _, want := range []string{"Preview text for feedback", "> feedback\tFeedback\tenabled"} {
+	for _, want := range []string{"Preview text for feedback", "> feedback  Feedback  enabled"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q", want)
 		}
@@ -218,5 +220,59 @@ func TestRunArrowSplitAcrossReads(t *testing.T) {
 	hasTitle := strings.Contains(out.String(), "rdd-plus tui: features")
 	if s.featuresCall != 1 || s.statusCalls != 0 || !hasTitle {
 		t.Errorf("features=%d status=%d hasTitle=%v, want 1, 0, true", s.featuresCall, s.statusCalls, hasTitle)
+	}
+}
+
+func TestRunLoneEscFiresWithoutFollowingInput(t *testing.T) {
+	s := &spy{}
+	in, w := io.Pipe()
+	defer w.Close()
+	result := make(chan error, 1)
+	go func() { result <- Run(in, io.Discard, s.deps()) }()
+	// A real Esc press is one byte and nothing after it; at the menu it quits.
+	if _, err := w.Write([]byte("\x1b")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Errorf("Run after lone esc: %v, want nil", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("lone esc was held until more input arrived")
+	}
+}
+
+func TestRunFramesBreakLinesWithCRLF(t *testing.T) {
+	s := &spy{}
+	out, err := runScript(t, "\r\x1bq", s.deps())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	// Raw mode disables output post-processing: a bare LF moves down without returning to column 0.
+	if i := strings.Index(strings.ReplaceAll(out, "\r\n", ""), "\n"); i >= 0 {
+		t.Errorf("frame has a bare LF at %d: %q", i, out)
+	}
+}
+
+func TestViewportPinsHelpAndClampsScroll(t *testing.T) {
+	lines := []string{"title", "a", "b", "c", "d", "help"}
+	got, scroll, page := viewport(lines, 99, 3)
+	want := []string{"c", "d", "help | lines 4-5 of 5"}
+	if !slices.Equal(got, want) || scroll != 3 || page != 2 {
+		t.Errorf("viewport past end = %q scroll=%d page=%d, want %q scroll=3 page=2", got, scroll, page, want)
+	}
+	if got, scroll, _ := viewport(lines, -4, 3); got[0] != "title" || scroll != 0 {
+		t.Errorf("viewport before start = %q scroll=%d, want title first and scroll 0", got, scroll)
+	}
+	if got, _, _ := viewport(lines, 2, 10); !slices.Equal(got, lines) {
+		t.Errorf("viewport that fits = %q, want the frame unchanged", got)
+	}
+}
+
+func TestClipKeepsLinesFromWrapping(t *testing.T) {
+	got := clip([]string{"abcdef", "ab"}, 4)
+	if !slices.Equal(got, []string{"abc", "ab"}) {
+		t.Errorf("clip = %q, want [abc ab]", got)
 	}
 }

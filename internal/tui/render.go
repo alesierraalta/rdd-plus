@@ -7,10 +7,12 @@ import (
 
 const (
 	helpRoot     = "up/down move | enter select | q quit"
-	helpStatus   = "esc back | q quit"
+	helpStatus   = "up/down scroll | pgup/pgdn page | esc back | q quit"
 	helpFeatures = "space toggle | enter preview | esc back | q quit"
-	helpPlan     = "esc back | q quit"
+	helpPlan     = "up/down scroll | pgup/pgdn page | esc back | q quit"
 )
+
+const planTitle = "rdd-plus tui: sync plan (dry-run; writes nothing)"
 
 var menuItems = []string{"Status", "Features", "Sync plan", "Quit"}
 
@@ -24,6 +26,32 @@ func joinSections(sections ...string) string {
 		}
 	}
 	return strings.Join(kept, "\n\n")
+}
+
+// columns pads every cell but the last to its column's widest cell plus two spaces, so rows line
+// up in a raw terminal where tab stops would not.
+func columns(rows [][]string) []string {
+	var widths []int
+	for _, row := range rows {
+		for i, cell := range row {
+			if i == len(widths) {
+				widths = append(widths, 0)
+			}
+			widths[i] = max(widths[i], len([]rune(cell)))
+		}
+	}
+	out := make([]string, len(rows))
+	for r, row := range rows {
+		var b strings.Builder
+		for i, cell := range row {
+			b.WriteString(cell)
+			if i < len(row)-1 {
+				b.WriteString(strings.Repeat(" ", widths[i]-len([]rune(cell))+2))
+			}
+		}
+		out[r] = b.String()
+	}
+	return out
 }
 
 func yesNo(v bool) string {
@@ -66,35 +94,35 @@ func renderStatus(sv StatusView, err error) string {
 	fmt.Fprintf(&body, "State exists: %s\n", yesNo(sv.StateExists))
 	fmt.Fprintf(&body, "Installed version: %s\n", sv.InstalledVersion)
 	fmt.Fprintf(&body, "Available version: %s", sv.AvailableVersion)
-	body.WriteString("\n\nID\tTitle\tState")
+	table := [][]string{{"ID", "Title", "State"}}
 	for _, row := range sv.Features {
-		fmt.Fprintf(&body, "\n%s\t%s\t%s", row.ID, row.Title, stateLabel(row.Enabled))
+		table = append(table, []string{row.ID, row.Title, stateLabel(row.Enabled)})
 	}
+	body.WriteString("\n\n" + strings.Join(columns(table), "\n"))
 	return joinSections(title, body.String(), helpStatus)
 }
 
 func renderFeatures(rows []FeatureRow, sel int, detail string) string {
 	const title = "rdd-plus tui: features"
-	var list strings.Builder
+	table := make([][]string, len(rows))
 	for i, row := range rows {
-		if i > 0 {
-			list.WriteByte('\n')
-		}
-		if i == sel {
-			list.WriteString("> ")
-		} else {
-			list.WriteString("  ")
-		}
-		fmt.Fprintf(&list, "%s\t%s\t%s", row.ID, row.Title, stateLabel(row.Enabled))
+		table[i] = []string{row.ID, row.Title, stateLabel(row.Enabled)}
 	}
-	return joinSections(title, list.String(), strings.TrimRight(detail, "\n"), helpFeatures)
+	list := columns(table)
+	for i := range list {
+		if i == sel {
+			list[i] = "> " + list[i]
+		} else {
+			list[i] = "  " + list[i]
+		}
+	}
+	return joinSections(title, strings.Join(list, "\n"), strings.TrimRight(detail, "\n"), helpFeatures)
 }
 
 func renderPlan(report string, err error) string {
-	const title = "rdd-plus tui: sync plan (dry-run; writes nothing)"
 	body := report
 	if err != nil {
 		body = "error: " + err.Error()
 	}
-	return joinSections(title, strings.TrimRight(body, "\n"), helpPlan)
+	return joinSections(planTitle, strings.TrimRight(body, "\n"), helpPlan)
 }

@@ -24,3 +24,6 @@ func isCharDevice(f *os.File) bool {
 
 // IsTerminal reports whether f is a terminal this package can drive interactively.
 func IsTerminal(f *os.File) bool { return false }
+
+// termSize has no portable probe here; zeros mean "unknown size", so frames are not clipped.
+func termSize(f *os.File) (rows, cols int) { return 0, 0 }
