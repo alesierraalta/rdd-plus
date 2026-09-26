@@ -10,6 +10,101 @@ imagining the inputs nobody expects, writing the probe. The binaries do the dete
 installing the skills, wiring the hook that keeps them invoked, and reporting what the
 environment can do so a skill degrades explicitly instead of failing on a tool it assumed.
 
+## How it works
+
+Four pictures of the same system: the pieces, the decision the gate takes at every Stop, the testing
+flow a model runs, and how an installation stays current. The prose sections below are the
+reference; these diagrams only show how the pieces fit.
+
+### The pieces
+
+```mermaid
+flowchart LR
+    subgraph machine[Your machine]
+        tpp[tpp binary]
+        subgraph hosts[Agent hosts]
+            claude[Claude Code<br/>~/.claude]
+            others[OpenCode · Gemini · Codex]
+        end
+        skills[Embedded skills<br/>test-strategy, exploit-testing,<br/>real-run-validation, ...]
+    end
+    subgraph repo[Your repository]
+        plan[docs/testing/test-plan.md<br/>or the plan .tpp.json declares]
+        tests[Pinning tests and probes]
+    end
+    tpp -- "tpp sync installs" --> skills
+    skills --> claude
+    skills --> others
+    tpp -- "wires the Stop hook" --> claude
+    claude -- "model runs the skills" --> plan
+    claude --> tests
+    tpp -- "plan check · gaps · admit · export" --> plan
+    plan -. "reviewed afterwards by" .-> gentle[gentle-ai review]
+```
+
+The model does the creative work (classes of a contract, probes, pinning tests); the binary does the
+deterministic work (installing, wiring, checking the plan, replaying evidence).
+
+### What the gate decides at every Stop
+
+```mermaid
+flowchart TD
+    stop([End of a turn: Stop hook runs tpp gate]) --> repo{Inside a git repo<br/>with at most 20 000 status entries?}
+    repo -- no --> quiet([Stay silent])
+    repo -- yes --> optout{.no-testing-gate<br/>at the repo root?}
+    optout -- yes --> quiet
+    optout -- no --> loop{Turn already continuing<br/>because of a Stop hook?}
+    loop -- yes --> quiet
+    loop -- no --> changed{Production source changed<br/>since the session started?}
+    changed -- no --> quiet
+    changed -- yes --> ran{test-strategy or exploit-testing<br/>actually invoked?}
+    ran -- no --> ask1([Remind: run the testing discipline<br/>and name the changed files])
+    ran -- yes --> owed{Does the plan still owe<br/>layers or ranked targets?}
+    owed -- no --> done([Say the plan owes nothing])
+    owed -- yes --> ask2([Name the surfaces left unexamined<br/>and offer feedback on the run])
+```
+
+It is a reminder, never an approval gate: every path exits 0, and each decision is one line in the
+telemetry log.
+
+### The testing flow a model runs
+
+```mermaid
+flowchart TD
+    ask([Operator: haz el testing / test this]) --> strategy[test-strategy reads the repo state]
+    strategy --> size{How big is the change?}
+    size -- "whole app or a wide diff" --> full[Full plan<br/>tpp plan init]
+    size -- "one bounded area" --> light[Light plan<br/>Light: blast radius · touches classes]
+    size -- "one small function" --> micro[Micro plan<br/>tpp plan init --micro]
+    full --> execute
+    light --> execute
+    micro --> execute
+    execute[Execute: probes, real runs, mutations,<br/>pinning tests observed red then green] --> ledger[Evidence ledger rows<br/>tpp plan admit replays and pins them]
+    ledger --> findings[Findings rows<br/>tpp plan add-finding]
+    findings --> check{tpp plan check}
+    check -- breach --> execute
+    check -- well formed --> gaps{tpp plan gaps}
+    gaps -- owed --> execute
+    gaps -- nothing owed --> close([Report, and for someone else's PR:<br/>tpp plan export as a PR comment])
+```
+
+### Installing and staying current
+
+```mermaid
+flowchart TD
+    new([New machine]) --> install[go install github.com/alesierraalta/tpp/cmd/tpp@latest]
+    install --> sync[tpp sync<br/>skills to every host, Stop hook into Claude]
+    sync --> doctor{tpp doctor}
+    doctor -- healthy --> use([Ready])
+    doctor -- action required --> sync
+    use --> update[tpp update<br/>installs the newer tagged release<br/>where the running binary lives]
+    update --> sync
+    old([Machine with rdd-plus 0.3.x]) --> bridge[rdd-plus update<br/>to the 0.3.20 bridge]
+    bridge --> bridge2[rdd-plus update<br/>installs tpp beside rdd-plus]
+    bridge2 --> migrate[tpp sync<br/>rewires the rdd-plus hook to tpp,<br/>moves ~/.config/rdd-plus to ~/.config/tpp]
+    migrate --> doctor
+```
+
 ## Install with an agent
 
 This block is a prompt, not a description: hand it to an agent that has a shell and let it drive the
